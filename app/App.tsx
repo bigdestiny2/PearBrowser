@@ -218,6 +218,7 @@ export default function App() {
           <MoreScreen
             rpc={rpcRef.current!}
             peerCount={peerCount}
+            proxyPort={proxyPort}
             status={connectionStatus}
             onNavigateToSites={() => setShowSites(true)}
           />
