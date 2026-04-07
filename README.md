@@ -1,202 +1,240 @@
 # PearBrowser
 
-A P2P mobile app platform for iOS. Browse the decentralized web, discover and run P2P apps, and build personal websites — all from your phone as a real peer in the Holepunch network.
+A peer-to-peer mobile app platform for iOS. Browse the decentralized web, discover P2P apps from a decentralized App Store, and build personal websites — all from your phone as a real peer in the Holepunch network.
 
-## What Is PearBrowser?
-
-PearBrowser is three things:
-
-1. **App Store** — Discover, install, and run P2P apps from decentralized catalogs
-2. **Website Builder** — Create and publish personal sites to `hyper://` from your phone
-3. **P2P Browser** — Browse any `hyper://` content natively
-
-Your phone is a real peer — it joins the HyperDHT, hole-punches through NAT, and connects directly to other peers. Content loads instantly via HiveRelay HTTP gateways with P2P sync in the background.
-
-## Screenshots
-
-| Home | App Store | Browse | Site Builder |
-|------|-----------|--------|-------------|
-| Welcome screen with search bar, app grid | Catalog with Calculator, Notes, Pear POS | P2P website rendering in WebView | Block editor with publish flow |
-
-## Architecture
-
+**Live demo:** The Pear POS app is serving right now from HiveRelay:
 ```
-┌──────────────────────────────────────┐
-│  React Native (iOS)                  │
-│  Home │ App Store │ Browse │ More    │
-├──────────────────────────────────────┤
-│  IPC (length-prefixed JSON RPC)      │
-├──────────────────────────────────────┤
-│  Bare Worklet (P2P Engine)           │
-│  ├── HyperProxy (hybrid HTTP proxy)  │
-│  ├── RelayClient (HiveRelay HTTP)    │
-│  ├── CatalogManager                  │
-│  ├── AppManager                      │
-│  ├── SiteManager                     │
-│  ├── PearBridge (WebView ↔ Autobase) │
-│  └── Hyperswarm + Corestore         │
-└──────────────────────────────────────┘
+https://relay.p2phiverelay.xyz/v1/hyper/4fd242fd4c90b77b354d6bcbd30654b732905cebf4b94bfefc0adbf97c171e04/index.html
 ```
 
-### Hybrid Architecture
+## Why PearBrowser?
 
-Content loads via two paths simultaneously:
+Traditional mobile apps depend on cloud servers. When the server goes down, the app stops working. When the company shuts down, your data disappears. When you're offline, you can't do anything.
 
-- **Fast path**: HiveRelay HTTP gateway serves cached content instantly
-- **P2P path**: Hyperswarm connects directly to peers in the background
+PearBrowser flips this model. Apps run on your device and connect directly to other devices. Your data lives on your phone, syncs peer-to-peer, and is always available — even offline. No cloud server. No monthly fees. No single point of failure.
 
-Whichever responds first wins. After first load, content is cached locally.
+## Three Features
 
+### 1. Decentralized App Store
+
+PearBrowser has a built-in App Store, but it's not controlled by any single company. Here's how it works:
+
+**Catalogs are hosted on HiveRelay nodes.** Each relay serves a `/catalog.json` endpoint that lists all the P2P apps it knows about. When a developer publishes an app, they seed it on one or more relays, and it automatically appears in the catalog.
+
+**Anyone can run a catalog.** Relays are open source. You can run your own relay with your own curated selection of apps — for your company, your community, or the public. PearBrowser users add relay URLs in Settings to browse different catalogs.
+
+**Apps load instantly.** When you tap "Open" on an app, PearBrowser loads it from the relay's HTTP gateway — not over slow P2P. The relay caches the app's files and serves them like a CDN. First load is under 2 seconds.
+
+**No gatekeepers.** There's no review process, no 30% fee, no approval queue. Developers publish apps by creating a Hyperdrive and seeding it on a relay. Users discover apps by browsing catalogs from relays they trust.
+
+**How apps get into the catalog:**
 ```
-Navigate to hyper://KEY
-  ├── HTTP → HiveRelay gateway (1-2s) → instant
-  └── P2P → Hyperswarm DHT (5-15s) → cached for next time
-```
+Developer                          HiveRelay                    PearBrowser
+─────────                          ─────────                    ───────────
+1. Build app (HTML/JS/CSS)
+   + manifest.json
 
-## Features
+2. Publish as Hyperdrive
+   node publish-app.js ./dist
 
-### Completed (v0.1.0)
-
-- [x] **P2P Browser** — browse `hyper://` content in WebView
-- [x] **Hybrid fetch** — relay HTTP fast-path + P2P fallback
-- [x] **App Store** — load catalogs from HTTP or hyper://, display apps with Get/Open
-- [x] **App launching** — serve app frontends from relay gateway (instant)
-- [x] **Site Builder** — create sites, block editor (6 types), publish to Hyperdrive
-- [x] **My Sites** — list, edit, publish, share, delete sites
-- [x] **Pear Bridge** — `window.pear` + `window.posAPI` injected into WebViews
-- [x] **Autobase sync** — POS-compatible apply function for multi-device data sync
-- [x] **Status indicator** — green/yellow/red dot with peer count
-- [x] **4-tab navigation** — Home, Apps, Browse, More
-- [x] **Bottom URL bar** — truncated display, auto hyper:// prefix
-- [x] **App persistence** — installed apps survive restarts
-- [x] **Site persistence** — published sites survive restarts
-- [x] **17 native addons** — sodium, udx, rocksdb, etc. statically linked
-- [x] **Pear POS integration** — loads and runs in PearBrowser with data sync bridge
-
-### Planned (v0.2.0+)
-
-- [ ] QR code scanning for hyper:// keys
-- [ ] Bookmarks + history persistence
-- [ ] Tab management (card-based switcher)
-- [ ] Petnames (local aliases for hex keys)
-- [ ] Deep link handling (`pearbrowser://hyper/KEY`)
-- [ ] Share sheet integration
-- [ ] HiveCompute LLM integration
-- [ ] Android support
-- [ ] Offline-first with local app caching
-- [ ] App update notifications
-- [ ] Community voting / app ratings
-
-## App Store
-
-### How It Works
-
-The App Store is a decentralized catalog system. Anyone can run a catalog, and anyone can publish apps.
-
-**For app developers:**
-
-```bash
-# 1. Create your app (must have index.html + manifest.json)
-mkdir my-app
-echo '<html><body><h1>My App</h1></body></html>' > my-app/index.html
-echo '{"name":"My App","version":"1.0.0","description":"...","entry":"/index.html"}' > my-app/manifest.json
-
-# 2. Publish as a Hyperdrive
-node tools/publish-app.js ./my-app --name "My App"
-# Output: Key: abc123...
-
-# 3. Seed on a HiveRelay for instant delivery
-curl -X POST http://your-relay:9100/seed -d '{"appKey":"abc123..."}'
+3. Seed on relay                 → Relay replicates the drive
+   POST /seed {"appKey":"..."}   → Reads manifest.json
+                                 → Adds to /catalog.json         → User opens
+                                                                    Apps tab
+                                                                 → Sees the app
+                                                                 → Taps "Get"
+                                                                 → App loads
+                                                                    instantly
 ```
 
-**For relay operators:**
+### 2. P2P Browser
 
-Your relay automatically serves a catalog at `GET /catalog.json` built from all seeded drives that contain a `manifest.json`. No manual catalog management needed.
+Browse `hyper://` content natively on your phone. Hyper links point to Hyperdrives — peer-to-peer filesystems that are distributed, versioned, and encrypted.
 
-**For users:**
+**Hybrid architecture:** PearBrowser uses two paths to fetch content simultaneously:
 
-1. Open PearBrowser → Apps tab
-2. Enter a relay URL (e.g., `http://relay.example.com:9100`)
-3. Browse available apps
-4. Tap "Get" to install, "Open" to launch
-5. Apps load instantly from the relay HTTP gateway
+- **Fast path (HTTP):** Ask the nearest HiveRelay gateway. If the relay has the content cached, it responds in 1-2 seconds.
+- **P2P path (Hyperswarm):** Connect directly to peers via the DHT. Takes 5-15 seconds for the first connection, but content is cached locally for instant future visits.
 
-### Manifest Format
+Whichever path responds first wins. The P2P path continues syncing in the background so subsequent navigations within the same site are instant from local cache.
 
-Every app must include `/manifest.json` in its Hyperdrive:
+**The phone is a real peer.** PearBrowser runs the full Hyperswarm stack via a Bare Kit worklet — a separate JavaScript runtime that handles all P2P networking. Your phone joins the HyperDHT, performs UDP hole-punching, and establishes direct encrypted connections to other peers. This is the same technology that powers [Keet](https://keet.io).
+
+### 3. Website Builder
+
+Create and publish personal websites directly from your phone:
+
+1. **Create:** Name your site, choose from block types (heading, text, image, code, quote, link, divider)
+2. **Edit:** Mobile-friendly block editor with drag-to-reorder and theme customization
+3. **Publish:** One tap — creates a Hyperdrive, starts serving on the DHT, shows your `hyper://` URL
+4. **Share:** QR code or iOS Share sheet with the link
+5. **Seed:** Ask a HiveRelay to seed your site for 24/7 availability
+
+Your site is yours forever. You own the keypair. No hosting fees. No domain registration. No censorship.
+
+## How It All Connects
+
+```
+┌──────────────────────────────────────────────┐
+│  PearBrowser (iOS App)                       │
+│                                              │
+│  ┌──────────┬──────────┬────────┬─────────┐  │
+│  │  Home    │  Apps    │ Browse │  More   │  │
+│  │  Screen  │  Store   │  View  │  Menu   │  │
+│  └──────────┴──────────┴────────┴─────────┘  │
+│         │                  │                  │
+│         │  React Native    │  WebView         │
+│  ───────┼──────────────────┼───────────────── │
+│         │  IPC (RPC)       │  window.pear     │
+│  ┌──────▼──────────────────▼───────────────┐  │
+│  │  Bare Worklet — P2P Engine              │  │
+│  │                                         │  │
+│  │  HyperProxy ─── relay HTTP (fast)       │  │
+│  │       └──────── Hyperswarm P2P (backup) │  │
+│  │                                         │  │
+│  │  CatalogManager ── loads /catalog.json  │  │
+│  │  AppManager ─────── install/launch apps │  │
+│  │  SiteManager ────── create/publish sites│  │
+│  │  PearBridge ─────── Autobase data sync  │  │
+│  │                                         │  │
+│  │  Hyperswarm + HyperDHT + Corestore     │  │
+│  └─────────────────────────────────────────┘  │
+└──────────────────────────────────────────────┘
+         │                          │
+         ▼                          ▼
+┌─────────────────┐      ┌──────────────────┐
+│  HiveRelay      │      │  Other Peers     │
+│  Nodes          │      │  (phones, PCs)   │
+│                 │      │                  │
+│  • HTTP gateway │      │  • Direct P2P    │
+│  • App catalog  │      │  • Autobase sync │
+│  • Content seed │      │  • Content serve │
+│  • NAT relay    │      │                  │
+└─────────────────┘      └──────────────────┘
+```
+
+## The Role of HiveRelay
+
+HiveRelay nodes are the always-on infrastructure of the P2P network. They solve four critical problems:
+
+| Problem | Without HiveRelay | With HiveRelay |
+|---------|-------------------|----------------|
+| **App availability** | Apps only available when the developer's machine is on | Apps cached and served 24/7 from relay HTTP gateway |
+| **First load speed** | 5-15 seconds (DHT lookup + peer connection) | Under 2 seconds (HTTP from nearest relay) |
+| **App discovery** | Users must manually enter 64-char hex keys | Relay auto-builds `/catalog.json` — users browse an App Store |
+| **Data persistence** | Autobase data only syncs when peers are online simultaneously | Relay seeds Autobase cores — data available for new peers anytime |
+
+**Anyone can run a relay.** The more relays, the more resilient the network. Relays are open source and free to operate.
+
+**Currently running:**
+- `relay.p2phiverelay.xyz` — primary public relay
+- 3 additional relays across different regions
+
+## P2P App API
+
+Apps running in PearBrowser get access to P2P features via an injected JavaScript bridge:
+
+```javascript
+// Sync data across devices (Autobase)
+await window.pear.sync.create('my-app')
+await window.pear.sync.append('my-app', {
+  type: 'product:create',
+  data: { id: '1', name: 'Coffee', price: 450 }
+})
+const products = await window.pear.sync.list('my-app', 'products!')
+
+// Multi-device: share the invite key
+const { inviteKey } = await window.pear.sync.create('my-app')
+// On another device:
+await window.pear.sync.join('my-app', inviteKey)
+// Both devices now share the same data
+
+// Identity
+const { publicKey } = await window.pear.identity.getPublicKey()
+```
+
+Data syncs automatically between all devices in the same sync group via Autobase. Reads are always local (zero latency). Writes replicate to peers in the background.
+
+## Building and Publishing Apps
+
+### 1. Create your app
+
+Any web app works — HTML, CSS, JavaScript. Add a `manifest.json`:
 
 ```json
 {
   "name": "My App",
   "version": "1.0.0",
-  "description": "What the app does",
+  "description": "What my app does",
   "author": "your-name",
   "entry": "/index.html",
-  "categories": ["utilities"],
-  "permissions": []
+  "categories": ["utilities"]
 }
 ```
 
-### P2P App API
+### 2. Publish as a Hyperdrive
 
-Apps running in PearBrowser's WebView get access to P2P APIs via an injected bridge:
-
-```javascript
-// Generic P2P API
-window.pear.sync.create('my-app')         // Create sync group
-window.pear.sync.join('my-app', inviteKey) // Join existing group
-window.pear.sync.append('my-app', { type: 'item:create', data: {...} })
-window.pear.sync.list('my-app', 'items!')  // Query data
-window.pear.identity.getPublicKey()        // Device identity
-
-// POS-specific API (for Pear POS compatibility)
-window.posAPI.createProduct({ name: 'Widget', price_cents: 999 })
-window.posAPI.listProducts()
-window.posAPI.createTransaction(items, 'card')
-window.posAPI.getSyncStatus()
+```bash
+node tools/publish-app.js ./my-app --name "My App"
+# Output: Key: abc123... — keep this process running
 ```
 
-Data syncs across devices via Autobase over Hyperswarm.
+### 3. Seed on a HiveRelay
+
+```bash
+curl -X POST https://relay.p2phiverelay.xyz/seed \
+  -H 'Content-Type: application/json' \
+  -d '{"appKey": "abc123..."}'
+```
+
+Your app now appears in the relay's catalog. PearBrowser users who browse that relay's App Store will see it.
+
+### 4. Users install and run
+
+No configuration needed. Users open PearBrowser → Apps tab → see your app → tap Get → it works.
+
+## Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| Mobile UI | React Native + Expo | Native iOS app shell |
+| P2P Engine | Bare Kit worklet | Runs Hyperswarm on iOS |
+| Peer Discovery | HyperDHT | Distributed hash table |
+| Connections | Hyperswarm + libudx | UDP hole-punching + encrypted streams |
+| Data Sync | Autobase + Hyperbee | Multi-writer database with materialized views |
+| Content Delivery | HiveRelay HTTP gateway | Instant app loading via CDN-like HTTP |
+| App Storage | Hyperdrive | Versioned P2P filesystem |
+| Native Addons | 17 xcframeworks | sodium, udx, rocksdb, etc. statically linked |
+| IPC Protocol | Length-prefixed JSON | Communication between RN and worklet |
 
 ## Setup
 
 ### Prerequisites
 
-- **Node.js** >= 20
-- **Xcode** >= 15 (with iOS simulators)
-- **CocoaPods**: `brew install cocoapods`
-- **bare-pack**: `npm install -g bare-pack`
+- Node.js >= 20
+- Xcode >= 15 with iOS simulators
+- CocoaPods: `brew install cocoapods`
+- bare-pack: `npm install -g bare-pack`
 
 ### Build & Run
 
 ```bash
-# Install dependencies
+git clone https://github.com/bigdestiny2/PearBrowser.git
+cd PearBrowser
+
 npm install --legacy-peer-deps
 
-# Bundle the worklet backend for iOS
+# Bundle the P2P engine for iOS
 bare-pack --linked --host ios-arm64 backend/index.js -o assets/backend.bundle.mjs
 
 # Generate Xcode project
 npx expo prebuild --platform ios --no-install
 
-# Install CocoaPods
+# Install native dependencies
 cd ios && LANG=en_US.UTF-8 pod install && cd ..
 
 # Run on simulator
 npx expo run:ios --device "iPhone 17 Pro"
-```
-
-### Running Test Infrastructure
-
-```bash
-# Start a test Hyperdrive (content to browse)
-node test/serve-test-drive.js
-
-# Start the catalog relay with sample apps
-node test/start-catalog-test.js
-
-# Publish a custom app
-node tools/publish-app.js ./my-app --name "My App"
 ```
 
 ## Project Structure
@@ -205,84 +243,42 @@ node tools/publish-app.js ./my-app --name "My App"
 PearBrowser/
 ├── app/                          # React Native UI
 │   ├── App.tsx                   # Root: worklet boot, tab navigation
-│   ├── screens/
-│   │   ├── HomeScreen.tsx        # Welcome, search, app grid
-│   │   ├── AppStoreScreen.tsx    # Catalog browser, install/launch
-│   │   ├── BrowseScreen.tsx      # WebView + bottom URL bar
-│   │   ├── MySitesScreen.tsx     # Site list, create, publish
-│   │   ├── SiteEditorScreen.tsx  # Block editor
-│   │   └── MoreScreen.tsx        # Settings, status, navigation
-│   ├── components/
-│   │   ├── AppCard.tsx           # App listing card (small/large)
-│   │   └── StatusDot.tsx         # P2P status indicator
-│   └── lib/
-│       ├── rpc.ts                # RPC client (length-prefixed JSON)
-│       ├── bridge-inject.ts      # window.pear + window.posAPI bridge
-│       ├── constants.ts          # RPC command/event IDs
-│       └── theme.ts              # Color palette
+│   ├── screens/                  # Home, AppStore, Browse, MySites, SiteEditor, More
+│   ├── components/               # AppCard, StatusDot
+│   └── lib/                      # RPC client, bridge injection, theme, constants
 ├── backend/                      # Bare worklet (P2P engine)
-│   ├── index.js                  # Entry: boots Hyperswarm, proxy, managers
-│   ├── rpc.js                    # RPC server (length-prefixed JSON)
+│   ├── index.js                  # Boots Hyperswarm, proxy, managers, bridge
 │   ├── hyper-proxy.js            # Hybrid HTTP proxy (relay + P2P)
-│   ├── relay-client.js           # HiveRelay HTTP client (bare-http1)
-│   ├── catalog-manager.js        # Load/search app catalogs
-│   ├── app-manager.js            # Install/uninstall/launch apps
-│   ├── site-manager.js           # Create/edit/publish sites
+│   ├── relay-client.js           # HiveRelay HTTP client
+│   ├── catalog-manager.js        # App catalog loading
+│   ├── app-manager.js            # App install/launch lifecycle
+│   ├── site-manager.js           # Site creation/publishing
 │   ├── pear-bridge.js            # Autobase sync for WebView apps
-│   └── constants.js              # Shared RPC constants
+│   └── rpc.js                    # IPC protocol implementation
 ├── tools/                        # Developer tools
-│   ├── publish-app.js            # Publish app directory as Hyperdrive
-│   └── catalog-relay.js          # Run an open app catalog relay
-├── test/
-│   ├── sample-apps/              # Calculator + Notes test apps
-│   ├── serve-test-drive.js       # Serve test content on DHT
-│   ├── create-catalog.js         # Create test catalog
-│   └── start-catalog-test.js     # Full test environment
-├── assets/
-│   └── backend.bundle.mjs        # Bundled worklet (bare-pack output)
-├── package.json
-├── app.json                      # Expo config
-└── tsconfig.json
+│   ├── publish-app.js            # Publish apps to the network
+│   └── catalog-relay.js          # Run a catalog relay
+├── docs/                         # Documentation
+│   ├── USER-FLOWS.md             # User journey diagrams
+│   ├── USE-CASES.md              # Detailed use cases
+│   └── DEVELOPER-GUIDE.md        # Full developer onboarding
+└── test/                         # Test apps and infrastructure
 ```
 
-## Technical Details
+## Documentation
 
-### Why Bare Kit (not Node.js)?
-
-Mobile devices can't run Node.js. Bare is a minimal JS runtime from Holepunch that:
-- Runs on iOS (JavaScriptCore) and Android
-- Has explicit suspend/resume for mobile lifecycle
-- Supports native addons via static linking
-- Powers Keet (Holepunch's P2P messaging app)
-
-### RPC Protocol
-
-Communication between React Native and the Bare worklet uses a custom length-prefixed JSON protocol:
-
-```
-[8-byte hex length][JSON payload]
-00000023{"event":100,"data":{"port":50380}}
-```
-
-- Requests: `{ id, cmd, data }` → replies with `{ id, result }` or `{ id, error }`
-- Events: `{ event, data }` (fire-and-forget, worklet → RN)
-
-### Native Addons (17 linked)
-
-```
-bare-crypto, bare-dns, bare-fs, bare-inspect, bare-os, bare-pipe,
-bare-subprocess, bare-tcp, bare-type, bare-url, fs-native-extensions,
-quickbit-native, rabin-native, rocksdb-native, simdle-native,
-sodium-native, udx-native
-```
+- **[User Flows](docs/USER-FLOWS.md)** — Step-by-step journey diagrams for every feature
+- **[Use Cases](docs/USE-CASES.md)** — Real-world scenarios (POS, publishing, marketplace, education)
+- **[Developer Guide](docs/DEVELOPER-GUIDE.md)** — Build and publish your first P2P app
+- **[Design Document](DESIGN.md)** — UX research, information architecture, color system
+- **[Hybrid Architecture](HYBRID-ARCHITECTURE.md)** — Relay + P2P technical design
+- **[App Catalog Design](APP-CATALOG-DESIGN.md)** — How the decentralized catalog works
 
 ## Related Projects
 
-- **[HiveRelay](https://github.com/bigdestiny2/P2P-Hiveswarm)** — P2P relay backbone (storage, seeding, gateway)
-- **[HiveCompute](https://github.com/bigdestiny2/P2P-Hiveswarm)** — Decentralized AI inference network
-- **[Pear POS](../pear-pos/)** — P2P point-of-sale system
+- **[HiveRelay](https://github.com/bigdestiny2/P2P-Hiveswarm)** — The relay backbone powering the App Store
+- **[Pear POS](https://github.com/bigdestiny2/pear-pos)** — P2P point-of-sale system (first app in the catalog)
 - **[Holepunch](https://holepunch.to)** — The P2P stack (Hyperswarm, Hypercore, Bare)
-- **[Peersky](https://github.com/p2plabsxyz/peersky-browser)** — Desktop P2P browser (inspiration)
 
 ## License
 
