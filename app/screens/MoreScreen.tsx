@@ -12,9 +12,12 @@ type Props = {
   proxyPort?: number
   status: 'connected' | 'connecting' | 'offline'
   onNavigateToSites: () => void
+  onNavigateToBookmarks: () => void
+  onNavigateToHistory: () => void
+  onNavigateToSettings: () => void
 }
 
-export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSites }: Props) {
+export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSites, onNavigateToBookmarks, onNavigateToHistory, onNavigateToSettings }: Props) {
   const [showIdentity, setShowIdentity] = useState(false)
   const [publicKey, setPublicKey] = useState<string | null>(null)
 
@@ -88,8 +91,8 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
 
       <View style={styles.section}>
         <MenuItem label="My Sites" subtitle="Create and manage P2P websites" onPress={onNavigateToSites} />
-        <MenuItem label="Bookmarks" subtitle="Coming soon" onPress={() => Alert.alert('Coming Soon', 'Bookmarks will be available in the next update.')} />
-        <MenuItem label="History" subtitle="Coming soon" onPress={() => Alert.alert('Coming Soon', 'Browsing history will be available in the next update.')} />
+        <MenuItem label="Bookmarks" subtitle="Saved sites" onPress={onNavigateToBookmarks} />
+        <MenuItem label="History" subtitle="Recently visited" onPress={onNavigateToHistory} />
       </View>
 
       <View style={styles.section}>
@@ -100,7 +103,7 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
         />
         <MenuItem label="My Identity" subtitle="View your device public key" onPress={handleShowIdentity} />
         <MenuItem label="Add Catalog" subtitle="Add a community app catalog" onPress={handleAddCatalog} />
-        <MenuItem label="Settings" subtitle="Theme, defaults" onPress={() => Alert.alert('Settings', 'Settings will be available in the next update.\n\nCurrent catalog: relay.p2phiverelay.xyz')} />
+        <MenuItem label="Settings" subtitle="Catalog, data, about" onPress={onNavigateToSettings} />
       </View>
 
       {showIdentity && publicKey && (

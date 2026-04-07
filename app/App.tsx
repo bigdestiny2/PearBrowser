@@ -29,6 +29,9 @@ import { HomeScreen } from './screens/HomeScreen'
 import { AppStoreScreen } from './screens/AppStoreScreen'
 import { BrowseScreen } from './screens/BrowseScreen'
 import { MoreScreen } from './screens/MoreScreen'
+import { BookmarksScreen } from './screens/BookmarksScreen'
+import { HistoryScreen } from './screens/HistoryScreen'
+import { SettingsScreen } from './screens/SettingsScreen'
 import { MySitesScreen } from './screens/MySitesScreen'
 import { TemplatePickerScreen } from './screens/TemplatePickerScreen'
 import type { Template } from './screens/TemplatePickerScreen'
@@ -46,6 +49,9 @@ export default function App() {
   const [browseUrl, setBrowseUrl] = useState<string | null>(null)
   const [installedApps, setInstalledApps] = useState<any[]>([])
   const [showSites, setShowSites] = useState(false)
+  const [showBookmarks, setShowBookmarks] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [editingSiteId, setEditingSiteId] = useState<string | null>(null)
   const [editorTemplate, setEditorTemplate] = useState<Template | null>(null)
@@ -214,14 +220,32 @@ export default function App() {
             <Text style={{ color: colors.textSecondary, fontSize: 14 }}>P2P engine not connected — browsing unavailable in demo mode</Text>
           </View>
         )}
-        {activeTab === 'more' && !showSites && (
+        {activeTab === 'more' && !showSites && !showBookmarks && !showHistory && !showSettings && !editingSiteId && !showTemplatePicker && (
           <MoreScreen
             rpc={rpcRef.current!}
             peerCount={peerCount}
             proxyPort={proxyPort}
             status={connectionStatus}
             onNavigateToSites={() => setShowSites(true)}
+            onNavigateToBookmarks={() => setShowBookmarks(true)}
+            onNavigateToHistory={() => setShowHistory(true)}
+            onNavigateToSettings={() => setShowSettings(true)}
           />
+        )}
+        {activeTab === 'more' && showBookmarks && (
+          <BookmarksScreen
+            onOpen={(url) => { handleNavigate(url); setShowBookmarks(false) }}
+            onBack={() => setShowBookmarks(false)}
+          />
+        )}
+        {activeTab === 'more' && showHistory && (
+          <HistoryScreen
+            onOpen={(url) => { handleNavigate(url); setShowHistory(false) }}
+            onBack={() => setShowHistory(false)}
+          />
+        )}
+        {activeTab === 'more' && showSettings && (
+          <SettingsScreen onBack={() => setShowSettings(false)} />
         )}
         {activeTab === 'more' && showSites && !editingSiteId && !showTemplatePicker && (
           <MySitesScreen
