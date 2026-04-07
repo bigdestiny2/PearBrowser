@@ -89,6 +89,8 @@ export function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl }: 
     if (url.startsWith(`http://localhost:${proxyPort}`)) return true
     // Allow relay gateway URLs (apps served from relay HTTP)
     if (url.startsWith('http://127.0.0.1:9') || url.startsWith('http://localhost:9')) return true
+    if (url.includes('relay.p2phiverelay.xyz')) return true
+    if (url.includes('/v1/hyper/')) return true
     if (url.startsWith('hyper://')) { handleNavigate(url); return false }
     if (url.startsWith('http://') || url.startsWith('https://')) { Linking.openURL(url); return false }
     return true

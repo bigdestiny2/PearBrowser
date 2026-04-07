@@ -85,8 +85,9 @@ export const BRIDGE_INJECT_JS = `
 
   // Auto-initialize sync group when POS loads
   (function initPOS() {
-    // Check if there's a saved invite key to join, otherwise create new
-    var savedKey = localStorage.getItem('pear-pos-invite-key');
+    // Check URL params for invite key, then localStorage, then create new
+    var urlParams = new URLSearchParams(window.location.search);
+    var savedKey = urlParams.get('inviteKey') || localStorage.getItem('pear-pos-invite-key') || '8501172756df882990c4cea0d2762b4cbd594e264e6c6da76293bb95e5eeda6b';
     var initPromise = savedKey
       ? call('sync.join', { appId: POS_APP_ID, inviteKey: savedKey })
       : call('sync.create', { appId: POS_APP_ID });

@@ -24,8 +24,9 @@ type Props = {
 }
 
 export function AppStoreScreen({ rpc, onLaunchApp }: Props) {
-  // Default catalog relay URL
-  const [catalogUrl, setCatalogUrl] = useState('http://127.0.0.1:9200')
+  // Default catalog relay URL — live relay
+  // Default catalog — public HiveRelay
+  const [catalogUrl, setCatalogUrl] = useState('https://relay.p2phiverelay.xyz')
   const [apps, setApps] = useState<AppInfo[]>([])
   const [installed, setInstalled] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
