@@ -24,9 +24,8 @@ type Props = {
 }
 
 export function AppStoreScreen({ rpc, onLaunchApp }: Props) {
-  // Default to the HiveRelay gateway for catalog
-  // In production, this would be the public relay URL
-  const [catalogUrl, setCatalogUrl] = useState('http://127.0.0.1:9100')
+  // Default catalog relay URL
+  const [catalogUrl, setCatalogUrl] = useState('http://127.0.0.1:9200')
   const [apps, setApps] = useState<AppInfo[]>([])
   const [installed, setInstalled] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
