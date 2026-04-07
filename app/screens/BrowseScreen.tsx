@@ -134,6 +134,7 @@ export function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl }: 
           onNavigationStateChange={handleWebViewNav}
           onShouldStartLoadWithRequest={handleShouldLoad}
           onMessage={handleBridgeMessage}
+          injectedJavaScriptBeforeContentLoaded={createBridgeScript(proxyPort)}
           injectedJavaScript={createBridgeScript(proxyPort)}
           allowsBackForwardNavigationGestures
           javaScriptEnabled
