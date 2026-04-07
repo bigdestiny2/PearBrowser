@@ -6,7 +6,7 @@ import {
 import { WebView } from 'react-native-webview'
 import { colors } from '../lib/theme'
 import { StatusDot } from '../components/StatusDot'
-import { BRIDGE_INJECT_JS } from '../lib/bridge-inject'
+import { createBridgeScript } from '../lib/bridge-inject'
 import type { PearRPC } from '../lib/rpc'
 
 type Props = {
@@ -96,43 +96,22 @@ export function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl }: 
     return true
   }, [proxyPort, handleNavigate])
 
-  // Handle bridge messages from WebView
-  const handleBridgeMessage = useCallback(async (event: any) => {
+  // Handle messages from WebView — only navigation/share actions.
+  // Data calls (sync, identity) go directly via localhost HTTP, bypassing RN.
+  const handleBridgeMessage = useCallback((event: any) => {
     let msg: any
     try {
       msg = JSON.parse(event.nativeEvent.data)
     } catch { return }
 
-    if (msg.type !== 'pear-bridge') return
-    if (!rpc) {
-      // Send error back to WebView
-      webViewRef.current?.injectJavaScript(`
-        window.dispatchEvent(new MessageEvent('message', {
-          data: JSON.stringify({ type: 'pear-bridge-reply', id: ${msg.id}, error: 'P2P engine not connected' })
-        }));
-        true;
-      `)
-      return
+    if (msg.type === 'pear-navigate' && msg.url) {
+      handleNavigate(msg.url)
+    } else if (msg.type === 'pear-share' && msg.url) {
+      import('react-native').then(({ Share }) => {
+        Share.share({ message: msg.url, url: msg.url })
+      })
     }
-
-    try {
-      // Route bridge calls to worklet RPC
-      const result = await rpc.request(200, { method: msg.method, args: msg.args }, 30000)
-      webViewRef.current?.injectJavaScript(`
-        window.dispatchEvent(new MessageEvent('message', {
-          data: JSON.stringify({ type: 'pear-bridge-reply', id: ${msg.id}, result: ${JSON.stringify(result)} })
-        }));
-        true;
-      `)
-    } catch (err: any) {
-      webViewRef.current?.injectJavaScript(`
-        window.dispatchEvent(new MessageEvent('message', {
-          data: JSON.stringify({ type: 'pear-bridge-reply', id: ${msg.id}, error: ${JSON.stringify(err.message)} })
-        }));
-        true;
-      `)
-    }
-  }, [rpc])
+  }, [handleNavigate])
 
   // Truncate display URL
   const displayUrl = currentUrl.length > 40
@@ -150,7 +129,7 @@ export function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl }: 
           onNavigationStateChange={handleWebViewNav}
           onShouldStartLoadWithRequest={handleShouldLoad}
           onMessage={handleBridgeMessage}
-          injectedJavaScript={BRIDGE_INJECT_JS}
+          injectedJavaScript={createBridgeScript(proxyPort)}
           allowsBackForwardNavigationGestures
           javaScriptEnabled
           domStorageEnabled

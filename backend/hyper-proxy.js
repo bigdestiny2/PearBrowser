@@ -45,9 +45,14 @@ class HyperProxy {
     this._getDrive = getDrive // async (keyHex) => Hyperdrive
     this._onError = onError || (() => {})
     this._relay = relayClient || null // RelayClient for fast-path
+    this._httpBridge = null // HttpBridge for direct WebView API
     this._server = null
     this._port = 0
     this._stats = { relayHits: 0, p2pHits: 0, total: 0 }
+  }
+
+  setHttpBridge (bridge) {
+    this._httpBridge = bridge
   }
 
   get port () { return this._port }
@@ -82,6 +87,12 @@ class HyperProxy {
 
     const url = new URL(req.url, `http://localhost:${this._port}`)
     const path = url.pathname
+
+    // HTTP Bridge — direct API for WebView apps (bypasses RN relay)
+    if (this._httpBridge && path.startsWith('/api/')) {
+      const handled = await this._httpBridge.handle(req, res, url)
+      if (handled) return
+    }
 
     // Health check
     if (path === '/health') {

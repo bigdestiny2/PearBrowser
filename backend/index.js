@@ -18,6 +18,7 @@ const { CatalogManager } = require('./catalog-manager.js')
 const { AppManager } = require('./app-manager.js')
 const { SiteManager } = require('./site-manager.js')
 const { PearBridge } = require('./pear-bridge.js')
+const { HttpBridge } = require('./http-bridge.js')
 const C = require('./constants.js')
 
 const { IPC } = BareKit
@@ -284,6 +285,11 @@ async function boot () {
   proxy = new HyperProxy(getDriveForProxy, (path, err) => {
     rpc.event(C.EVT_ERROR, { type: 'proxy-error', path, message: err })
   }, relayClient)
+
+  // Mount direct HTTP bridge (WebView → localhost → Bare, bypasses RN relay)
+  const httpBridge = new HttpBridge(pearBridge, swarm)
+  proxy.setHttpBridge(httpBridge)
+
   const port = await proxy.start()
 
   // Notify React Native
