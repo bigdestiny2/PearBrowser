@@ -50,7 +50,7 @@ export default function App() {
   const rpcRef = useRef<PearRPC | null>(null)
 
   const connectionStatus = state === 'ready'
-    ? (peerCount > 0 ? 'connected' : 'connecting')
+    ? (proxyPort > 0 ? 'connected' : 'connecting')
     : state === 'error' ? 'offline' : 'connecting'
 
   // Boot worklet
@@ -60,7 +60,6 @@ export default function App() {
     async function boot() {
       // If bare-kit not available or no bundle, run in demo mode
       if (!Worklet) {
-        console.log('PearBrowser: Running in demo mode (no worklet)')
         if (mounted) setState('ready')
         return
       }
@@ -69,8 +68,6 @@ export default function App() {
         const worklet = new Worklet()
         workletRef.current = worklet
 
-        // Set up RPC and callbacks BEFORE starting the worklet
-        // so we don't miss the READY event
         const rpc = new PearRPC(worklet.IPC)
         rpcRef.current = rpc
 
@@ -106,14 +103,11 @@ export default function App() {
         // Timeout fallback
         setTimeout(() => {
           if (mounted && !gotReady) {
-            console.log('PearBrowser: Worklet boot timeout, running in demo mode')
             setState('ready')
           }
         }, 30000)
       } catch (err: any) {
         if (mounted) {
-          // Fall back to demo mode on worklet failure
-          console.log('PearBrowser: Worklet failed, running in demo mode:', err.message)
           setState('ready')
         }
       }

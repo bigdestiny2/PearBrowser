@@ -17,7 +17,7 @@ export function StatusDot({ status, peerCount, onPress }: Props) {
     colors.error
 
   const label =
-    status === 'connected' ? `${peerCount} peers` :
+    status === 'connected' ? (peerCount > 0 ? `${peerCount} peers` : 'Ready') :
     status === 'connecting' ? 'Connecting...' :
     'Offline'
 
