@@ -30,6 +30,8 @@ import { AppStoreScreen } from './screens/AppStoreScreen'
 import { BrowseScreen } from './screens/BrowseScreen'
 import { MoreScreen } from './screens/MoreScreen'
 import { MySitesScreen } from './screens/MySitesScreen'
+import { TemplatePickerScreen } from './screens/TemplatePickerScreen'
+import type { Template } from './screens/TemplatePickerScreen'
 import { SiteEditorScreen } from './screens/SiteEditorScreen'
 
 type AppState = 'booting' | 'connecting' | 'ready' | 'error'
@@ -44,7 +46,10 @@ export default function App() {
   const [browseUrl, setBrowseUrl] = useState<string | null>(null)
   const [installedApps, setInstalledApps] = useState<any[]>([])
   const [showSites, setShowSites] = useState(false)
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [editingSiteId, setEditingSiteId] = useState<string | null>(null)
+  const [editorTemplate, setEditorTemplate] = useState<Template | null>(null)
+  const [pendingSiteName, setPendingSiteName] = useState('')
 
   const workletRef = useRef<any>(null)
   const rpcRef = useRef<PearRPC | null>(null)
@@ -217,19 +222,39 @@ export default function App() {
             onNavigateToSites={() => setShowSites(true)}
           />
         )}
-        {activeTab === 'more' && showSites && !editingSiteId && (
+        {activeTab === 'more' && showSites && !editingSiteId && !showTemplatePicker && (
           <MySitesScreen
             rpc={rpcRef.current}
             onEditSite={(siteId) => setEditingSiteId(siteId)}
             onPreviewSite={(url) => { handleNavigate(url); setShowSites(false) }}
+            onCreateNew={(name) => { setPendingSiteName(name); setShowTemplatePicker(true) }}
+          />
+        )}
+        {showTemplatePicker && (
+          <TemplatePickerScreen
+            onSelect={async (template) => {
+              setEditorTemplate(template)
+              setShowTemplatePicker(false)
+              // Create the site with the chosen name, then open editor
+              if (rpcRef.current && pendingSiteName) {
+                try {
+                  const result = await rpcRef.current.createSite(pendingSiteName)
+                  setEditingSiteId(result.siteId)
+                } catch {}
+              }
+            }}
+            onBack={() => setShowTemplatePicker(false)}
           />
         )}
         {editingSiteId && (
           <SiteEditorScreen
             rpc={rpcRef.current}
             siteId={editingSiteId}
-            onBack={() => setEditingSiteId(null)}
-            onPreview={(url) => { handleNavigate(url); setEditingSiteId(null); setShowSites(false) }}
+            siteName={pendingSiteName || undefined}
+            initialBlocks={editorTemplate?.blocks?.map((b: any, i: number) => ({ ...b, id: 'tb' + i })) || undefined}
+            initialTheme={editorTemplate?.theme || undefined}
+            onBack={() => { setEditingSiteId(null); setEditorTemplate(null) }}
+            onPreview={(url) => { handleNavigate(url); setEditingSiteId(null); setEditorTemplate(null); setShowSites(false) }}
           />
         )}
       </View>

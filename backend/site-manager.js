@@ -119,6 +119,33 @@ class SiteManager {
   }
 
   /**
+   * Publish raw HTML/CSS/JS files directly (for AI-generated or custom code)
+   */
+  async publishRawHtml (siteId, html, css) {
+    const site = this.sites.get(siteId)
+    if (!site) throw new Error('Site not found: ' + siteId)
+
+    await site.drive.put('/index.html', Buffer.from(html))
+    if (css) await site.drive.put('/style.css', Buffer.from(css))
+
+    return { siteId }
+  }
+
+  /**
+   * Write multiple raw files to a site (for full custom uploads)
+   */
+  async writeRawFiles (siteId, files) {
+    const site = this.sites.get(siteId)
+    if (!site) throw new Error('Site not found: ' + siteId)
+
+    for (const { path, content } of files) {
+      await site.drive.put(path, Buffer.from(content))
+    }
+
+    return { siteId, filesWritten: files.length }
+  }
+
+  /**
    * Build a site from template + user content blocks
    */
   async buildFromBlocks (siteId, blocks, theme) {
@@ -151,6 +178,8 @@ class SiteManager {
           return `<pre><code>${this._escapeHtml(block.text)}</code></pre>`
         case 'quote':
           return `<blockquote>${this._escapeHtml(block.text)}</blockquote>`
+        case 'list':
+          return `<ul>${(block.items || []).map(i => `<li>${this._escapeHtml(i)}</li>`).join('\n')}</ul>`
         default:
           return ''
       }

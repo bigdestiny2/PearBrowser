@@ -19,9 +19,10 @@ type Props = {
   rpc: PearRPC | null
   onEditSite: (siteId: string) => void
   onPreviewSite: (url: string) => void
+  onCreateNew?: (name: string) => void
 }
 
-export function MySitesScreen({ rpc, onEditSite, onPreviewSite }: Props) {
+export function MySitesScreen({ rpc, onEditSite, onPreviewSite, onCreateNew }: Props) {
   const [sites, setSites] = useState<Site[]>([])
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
@@ -41,18 +42,25 @@ export function MySitesScreen({ rpc, onEditSite, onPreviewSite }: Props) {
   }, [rpc])
 
   const handleCreate = useCallback(async () => {
-    if (!rpc || !newName.trim()) return
-    setCreating(true)
-    try {
-      const result = await rpc.createSite(newName.trim())
+    if (!newName.trim()) return
+    if (onCreateNew) {
+      // Go through template picker
+      onCreateNew(newName.trim())
       setNewName('')
-      await loadSites()
-      onEditSite(result.siteId)
-    } catch (err: any) {
-      Alert.alert('Error', err.message)
+    } else if (rpc) {
+      // Direct create (fallback)
+      setCreating(true)
+      try {
+        const result = await rpc.createSite(newName.trim())
+        setNewName('')
+        await loadSites()
+        onEditSite(result.siteId)
+      } catch (err: any) {
+        Alert.alert('Error', err.message)
+      }
+      setCreating(false)
     }
-    setCreating(false)
-  }, [rpc, newName, loadSites, onEditSite])
+  }, [rpc, newName, loadSites, onEditSite, onCreateNew])
 
   const handlePublish = useCallback(async (siteId: string) => {
     if (!rpc) return
