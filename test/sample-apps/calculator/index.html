@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2P Calculator</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, sans-serif; background: #0a0a0a; color: #e0e0e0; display: flex; flex-direction: column; align-items: center; padding: 40px 20px; }
+h1 { color: #ff9500; margin-bottom: 20px; }
+.calc { background: #1a1a1a; border-radius: 16px; padding: 20px; width: 100%; max-width: 320px; }
+input { width: 100%; padding: 16px; font-size: 24px; background: #2a2a2a; border: none; border-radius: 8px; color: #fff; text-align: right; margin-bottom: 12px; }
+.row { display: flex; gap: 8px; margin-bottom: 8px; }
+button { flex: 1; padding: 16px; font-size: 20px; border: none; border-radius: 8px; background: #333; color: #e0e0e0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+button:active { background: #444; }
+button.op { background: #ff9500; color: #000; }
+button.eq { background: #4ade80; color: #000; }
+.footer { margin-top: 24px; color: #555; font-size: 12px; }
+</style>
+</head><body>
+<h1>Calculator</h1>
+<div class="calc">
+  <input id="display" readonly value="0">
+  <div class="row"><button onclick="press('7')">7</button><button onclick="press('8')">8</button><button onclick="press('9')">9</button><button class="op" onclick="press('+')">+</button></div>
+  <div class="row"><button onclick="press('4')">4</button><button onclick="press('5')">5</button><button onclick="press('6')">6</button><button class="op" onclick="press('-')">-</button></div>
+  <div class="row"><button onclick="press('1')">1</button><button onclick="press('2')">2</button><button onclick="press('3')">3</button><button class="op" onclick="press('*')">x</button></div>
+  <div class="row"><button onclick="press('C')">C</button><button onclick="press('0')">0</button><button onclick="press('.')">.</button><button class="eq" onclick="calc()">=</button></div>
+</div>
+<p class="footer">P2P App — served from Hyperdrive</p>
+<script>
+let expr = '';
+function press(v) { if (v === 'C') { expr = ''; document.getElementById('display').value = '0'; } else { expr += v; document.getElementById('display').value = expr; } }
+function calc() { try { const r = Function('"use strict"; return (' + expr.replace(/x/g,'*') + ')')(); document.getElementById('display').value = r; expr = String(r); } catch { document.getElementById('display').value = 'Error'; expr = ''; } }
+</script>
+</body></html>

@@ -1,0 +1,10 @@
+{
+  "name": "Notes",
+  "version": "1.0.0",
+  "description": "Save notes locally — runs entirely on your device via P2P",
+  "author": "PearBrowser",
+  "icon": null,
+  "entry": "/index.html",
+  "categories": ["productivity"],
+  "permissions": []
+}

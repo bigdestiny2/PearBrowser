@@ -1,0 +1,9 @@
+node_modules/
+ios/
+android/
+.expo/
+*.bundle
+*.jsbundle
+dist/
+*.tsbuildinfo
+.DS_Store

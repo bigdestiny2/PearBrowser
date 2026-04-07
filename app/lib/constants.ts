@@ -1,0 +1,31 @@
+// Mirrors backend/constants.js
+
+// Commands (RN → Worklet)
+export const CMD = {
+  NAVIGATE: 1,
+  GET_STATUS: 2,
+  LOAD_CATALOG: 10,
+  INSTALL_APP: 11,
+  UNINSTALL_APP: 12,
+  LAUNCH_APP: 13,
+  LIST_INSTALLED: 14,
+  CHECK_UPDATES: 15,
+  CREATE_SITE: 20,
+  UPDATE_SITE: 21,
+  PUBLISH_SITE: 22,
+  UNPUBLISH_SITE: 23,
+  LIST_SITES: 24,
+  DELETE_SITE: 25,
+  LOAD_TEMPLATE: 26,
+  BRIDGE: 200,
+  STOP: 99,
+} as const
+
+// Events (Worklet → RN)
+export const EVT = {
+  READY: 100,
+  PEER_COUNT: 101,
+  ERROR: 102,
+  INSTALL_PROGRESS: 103,
+  SITE_PUBLISHED: 104,
+} as const

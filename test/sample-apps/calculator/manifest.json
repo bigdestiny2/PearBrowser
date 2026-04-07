@@ -1,0 +1,10 @@
+{
+  "name": "Calculator",
+  "version": "1.0.0",
+  "description": "A simple calculator — runs entirely P2P, no server needed",
+  "author": "PearBrowser",
+  "icon": null,
+  "entry": "/index.html",
+  "categories": ["utilities"],
+  "permissions": []
+}

@@ -1,0 +1,47 @@
+{
+  "name": "pearbrowser",
+  "version": "0.1.0",
+  "description": "P2P mobile app platform — discover apps, build sites, browse hyper://",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "prebuild": "expo prebuild",
+    "bundle-backend": "bare-pack --linked --host ios-arm64 backend/index.js -o assets/backend.bundle",
+    "bundle-all": "bare-pack --linked --host ios-arm64 --host android-arm64 backend/index.js -o assets/backend.bundle",
+    "test": "node test/backend.test.js"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^2.1.0",
+    "@react-navigation/bottom-tabs": "^7.3.0",
+    "@react-navigation/native": "^7.1.0",
+    "autobase": "^7.27.3",
+    "b4a": "^1.8.0",
+    "bare-crypto": "^1.13.4",
+    "bare-http1": "^4.5.5",
+    "corestore": "^7.9.2",
+    "expo": "~55.0.6",
+    "expo-build-properties": "~0.13.2",
+    "expo-file-system": "^55.0.14",
+    "expo-status-bar": "~2.2.3",
+    "framed-stream": "^1.0.0",
+    "hyperbee": "^2.27.3",
+    "hypercore": "^11.28.1",
+    "hyperdrive": "^13.3.2",
+    "hyperswarm": "^4.17.0",
+    "react": "19.0.0",
+    "react-native": "0.83.4",
+    "react-native-b4a": "^0.0.4",
+    "react-native-bare-kit": "^0.13.0",
+    "react-native-safe-area-context": "^5.4.0",
+    "react-native-webview": "^13.12.5"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@types/react": "~19.0.0",
+    "bare-pack": "^2.0.0",
+    "typescript": "~5.8.0"
+  },
+  "private": true
+}

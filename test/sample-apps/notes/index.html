@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2P Notes</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 20px; max-width: 600px; margin: 0 auto; }
+h1 { color: #ff9500; margin-bottom: 16px; font-size: 1.5em; }
+textarea { width: 100%; height: 120px; background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 16px; color: #e0e0e0; font-size: 16px; resize: vertical; margin-bottom: 12px; font-family: inherit; }
+button { background: #ff9500; color: #000; border: none; padding: 12px 24px; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+button:active { opacity: 0.8; }
+.notes { margin-top: 20px; }
+.note { background: #1a1a1a; border-radius: 12px; padding: 16px; margin-bottom: 8px; position: relative; }
+.note .time { color: #666; font-size: 12px; margin-bottom: 6px; }
+.note .text { white-space: pre-wrap; line-height: 1.5; }
+.note .del { position: absolute; right: 12px; top: 12px; color: #666; cursor: pointer; font-size: 18px; background: none; border: none; padding: 4px; }
+.empty { text-align: center; color: #555; padding: 40px 0; }
+.footer { text-align: center; margin-top: 24px; color: #555; font-size: 12px; }
+</style>
+</head><body>
+<h1>Notes</h1>
+<textarea id="input" placeholder="Write a note..."></textarea>
+<button onclick="addNote()">Save Note</button>
+<div class="notes" id="notes"></div>
+<p class="footer">P2P App — data stored locally on your device</p>
+<script>
+let notes = JSON.parse(localStorage.getItem('p2p-notes') || '[]');
+function render() {
+  const el = document.getElementById('notes');
+  if (notes.length === 0) { el.innerHTML = '<div class="empty">No notes yet</div>'; return; }
+  el.innerHTML = notes.map((n, i) =>
+    '<div class="note"><div class="time">' + new Date(n.t).toLocaleString() + '</div>' +
+    '<button class="del" onclick="delNote(' + i + ')">x</button>' +
+    '<div class="text">' + n.text.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</div></div>'
+  ).reverse().join('');
+}
+function addNote() { const t = document.getElementById('input').value.trim(); if (!t) return; notes.push({ text: t, t: Date.now() }); localStorage.setItem('p2p-notes', JSON.stringify(notes)); document.getElementById('input').value = ''; render(); }
+function delNote(i) { notes.splice(i, 1); localStorage.setItem('p2p-notes', JSON.stringify(notes)); render(); }
+render();
+</script>
+</body></html>
