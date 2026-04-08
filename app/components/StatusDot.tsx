@@ -7,19 +7,21 @@ type Status = 'connected' | 'connecting' | 'offline'
 type Props = {
   status: Status
   peerCount: number
+  privateMode?: boolean
   onPress?: () => void
 }
 
-export function StatusDot({ status, peerCount, onPress }: Props) {
-  const dotColor =
+export function StatusDot({ status, peerCount, privateMode, onPress }: Props) {
+  const dotColor = privateMode ? '#8b5cf6' :
     status === 'connected' ? colors.success :
     status === 'connecting' ? colors.warning :
     colors.error
 
-  const label =
-    status === 'connected' ? (peerCount > 0 ? `${peerCount} peers` : 'Ready') :
-    status === 'connecting' ? 'Connecting...' :
-    'Offline'
+  const label = privateMode
+    ? (status === 'connected' ? 'Private' : 'Private...')
+    : status === 'connected' ? (peerCount > 0 ? `${peerCount} peers` : 'Ready')
+    : status === 'connecting' ? 'Connecting...'
+    : 'Offline'
 
   return (
     <TouchableOpacity onPress={onPress} style={styles.container} activeOpacity={0.7}>

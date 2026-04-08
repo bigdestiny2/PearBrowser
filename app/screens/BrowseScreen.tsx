@@ -6,7 +6,7 @@ import {
 import { WebView } from 'react-native-webview'
 import { colors } from '../lib/theme'
 import { StatusDot } from '../components/StatusDot'
-import { addToHistory, addBookmark } from '../lib/storage'
+import { addToHistory, addBookmark, getSettings } from '../lib/storage'
 import { createBridgeScript } from '../lib/bridge-inject'
 import type { PearRPC } from '../lib/rpc'
 
@@ -74,9 +74,11 @@ export function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl }: 
 
   const handleWebViewNav = useCallback((navState: any) => {
     setLoading(navState.loading)
-    // Track history when page finishes loading
+    // Track history when page finishes loading (skip in private mode)
     if (!navState.loading && navState.url && currentUrl) {
-      addToHistory(currentUrl, navState.title || currentUrl).catch(() => {})
+      getSettings().then(s => {
+        if (!s.privateMode) addToHistory(currentUrl, navState.title || currentUrl).catch(() => {})
+      })
     }
     if (navState.url?.includes('/hyper/')) {
       const match = navState.url.match(/\/hyper\/([^/]+)(.*)/)

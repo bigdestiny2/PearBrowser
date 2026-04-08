@@ -78,6 +78,29 @@ export function SettingsScreen({ onBack }: Props) {
           <Text style={styles.hint}>The App Store tab loads this catalog on startup</Text>
         </View>
 
+        {/* Privacy */}
+        <Text style={styles.sectionTitle}>PRIVACY</Text>
+        <View style={styles.card}>
+          <View style={styles.settingRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingLabel}>Private Mode</Text>
+              <Text style={styles.settingHint}>No history recorded. Ephemeral drive cache. Data cleared on exit.</Text>
+            </View>
+            <Switch
+              value={settings.privateMode}
+              onValueChange={async (val) => {
+                const updated = await updateSettings({ privateMode: val })
+                setSettings(updated)
+                Alert.alert(
+                  val ? 'Private Mode On' : 'Private Mode Off',
+                  val ? 'Browsing history will not be recorded. Cached drives will be cleared when you close the app.' : 'Normal browsing resumed. History will be recorded.'
+                )
+              }}
+              trackColor={{ true: colors.accent, false: colors.surfaceElevated }}
+            />
+          </View>
+        </View>
+
         {/* Relay */}
         <Text style={styles.sectionTitle}>RELAY</Text>
         <View style={styles.card}>

@@ -29,6 +29,7 @@ export type Settings = {
   catalogUrl: string
   theme: 'dark' | 'light'
   defaultTab: 'home' | 'store' | 'browse' | 'more'
+  privateMode: boolean
 }
 
 const KEYS = {
@@ -94,6 +95,7 @@ const DEFAULT_SETTINGS: Settings = {
   catalogUrl: 'https://relay.p2phiverelay.xyz',
   theme: 'dark',
   defaultTab: 'home',
+  privateMode: false,
 }
 
 export async function getSettings(): Promise<Settings> {

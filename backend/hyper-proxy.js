@@ -131,12 +131,15 @@ class HyperProxy {
         return res.end('File not found')
       }
 
-      res.setHeader('Content-Type', result.contentType)
-      res.setHeader('X-Source', result.source) // 'relay' or 'p2p'
+      const contentType = result.contentType
+      const content = result.content
+
+      res.setHeader('Content-Type', contentType)
+      res.setHeader('X-Source', result.source)
 
       // Inject <base> tag for HTML
-      if (result.contentType.includes('text/html')) {
-        const html = result.content.toString('utf-8')
+      if (contentType.includes('text/html')) {
+        const html = content.toString('utf-8')
         const prefix = path.startsWith('/app/') ? '/app/' : '/hyper/'
         const baseHref = `http://localhost:${this._port}${prefix}${driveKeyHex}/`
         const injected = html.includes('<head>')
@@ -146,8 +149,28 @@ class HyperProxy {
         return res.end(Buffer.from(injected))
       }
 
+      // Range request support for streaming (video, audio, large files)
+      res.setHeader('Accept-Ranges', 'bytes')
+      const rangeHeader = req.headers.range || req.headers['range']
+
+      if (rangeHeader) {
+        const total = content.length
+        const match = rangeHeader.match(/bytes=(\d*)-(\d*)/)
+        if (match) {
+          const start = match[1] ? parseInt(match[1]) : 0
+          const end = match[2] ? parseInt(match[2]) : total - 1
+          const chunkSize = end - start + 1
+
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`)
+          res.setHeader('Content-Length', chunkSize)
+          res.statusCode = 206
+          return res.end(content.slice(start, end + 1))
+        }
+      }
+
+      res.setHeader('Content-Length', content.length)
       res.statusCode = 200
-      res.end(result.content)
+      res.end(content)
     } catch (err) {
       this._onError(path, err.message)
       res.statusCode = 502
@@ -199,25 +222,21 @@ class HyperProxy {
 
   /**
    * Fetch from P2P (Hyperdrive)
+   * Uses { wait: true } for non-blocking wait — Hypercore handles
+   * the waiting internally instead of us polling every 300ms.
+   * Inspired by Vinjari's fetch.js approach.
    */
   async _fetchP2P (keyHex, filePath) {
     const drive = await this._getDrive(keyHex)
     if (!drive) return null
 
-    // Wait for data if drive is fresh
-    if (drive.version === 0) {
-      await new Promise((resolve) => {
-        const timeout = setTimeout(resolve, 15000)
-        const check = async () => {
-          const entry = await drive.entry(filePath).catch(() => null)
-          if (entry) { clearTimeout(timeout); resolve() }
-          else setTimeout(check, 300)
-        }
-        check()
-      })
-    }
+    // Use Hyperdrive's built-in wait: true to wait for the specific
+    // block we need, with a 15s timeout. No polling.
+    const content = await Promise.race([
+      drive.get(filePath, { wait: true }),
+      new Promise(resolve => setTimeout(() => resolve(null), 15000))
+    ])
 
-    const content = await drive.get(filePath)
     if (!content) return null
 
     return { content, contentType: guessType(filePath) }

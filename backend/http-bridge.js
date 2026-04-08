@@ -13,9 +13,10 @@
  */
 
 class HttpBridge {
-  constructor (pearBridge, swarm) {
+  constructor (pearBridge, swarm, getDriveFn) {
     this._bridge = pearBridge
     this._swarm = swarm
+    this._getDrive = getDriveFn || null // async (keyHex) => Hyperdrive
   }
 
   /**
@@ -83,6 +84,37 @@ class HttpBridge {
         return this._json(res, { publicKey })
       }
 
+      // --- Drive Operations (Vinjari-inspired) ---
+
+      if (req.method === 'GET' && path === '/api/drive/info') {
+        const key = url.searchParams.get('key')
+        if (!key) return this._jsonError(res, 'key parameter required', 400)
+        const drive = await this._getDrive(key)
+        if (!drive) return this._jsonError(res, 'Drive not found', 404)
+        return this._json(res, {
+          key,
+          version: drive.version,
+          writable: drive.writable,
+          peers: this._swarm ? this._swarm.connections.size : 0,
+          discoveryKey: drive.discoveryKey ? drive.discoveryKey.toString('hex') : null
+        })
+      }
+
+      if (req.method === 'GET' && path === '/api/drive/readdir') {
+        const key = url.searchParams.get('key')
+        const dirPath = url.searchParams.get('path') || '/'
+        if (!key) return this._jsonError(res, 'key parameter required', 400)
+        const drive = await this._getDrive(key)
+        if (!drive) return this._jsonError(res, 'Drive not found', 404)
+        const entries = []
+        try {
+          for await (const entry of drive.list(dirPath)) {
+            entries.push({ key: entry.key, size: entry.value?.blob?.byteLength || 0 })
+          }
+        } catch {}
+        return this._json(res, { key, path: dirPath, entries })
+      }
+
       // --- Status ---
 
       if (req.method === 'GET' && path === '/api/bridge/status') {
@@ -109,6 +141,12 @@ class HttpBridge {
   _json (res, data) {
     res.statusCode = 200
     res.end(JSON.stringify(data))
+    return true
+  }
+
+  _jsonError (res, message, status = 400) {
+    res.statusCode = status
+    res.end(JSON.stringify({ error: message }))
     return true
   }
 

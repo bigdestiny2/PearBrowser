@@ -287,7 +287,7 @@ async function boot () {
   }, relayClient)
 
   // Mount direct HTTP bridge (WebView → localhost → Bare, bypasses RN relay)
-  const httpBridge = new HttpBridge(pearBridge, swarm)
+  const httpBridge = new HttpBridge(pearBridge, swarm, getDriveForProxy)
   proxy.setHttpBridge(httpBridge)
 
   const port = await proxy.start()
