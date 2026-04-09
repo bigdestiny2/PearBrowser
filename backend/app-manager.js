@@ -55,7 +55,9 @@ class AppManager {
 
     const drive = this.activeDrives.get(app.driveKey)
     if (drive) {
-      try { await drive.close() } catch {}
+      try { await drive.close() } catch (err) {
+        console.error('Failed to close drive:', err.message)
+      }
       this.activeDrives.delete(app.driveKey)
     }
 
@@ -150,7 +152,9 @@ class AppManager {
 
   async close () {
     for (const [, drive] of this.activeDrives) {
-      try { await drive.close() } catch {}
+      try { await drive.close() } catch (err) {
+        console.error('Failed to close drive:', err.message)
+      }
     }
     this.activeDrives.clear()
   }

@@ -36,8 +36,29 @@ const CONTENT_TYPES = {
 }
 
 function guessType (path) {
-  const ext = path.split('.').pop().toLowerCase()
+  // Extract extension safely
+  const lastDot = path.lastIndexOf('.')
+  const lastSlash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  if (lastDot <= lastSlash) return 'application/octet-stream'
+  const ext = path.slice(lastDot + 1).toLowerCase()
   return CONTENT_TYPES[ext] || 'application/octet-stream'
+}
+
+// Validate drive key format (64 hex characters)
+function isValidDriveKey (keyHex) {
+  return typeof keyHex === 'string' && /^[0-9a-f]{64}$/i.test(keyHex)
+}
+
+// Escape HTML entities to prevent XSS
+function escapeHtml (str) {
+  if (typeof str !== 'string') return ''
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/`/g, '&#96;')
 }
 
 class HyperProxy {
@@ -79,10 +100,23 @@ class HyperProxy {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 
-    // CORS preflight
+    // CORS preflight - only allow localhost origins
     if (req.method === 'OPTIONS') {
+      const origin = req.headers.origin
+      if (origin && !origin.startsWith('http://localhost') && !origin.startsWith('http://127.0.0.1')) {
+        res.statusCode = 403
+        return res.end('Invalid origin')
+      }
+      res.setHeader('Access-Control-Allow-Origin', origin || 'http://localhost')
       res.statusCode = 204
       return res.end()
+    }
+
+    // Validate origin for non-localhost requests
+    const origin = req.headers.origin
+    if (origin && !origin.startsWith('http://localhost') && !origin.startsWith('http://127.0.0.1')) {
+      res.statusCode = 403
+      return res.end('Invalid origin')
     }
 
     const url = new URL(req.url, `http://localhost:${this._port}`)
@@ -119,6 +153,18 @@ class HyperProxy {
       } else {
         res.statusCode = 404
         return res.end('Not found')
+      }
+
+      // SECURITY: Validate drive key format to prevent path traversal
+      if (!isValidDriveKey(driveKeyHex)) {
+        res.statusCode = 400
+        return res.end('Invalid drive key format')
+      }
+
+      // SECURITY: Validate file path to prevent directory traversal
+      if (filePath.includes('..') || filePath.includes('\x00')) {
+        res.statusCode = 400
+        return res.end('Invalid file path')
       }
 
       this._stats.total++
@@ -172,13 +218,15 @@ class HyperProxy {
       res.statusCode = 200
       res.end(content)
     } catch (err) {
+      // Log detailed error internally
       this._onError(path, err.message)
+      // Return generic error to client (don't leak internal details)
       res.statusCode = 502
       res.setHeader('Content-Type', 'text/html')
       res.end(`<html><body style="font-family:sans-serif;padding:40px;background:#0a0a0a;color:#e0e0e0">
         <h1 style="color:#ff9500">Cannot load page</h1>
-        <p>${err.message}</p>
-        <p style="color:#666">The content may be offline or unreachable.</p>
+        <p>The content may be offline or unreachable.</p>
+        <p style="color:#666">Please try again later.</p>
       </body></html>`)
     }
   }
@@ -244,26 +292,43 @@ class HyperProxy {
 
   async _serveDirectoryListing (res, drive, keyHex, dirPath) {
     const entries = []
+    const MAX_ENTRIES = 1000 // Prevent memory exhaustion
+    const TIMEOUT_MS = 5000
+    const startTime = Date.now()
+
     try {
       for await (const entry of drive.list(dirPath)) {
+        // Check timeout
+        if (Date.now() - startTime > TIMEOUT_MS) {
+          break
+        }
         entries.push(entry.key)
+        if (entries.length >= MAX_ENTRIES) {
+          entries.push('... (truncated)')
+          break
+        }
       }
-    } catch {}
+    } catch (err) {
+      this._onError('directory-listing', err.message)
+    }
 
+    // Escape all entries to prevent XSS
     const items = entries.map(e => {
       const name = e.startsWith(dirPath) ? e.slice(dirPath.length) : e
-      return `<li><a href="/hyper/${keyHex}${e}">${name}</a></li>`
+      const escapedName = escapeHtml(name)
+      const escapedE = escapeHtml(e)
+      return `<li><a href="/hyper/${escapeHtml(keyHex)}${escapedE}">${escapedName}</a></li>`
     }).join('\n')
 
     res.statusCode = 200
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
     res.end(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>hyper://${keyHex.slice(0, 8)}...${dirPath}</title>
+<title>hyper://${escapeHtml(keyHex.slice(0, 8))}...${escapeHtml(dirPath)}</title>
 <style>body{font-family:-apple-system,sans-serif;padding:20px;background:#0a0a0a;color:#e0e0e0}
 h1{color:#ff9500;font-size:1.1em;word-break:break-all}ul{list-style:none;padding:0}
 li{padding:8px 0;border-bottom:1px solid #333}a{color:#4dabf7;text-decoration:none}</style>
-</head><body><h1>hyper://${keyHex.slice(0, 8)}...${dirPath}</h1>
+</head><body><h1>hyper://${escapeHtml(keyHex.slice(0, 8))}...${escapeHtml(dirPath)}</h1>
 <ul>${items || '<li style="color:#666">Empty directory</li>'}</ul></body></html>`)
   }
 }

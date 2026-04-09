@@ -35,7 +35,8 @@ class CatalogManager {
     const catalogBuf = await drive.get('/catalog.json')
     if (!catalogBuf) throw new Error('No catalog.json found in drive')
 
-    const data = JSON.parse(catalogBuf.toString())
+    // SECURITY: Parse JSON with prototype pollution protection
+    const data = this._safeJSONParse(catalogBuf.toString())
 
     // Load icons for each app
     if (data.apps) {
@@ -62,7 +63,7 @@ class CatalogManager {
 
     const catalogBuf = await entry.drive.get('/catalog.json')
     if (catalogBuf) {
-      entry.data = JSON.parse(catalogBuf.toString())
+      entry.data = this._safeJSONParse(catalogBuf.toString())
       entry.lastRefresh = Date.now()
     }
     return entry.data
@@ -105,6 +106,26 @@ class CatalogManager {
       }
       check()
     })
+  }
+
+  /**
+   * Parse JSON safely with prototype pollution protection
+   */
+  _safeJSONParse (str) {
+    const obj = JSON.parse(str)
+    if (obj && typeof obj === 'object') {
+      // Remove dangerous prototype properties
+      delete obj.__proto__
+      delete obj.constructor
+      // Also check nested objects
+      for (const key in obj) {
+        if (obj[key] && typeof obj[key] === 'object') {
+          delete obj[key].__proto__
+          delete obj[key].constructor
+        }
+      }
+    }
+    return obj
   }
 
   async close () {

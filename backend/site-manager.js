@@ -19,6 +19,9 @@ class SiteManager {
    * Create a new site (writable Hyperdrive)
    */
   async createSite (name) {
+    // Validate site name
+    const validatedName = this._validateSiteName(name)
+
     const drive = new Hyperdrive(this.store)
     await drive.ready()
 
@@ -26,18 +29,18 @@ class SiteManager {
     const siteId = keyHex.slice(0, 16)
 
     // Write a default index.html
-    await drive.put('/index.html', Buffer.from(this._defaultHtml(name)))
+    await drive.put('/index.html', Buffer.from(this._defaultHtml(validatedName)))
     await drive.put('/style.css', Buffer.from(this._defaultCss()))
 
     this.sites.set(siteId, {
       drive,
       keyHex,
-      name: name || 'My Site',
+      name: validatedName,
       published: false,
       createdAt: Date.now()
     })
 
-    return { siteId, keyHex, name: name || 'My Site' }
+    return { siteId, keyHex, name: validatedName }
   }
 
   /**
@@ -47,8 +50,31 @@ class SiteManager {
     const site = this.sites.get(siteId)
     if (!site) throw new Error('Site not found: ' + siteId)
 
-    for (const { path, content } of files) {
-      await site.drive.put(path, Buffer.from(content))
+    // Validate files array
+    if (!Array.isArray(files)) {
+      throw new Error('Files must be an array')
+    }
+
+    const MAX_FILES = 100
+    const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+
+    if (files.length > MAX_FILES) {
+      throw new Error(`Too many files. Maximum is ${MAX_FILES}`)
+    }
+
+    for (const file of files) {
+      // Validate file path
+      if (!this._validateFilePath(file.path)) {
+        throw new Error(`Invalid file path: ${file.path}`)
+      }
+      // Validate content
+      if (typeof file.content !== 'string') {
+        throw new Error(`Invalid content for ${file.path}`)
+      }
+      if (file.content.length > MAX_FILE_SIZE) {
+        throw new Error(`File too large: ${file.path}`)
+      }
+      await site.drive.put(file.path, Buffer.from(file.content))
     }
 
     return { updated: files.length }
@@ -138,8 +164,31 @@ class SiteManager {
     const site = this.sites.get(siteId)
     if (!site) throw new Error('Site not found: ' + siteId)
 
-    for (const { path, content } of files) {
-      await site.drive.put(path, Buffer.from(content))
+    // Validate files array
+    if (!Array.isArray(files)) {
+      throw new Error('Files must be an array')
+    }
+
+    const MAX_FILES = 100
+    const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+
+    if (files.length > MAX_FILES) {
+      throw new Error(`Too many files. Maximum is ${MAX_FILES}`)
+    }
+
+    for (const file of files) {
+      // Validate file path
+      if (!this._validateFilePath(file.path)) {
+        throw new Error(`Invalid file path: ${file.path}`)
+      }
+      // Validate content
+      if (typeof file.content !== 'string') {
+        throw new Error(`Invalid content for ${file.path}`)
+      }
+      if (file.content.length > MAX_FILE_SIZE) {
+        throw new Error(`File too large: ${file.path}`)
+      }
+      await site.drive.put(file.path, Buffer.from(file.content))
     }
 
     return { siteId, filesWritten: files.length }
@@ -252,7 +301,38 @@ blockquote { border-left: 3px solid var(--primary); padding-left: 16px; color: #
   }
 
   _escapeHtml (str) {
-    return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    // SECURITY: Comprehensive HTML escaping to prevent XSS
+    if (typeof str !== 'string') return ''
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/`/g, '&#96;')
+      .replace(/\\/g, '&#92;')
+  }
+
+  // Validate site name to prevent XSS via malicious names
+  _validateSiteName (name) {
+    if (typeof name !== 'string') return 'My Site'
+    // Limit length and remove dangerous characters
+    const sanitized = name.slice(0, 100).replace(/[<>\"'`]/g, '')
+    return sanitized || 'My Site'
+  }
+
+  // Validate file paths to prevent path traversal
+  _validateFilePath (path) {
+    if (typeof path !== 'string') return false
+    // Reject paths with directory traversal attempts
+    if (path.includes('..') || path.includes('\x00')) return false
+    // Must start with /
+    if (!path.startsWith('/')) return false
+    // Limit path length
+    if (path.length > 1024) return false
+    // Only allow safe characters
+    if (!/^[\w\-/.]+$/.test(path)) return false
+    return true
   }
 
   export () {

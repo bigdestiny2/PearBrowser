@@ -50,7 +50,9 @@ rpc.handle(C.CMD_NAVIGATE, async (data) => {
   // Start loading the drive in the background — don't wait for sync.
   // The proxy will handle waiting for content when WebView requests it.
   // This makes NAVIGATE instant while the drive syncs behind the scenes.
-  ensureBrowseDrive(key).catch(() => {})
+  ensureBrowseDrive(key).catch((err) => {
+    console.error('Failed to load browse drive:', err.message)
+  })
 
   return {
     localUrl: `http://127.0.0.1:${proxy.port}/hyper/${key}${path}${parsed.search || ''}`,
@@ -187,7 +189,21 @@ rpc.handle(C.CMD_STOP, async () => {
 
 const MAX_BROWSE_DRIVES = 20
 
+function safeJSONParse (str) {
+  const obj = JSON.parse(str)
+  if (obj && typeof obj === 'object') {
+    delete obj.__proto__
+    delete obj.constructor
+  }
+  return obj
+}
+
 async function ensureBrowseDrive (keyHex) {
+  // Validate drive key format
+  if (!/^[0-9a-f]{64}$/i.test(keyHex)) {
+    throw new Error('Invalid drive key format')
+  }
+
   if (browseDrives.has(keyHex)) return browseDrives.get(keyHex)
 
   // Evict oldest drive if at capacity
@@ -195,8 +211,12 @@ async function ensureBrowseDrive (keyHex) {
     const oldest = browseDrives.keys().next().value
     const oldDrive = browseDrives.get(oldest)
     browseDrives.delete(oldest)
-    try { await swarm.leave(oldDrive.discoveryKey) } catch {}
-    try { await oldDrive.close() } catch {}
+    try { await swarm.leave(oldDrive.discoveryKey) } catch (err) {
+      console.error('Failed to leave swarm:', err.message)
+    }
+    try { await oldDrive.close() } catch (err) {
+      console.error('Failed to close drive:', err.message)
+    }
   }
 
   const drive = new Hyperdrive(store, Buffer.from(keyHex, 'hex'))
@@ -265,13 +285,17 @@ async function boot () {
   // Restore persisted app/site state from disk
   const stateFile = storagePath + '/pearbrowser-state.json'
   try {
-    const data = JSON.parse(fs.readFileSync(stateFile, 'utf-8'))
+    const raw = fs.readFileSync(stateFile, 'utf-8')
+    const data = safeJSONParse(raw)
     if (data.installedApps) appManager.import(data.installedApps)
     if (data.sites) {
       // Sites need their drives reopened — handled by siteManager.import() in future
     }
-  } catch {
+  } catch (err) {
     // No saved state yet — first run
+    if (err.code !== 'ENOENT') {
+      console.error('Failed to load state:', err.message)
+    }
   }
 
   // Initialize relay client for hybrid fast-path

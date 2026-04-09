@@ -13,10 +13,37 @@
  */
 
 class HttpBridge {
-  constructor (pearBridge, swarm, getDriveFn) {
+  constructor (pearBridge, swarm, getDriveFn, opts = {}) {
     this._bridge = pearBridge
     this._swarm = swarm
     this._getDrive = getDriveFn || null // async (keyHex) => Hyperdrive
+    this._allowedOrigins = opts.allowedOrigins || ['http://localhost', 'http://127.0.0.1']
+    this._rateLimiter = new Map() // Simple rate limiting per IP
+  }
+
+  // Simple rate limit check
+  _checkRateLimit (ip) {
+    const now = Date.now()
+    const windowMs = 60000 // 1 minute
+    const maxRequests = 100 // 100 requests per minute
+
+    let entry = this._rateLimiter.get(ip)
+    if (!entry || now - entry.resetAt > windowMs) {
+      entry = { count: 0, resetAt: now + windowMs }
+      this._rateLimiter.set(ip, entry)
+    }
+    entry.count++
+    return entry.count <= maxRequests
+  }
+
+  // Validate appId format (alphanumeric, hyphen, underscore only)
+  _isValidAppId (appId) {
+    return typeof appId === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(appId)
+  }
+
+  // Get client IP from request
+  _getClientIp (req) {
+    return req.socket?.remoteAddress || '127.0.0.1'
   }
 
   /**
@@ -27,6 +54,29 @@ class HttpBridge {
     const path = url.pathname
 
     if (!path.startsWith('/api/')) return false
+
+    // Rate limiting
+    const clientIp = this._getClientIp(req)
+    if (!this._checkRateLimit(clientIp)) {
+      res.statusCode = 429
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: 'Rate limit exceeded' }))
+      return true
+    }
+
+    // Origin validation
+    const origin = req.headers.origin
+    if (origin) {
+      const isAllowed = this._allowedOrigins.some(allowed => 
+        origin.startsWith(allowed)
+      )
+      if (!isAllowed) {
+        res.statusCode = 403
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ error: 'Invalid origin' }))
+        return true
+      }
+    }
 
     res.setHeader('Content-Type', 'application/json')
 
@@ -40,16 +90,35 @@ class HttpBridge {
       // --- Sync API ---
 
       if (req.method === 'POST' && path === '/api/sync/create') {
+        if (!this._isValidAppId(body.appId)) {
+          return this._jsonError(res, 'Invalid appId format', 400)
+        }
         const result = await this._bridge.createSyncGroup(body.appId)
         return this._json(res, result)
       }
 
       if (req.method === 'POST' && path === '/api/sync/join') {
+        if (!this._isValidAppId(body.appId)) {
+          return this._jsonError(res, 'Invalid appId format', 400)
+        }
+        // Validate invite key format (64 hex chars)
+        if (!body.inviteKey || !/^[0-9a-f]{64}$/i.test(body.inviteKey)) {
+          return this._jsonError(res, 'Invalid invite key format', 400)
+        }
         const result = await this._bridge.joinSyncGroup(body.appId, body.inviteKey)
         return this._json(res, result)
       }
 
       if (req.method === 'POST' && path === '/api/sync/append') {
+        // Validate appId
+        if (!this._isValidAppId(body.appId)) {
+          return this._jsonError(res, 'Invalid appId format', 400)
+        }
+        // Limit operation size
+        const opSize = JSON.stringify(body.op || body).length
+        if (opSize > 100000) { // 100KB max operation
+          return this._jsonError(res, 'Operation too large', 413)
+        }
         const result = await this._bridge.append(body.appId, body.op || body)
         return this._json(res, result)
       }
@@ -57,6 +126,13 @@ class HttpBridge {
       if (req.method === 'GET' && path === '/api/sync/get') {
         const appId = url.searchParams.get('appId')
         const key = url.searchParams.get('key')
+        if (!this._isValidAppId(appId)) {
+          return this._jsonError(res, 'Invalid appId format', 400)
+        }
+        // Validate key format
+        if (!key || typeof key !== 'string' || key.length > 1024) {
+          return this._jsonError(res, 'Invalid key', 400)
+        }
         const result = await this._bridge.get(appId, key)
         return this._json(res, result)
       }
@@ -64,13 +140,22 @@ class HttpBridge {
       if (req.method === 'GET' && path === '/api/sync/list') {
         const appId = url.searchParams.get('appId')
         const prefix = url.searchParams.get('prefix') || ''
-        const limit = parseInt(url.searchParams.get('limit') || '100')
+        let limit = parseInt(url.searchParams.get('limit') || '100')
+        if (!this._isValidAppId(appId)) {
+          return this._jsonError(res, 'Invalid appId format', 400)
+        }
+        // Enforce max limit
+        if (isNaN(limit) || limit < 1) limit = 100
+        if (limit > 1000) limit = 1000
         const result = await this._bridge.list(appId, prefix, { limit })
         return this._json(res, result)
       }
 
       if (req.method === 'GET' && path === '/api/sync/status') {
         const appId = url.searchParams.get('appId')
+        if (!this._isValidAppId(appId)) {
+          return this._jsonError(res, 'Invalid appId format', 400)
+        }
         const result = this._bridge.getSyncStatus(appId)
         return this._json(res, result)
       }
@@ -165,9 +250,15 @@ class HttpBridge {
       })
       req.on('end', () => {
         try {
-          resolve(data ? JSON.parse(data) : {})
-        } catch {
-          reject(new Error('Invalid JSON'))
+          const parsed = data ? JSON.parse(data) : {}
+          // SECURITY: Prevent prototype pollution
+          if (parsed && typeof parsed === 'object') {
+            delete parsed.__proto__
+            delete parsed.constructor
+          }
+          resolve(parsed)
+        } catch (err) {
+          reject(new Error('Invalid JSON: ' + err.message))
         }
       })
       req.on('error', reject)

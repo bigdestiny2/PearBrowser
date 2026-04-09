@@ -97,21 +97,37 @@ export function createBridgeScript(port: number): string {
   var POS_APP_ID = 'pear-pos';
 
   // Auto-initialize sync group when POS loads
+  // SECURITY: Hardcoded keys removed - must be configured by user
   (function initPOS() {
     var urlParams = new URLSearchParams(window.location.search);
-    var savedKey = urlParams.get('inviteKey') || localStorage.getItem('pear-pos-invite-key') || '8501172756df882990c4cea0d2762b4cbd594e264e6c6da76293bb95e5eeda6b';
-    var initPromise = savedKey
-      ? window.pear.sync.join(POS_APP_ID, savedKey)
-      : window.pear.sync.create(POS_APP_ID);
-
-    initPromise.then(function(result) {
-      if (result && result.inviteKey) {
-        localStorage.setItem('pear-pos-invite-key', result.inviteKey);
-      }
-      console.log('[PearBridge] POS sync ready (direct HTTP)');
-    }).catch(function(err) {
-      console.error('[PearBridge] POS init failed:', err.message);
-    });
+    var savedKey = urlParams.get('inviteKey') || localStorage.getItem('pear-pos-invite-key');
+    
+    // SECURITY: Validate invite key format before use
+    function isValidInviteKey(key) {
+      return typeof key === 'string' && /^[0-9a-f]{64}$/i.test(key);
+    }
+    
+    if (!savedKey) {
+      console.log('[PearBridge] POS: No invite key configured, creating new sync group');
+      window.pear.sync.create(POS_APP_ID).then(function(result) {
+        if (result && result.inviteKey && isValidInviteKey(result.inviteKey)) {
+          localStorage.setItem('pear-pos-invite-key', result.inviteKey);
+        }
+        console.log('[PearBridge] POS sync ready (direct HTTP)');
+      }).catch(function(err) {
+        console.error('[PearBridge] POS init failed:', err.message);
+      });
+    } else if (isValidInviteKey(savedKey)) {
+      window.pear.sync.join(POS_APP_ID, savedKey).then(function(result) {
+        console.log('[PearBridge] POS sync ready (direct HTTP)');
+      }).catch(function(err) {
+        console.error('[PearBridge] POS init failed:', err.message);
+      });
+    } else {
+      console.error('[PearBridge] Invalid invite key format in localStorage');
+      // Clear invalid key
+      localStorage.removeItem('pear-pos-invite-key');
+    }
   })();
 
   window.posAPI = {
@@ -134,7 +150,17 @@ export function createBridgeScript(port: number): string {
         .then(function(r) { return r.map(function(i) { return i.value; }); });
     },
     createProduct: function(product) {
-      var id = product.id || ('prod_' + Date.now() + '_' + Math.random().toString(36).slice(2,8));
+      // SECURITY: Use crypto.randomUUID() if available, fallback to timestamp + random
+      var id;
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        id = product.id || ('prod_' + crypto.randomUUID());
+      } else {
+        // Fallback with higher entropy
+        var rand = (typeof crypto !== 'undefined' && crypto.getRandomValues) 
+          ? crypto.getRandomValues(new Uint32Array(4)).join('')
+          : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+        id = product.id || ('prod_' + Date.now() + '_' + rand);
+      }
       var p = Object.assign({ id: id, created_at: new Date().toISOString(), stock: 0 }, product);
       return window.pear.sync.append(POS_APP_ID, { type: 'product:create', data: p })
         .then(function() { return p; });
@@ -161,7 +187,16 @@ export function createBridgeScript(port: number): string {
     },
     getStockAlerts: function() { return this.getLowStock().then(function(p) { return { alerts: p, total: p.length }; }); },
     createTransaction: function(items, paymentMethod, options) {
-      var id = 'txn_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+      // SECURITY: Use crypto.randomUUID() if available
+      var id;
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        id = 'txn_' + crypto.randomUUID();
+      } else {
+        var rand = (typeof crypto !== 'undefined' && crypto.getRandomValues)
+          ? crypto.getRandomValues(new Uint32Array(4)).join('')
+          : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+        id = 'txn_' + Date.now() + '_' + rand;
+      }
       var txn = {
         id: id, items: items, payment_method: paymentMethod, status: 'completed',
         created_at: new Date().toISOString(),
