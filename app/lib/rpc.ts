@@ -178,6 +178,10 @@ export class PearRPC {
     return this.on(EVT.INSTALL_PROGRESS, cb)
   }
 
+  onBootProgress(cb: (data: { stage: string; message: string; error?: string }) => void) {
+    return this.on(EVT.BOOT_PROGRESS, cb)
+  }
+
   // --- Wire protocol ---
 
   private send(msg: any, retryCount = 0) {

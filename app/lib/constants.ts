@@ -29,4 +29,5 @@ export const EVT = {
   ERROR: 102,
   INSTALL_PROGRESS: 103,
   SITE_PUBLISHED: 104,
+  BOOT_PROGRESS: 105,
 } as const

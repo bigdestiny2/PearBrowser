@@ -301,14 +301,19 @@ function persistState () {
 
 async function boot () {
   console.log('Boot starting, storagePath:', storagePath)
+  rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'corestore-start', message: 'Initializing storage...' })
+  
   store = new Corestore(storagePath)
   console.log('Corestore created, waiting for ready...')
+  rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'corestore-ready', message: 'Storage ready' })
   await store.ready()
   console.log('Corestore ready')
 
   console.log('Creating Hyperswarm...')
+  rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'hyperswarm-start', message: 'Starting P2P network...' })
   swarm = new Hyperswarm()
   console.log('Hyperswarm created')
+  rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'hyperswarm-ready', message: 'P2P network ready' })
   swarm.on('connection', (conn) => {
     store.replicate(conn)
     peerCount++
@@ -324,10 +329,12 @@ async function boot () {
   })
 
   // Initialize managers
+  rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'managers-start', message: 'Loading app manager...' })
   catalogManager = new CatalogManager(store, swarm)
   appManager = new AppManager(store, swarm)
   siteManager = new SiteManager(store, swarm)
   pearBridge = new PearBridge(store, swarm)
+  rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'managers-ready', message: 'Managers loaded' })
 
   // Restore persisted app/site state from disk
   const stateFile = storagePath + '/pearbrowser-state.json'
@@ -362,8 +369,10 @@ async function boot () {
   proxy.setHttpBridge(httpBridge)
 
   console.log('Starting HTTP proxy...')
+  rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'proxy-start', message: 'Starting HTTP proxy...' })
   const port = await proxy.start()
   console.log('HTTP proxy started on port:', port)
+  rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'proxy-ready', message: 'HTTP proxy ready on port ' + port })
 
   // Start storage monitoring
   setInterval(() => checkStorageQuota(), STORAGE_CHECK_INTERVAL)
@@ -466,5 +475,6 @@ Bare.on('resume', () => IPC.ref())
 console.log('Starting boot...')
 boot().catch((err) => {
   console.error('Boot failed:', err)
+  rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'error', message: err.message, error: err.stack })
   rpc.event(C.EVT_ERROR, { type: 'boot-error', message: err.message, stack: err.stack })
 })

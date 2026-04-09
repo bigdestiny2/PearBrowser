@@ -73,6 +73,7 @@ export default function App() {
   const [pendingSiteName, setPendingSiteName] = useState('')
   const [isOffline, setIsOffline] = useState(false)
   const [hasBrowseOpened, setHasBrowseOpened] = useState(false)
+  const [bootProgress, setBootProgress] = useState<string>('Initializing...')
   
   // Connection status panel state
   const [showStatusPanel, setShowStatusPanel] = useState(false)
@@ -135,6 +136,15 @@ export default function App() {
           }
         })
 
+        rpc.onBootProgress((progress) => {
+          if (!mounted) return
+          console.log('Boot progress:', progress.stage, progress.message)
+          setBootProgress(progress.message)
+          if (progress.error) {
+            setError(progress.message + ': ' + progress.error.substring(0, 200))
+          }
+        })
+
         // Resolve storage path (platform-specific)
         let storagePath: string
         try {
@@ -148,24 +158,15 @@ export default function App() {
 
         // Start the worklet
         if (Platform.OS === 'android') {
-          // Android: write bundle to file, load from filesystem
-          try {
-            const RNFS = require('expo-file-system')
-            // Ensure storage directory exists for Corestore
-            await RNFS.makeDirectoryAsync(storagePath, { intermediates: true }).catch(() => {})
-            // Write bundle to file — strip file:// prefix for bare-kit
-            const docDir = (RNFS.documentDirectory || '').replace('file://', '')
-            const dir = docDir + 'pearbrowser/'
-            const bundlePath = dir + 'app.bundle'
-            // Use RNFS with file:// URI for writing
-            await RNFS.makeDirectoryAsync('file://' + dir, { intermediates: true }).catch(() => {})
-            await RNFS.writeAsStringAsync('file://' + bundlePath, backendBundle)
-            // bare-kit startFile needs bare filesystem path (no file:// prefix)
-            worklet.start(bundlePath, [storagePath])
-          } catch (androidErr: any) {
-            // Show the actual Android error
-            throw new Error('Android worklet: ' + androidErr.message)
-          }
+          // Android: demo mode with inline source
+          // Full P2P bundle loading requires further bare-kit investigation
+          // (JNI rejects large strings, startFile doesn't execute bundle format)
+          const demoSource = `
+            const { IPC } = BareKit
+            const msg = JSON.stringify({ event: 100, data: { port: 0 } })
+            IPC.write(Buffer.from(msg.length.toString(16).padStart(8, '0') + msg))
+          `
+          worklet.start('/demo.js', demoSource)
         } else {
           worklet.start('/app.bundle', backendBundle, [storagePath])
         }
@@ -310,7 +311,7 @@ export default function App() {
               <ActivityIndicator size="large" color={colors.accent} />
               <Text style={styles.bootTitle}>PearBrowser</Text>
               <Text style={styles.bootMsg}>
-                {state === 'booting' ? 'Starting P2P engine...' : 'Connecting to DHT...'}
+                {bootProgress || (state === 'booting' ? 'Starting P2P engine...' : 'Connecting to DHT...')}
               </Text>
             </>
           )}
