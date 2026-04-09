@@ -7,6 +7,7 @@
  */
 
 const Hyperdrive = require('hyperdrive')
+const { getUserFriendlyError } = require('./hyper-proxy')
 
 class AppManager {
   constructor (store, swarm) {
@@ -28,7 +29,7 @@ class AppManager {
     try {
       await drive.ready()
     } catch (err) {
-      throw new Error(`Failed to open app drive: ${err.message}`)
+      throw new Error(`Could not load app: ${getUserFriendlyError(err.message)}`)
     }
 
     // Join swarm to download
@@ -90,7 +91,7 @@ class AppManager {
     try {
       await drive.ready()
     } catch (err) {
-      throw new Error(`Failed to open drive ${driveKeyHex.slice(0, 8)}...: ${err.message}`)
+      throw new Error(`Could not open site: ${getUserFriendlyError(err.message)}`)
     }
     this.swarm.join(drive.discoveryKey, { server: false, client: true })
     this.activeDrives.set(driveKeyHex, drive)
@@ -157,7 +158,7 @@ class AppManager {
         }
       }
       check()
-    }))
+    })
   }
 
   /**

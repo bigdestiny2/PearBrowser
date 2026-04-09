@@ -5,14 +5,22 @@ import {
 } from 'react-native'
 import { colors } from '../lib/theme'
 import { getSettings, updateSettings, clearAllData, type Settings } from '../lib/storage'
+import { StorageMeter } from '../components/StorageMeter'
+import { PearRPC } from '../lib/rpc'
 
 type Props = {
   onBack: () => void
+  rpc?: PearRPC | null
 }
 
-export function SettingsScreen({ onBack }: Props) {
+export function SettingsScreen({ onBack, rpc }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [catalogInput, setCatalogInput] = useState('')
+  const [storageInfo, setStorageInfo] = useState({
+    used: 0,
+    limit: 1024 * 1024 * 1024, // 1GB default
+    percent: 0
+  })
 
   useEffect(() => {
     getSettings().then(s => {
@@ -20,6 +28,27 @@ export function SettingsScreen({ onBack }: Props) {
       setCatalogInput(s.catalogUrl)
     })
   }, [])
+
+  // Fetch storage status on mount and periodically
+  useEffect(() => {
+    async function fetchStorage() {
+      try {
+        const status = await rpc?.getStatus()
+        if (status) {
+          setStorageInfo({
+            used: status.storageUsed || 0,
+            limit: status.storageLimit || 1024 * 1024 * 1024,
+            percent: status.storagePercent || 0
+          })
+        }
+      } catch {}
+    }
+    
+    fetchStorage()
+    // Refresh every 30 seconds
+    const interval = setInterval(fetchStorage, 30000)
+    return () => clearInterval(interval)
+  }, [rpc])
 
   const handleSaveCatalog = useCallback(async () => {
     if (!catalogInput.trim()) return
@@ -44,6 +73,22 @@ export function SettingsScreen({ onBack }: Props) {
     ])
   }, [])
 
+  const handleClearCache = useCallback(async () => {
+    try {
+      await rpc?.clearCache()
+      // Refresh storage info
+      const status = await rpc?.getStatus()
+      setStorageInfo(prev => ({
+        ...prev,
+        used: status?.storageUsed || 0,
+        percent: status?.storagePercent || 0
+      }))
+      Alert.alert('Cache Cleared', 'Temporary cache files have been removed.')
+    } catch {
+      Alert.alert('Error', 'Failed to clear cache.')
+    }
+  }, [rpc])
+
   if (!settings) return null
 
   return (
@@ -57,6 +102,14 @@ export function SettingsScreen({ onBack }: Props) {
       </View>
 
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+        {/* Storage */}
+        <Text style={styles.sectionTitle}>STORAGE</Text>
+        <StorageMeter
+          used={storageInfo.used}
+          limit={storageInfo.limit}
+          onClearCache={handleClearCache}
+        />
+
         {/* Catalog */}
         <Text style={styles.sectionTitle}>EXPLORE DIRECTORY</Text>
         <View style={styles.card}>

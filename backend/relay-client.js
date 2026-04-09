@@ -6,6 +6,7 @@
  */
 
 const http = require('bare-http1')
+const { getUserFriendlyError } = require('./hyper-proxy')
 
 class RelayClient {
   constructor (opts = {}) {
@@ -169,7 +170,7 @@ class RelayClient {
   _httpGet (url, timeout) {
     return new Promise((resolve, reject) => {
       const parsed = new URL(url)
-      const timer = setTimeout(() => reject(new Error('Timeout')), timeout)
+      const timer = setTimeout(() => reject(new Error(getUserFriendlyError('Timeout'))), timeout)
 
       const req = http.get({
         hostname: parsed.hostname,
@@ -205,7 +206,7 @@ class RelayClient {
   _httpPost (url, body, timeout) {
     return new Promise((resolve, reject) => {
       const parsed = new URL(url)
-      const timer = setTimeout(() => reject(new Error('Timeout')), timeout)
+      const timer = setTimeout(() => reject(new Error(getUserFriendlyError('Timeout'))), timeout)
 
       const req = http.request({
         method: 'POST',

@@ -10,6 +10,31 @@
 
 const http = require('bare-http1')
 
+const USER_FRIENDLY_ERRORS = {
+  'Invalid drive key': 'This link appears to be broken or incomplete',
+  'Invalid drive key format': 'The address you entered is not valid',
+  'File not found': 'The page you\'re looking for doesn\'t exist on this site',
+  'Timeout': 'Taking longer than expected. The site may be offline or unreachable.',
+  'Drive not found': 'This site is currently unavailable. The owner may have taken it offline.',
+  'Failed to open drive': 'Could not connect to this site. It may be offline.',
+  'Failed to open app drive': 'Could not load this app. It may be corrupted or unavailable.',
+  'Failed to open catalog drive': 'Could not load the app store. The catalog may be unavailable.',
+  'Hybrid fetch failed': 'Unable to load content. Check your connection and try again.',
+  'No catalog.json found': 'This app store is empty or not properly configured.',
+  'Invalid origin': 'Security error: Access denied',
+  'Buffer exceeded': 'The response was too large to process',
+  'Operation too large': 'This action is too large to complete',
+}
+
+function getUserFriendlyError(technicalError) {
+  for (const [key, message] of Object.entries(USER_FRIENDLY_ERRORS)) {
+    if (technicalError.includes(key)) {
+      return message
+    }
+  }
+  return 'Something went wrong. Please try again.'
+}
+
 const CONTENT_TYPES = {
   html: 'text/html; charset=utf-8',
   htm: 'text/html; charset=utf-8',
@@ -257,14 +282,52 @@ class HyperProxy {
     } catch (err) {
       // Log detailed error internally
       this._onError(path, err.message)
-      // Return generic error to client (don't leak internal details)
+      // Return user-friendly error to client
+      const userMessage = getUserFriendlyError(err.message)
       res.statusCode = 502
       res.setHeader('Content-Type', 'text/html')
-      res.end(`<html><body style="font-family:sans-serif;padding:40px;background:#0a0a0a;color:#e0e0e0">
-        <h1 style="color:#ff9500">Cannot load page</h1>
-        <p>The content may be offline or unreachable.</p>
-        <p style="color:#666">Please try again later.</p>
-      </body></html>`)
+      res.end(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Cannot Load Page</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+    }
+    .container { text-align: center; max-width: 400px; }
+    .icon { font-size: 48px; margin-bottom: 16px; }
+    h1 { color: #ff9500; font-size: 20px; margin-bottom: 12px; }
+    p { color: #999; line-height: 1.6; margin-bottom: 24px; }
+    .error-code { 
+      display: inline-block;
+      background: #1a1a1a;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">🔌</div>
+    <h1>Cannot Load Page</h1>
+    <p>${userMessage}</p>
+    <div class="error-code">${err.code || '502'}</div>
+  </div>
+</body>
+</html>`)
     }
   }
 
@@ -488,4 +551,8 @@ li{padding:8px 0;border-bottom:1px solid #333}a{color:#4dabf7;text-decoration:no
   }
 }
 
-module.exports = { HyperProxy }
+module.exports = { 
+  HyperProxy, 
+  getUserFriendlyError,
+  USER_FRIENDLY_ERRORS 
+}

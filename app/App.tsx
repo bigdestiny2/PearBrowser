@@ -9,11 +9,13 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View, Text, StyleSheet, StatusBar, Platform,
   ActivityIndicator, TouchableOpacity, NativeModules,
+  Modal, ScrollView,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Paths } from 'expo-file-system'
 import { PearRPC } from './lib/rpc'
 import { networkMonitor, NetworkInfo } from './lib/network'
+import { StatusDot } from './components/StatusDot'
 
 // @ts-ignore — bare-pack bundles, platform-specific
 import iosBundleImport from '../assets/backend.bundle.mjs'
@@ -44,6 +46,15 @@ import { SiteEditorScreen } from './screens/SiteEditorScreen'
 type AppState = 'booting' | 'connecting' | 'ready' | 'error'
 type Tab = 'home' | 'explore' | 'browse' | 'more'
 
+interface ConnectionStatusDetails {
+  dhtConnected: boolean
+  peerCount: number
+  proxyPort: number
+  browseDrives: number
+  installedApps: number
+  publishedSites: number
+}
+
 export default function App() {
   const [state, setState] = useState<AppState>('booting')
   const [proxyPort, setProxyPort] = useState(0)
@@ -59,11 +70,24 @@ export default function App() {
   const [editingSiteId, setEditingSiteId] = useState<string | null>(null)
   const [editorTemplate, setEditorTemplate] = useState<Template | null>(null)
   const [pendingSiteName, setPendingSiteName] = useState('')
+  const [isOffline, setIsOffline] = useState(false)
+  const [hasBrowseOpened, setHasBrowseOpened] = useState(false)
+  
+  // Connection status panel state
+  const [showStatusPanel, setShowStatusPanel] = useState(false)
+  const [connectionDetails, setConnectionDetails] = useState<ConnectionStatusDetails>({
+    dhtConnected: false,
+    peerCount: 0,
+    proxyPort: 0,
+    browseDrives: 0,
+    installedApps: 0,
+    publishedSites: 0,
+  })
 
   const workletRef = useRef<any>(null)
   const rpcRef = useRef<PearRPC | null>(null)
 
-  const connectionStatus = state === 'ready'
+  const connectionStatus: 'connected' | 'connecting' | 'offline' | 'error' = state === 'ready'
     ? (proxyPort > 0 ? 'connected' : 'connecting')
     : state === 'error' ? 'offline' : 'connecting'
 
@@ -154,11 +178,39 @@ export default function App() {
     }
   }, [])
 
+  // Fetch connection details for status panel
+  useEffect(() => {
+    async function fetchDetails() {
+      if (!rpcRef.current) return
+      try {
+        const status = await rpcRef.current.getStatus()
+        if (status) {
+          setConnectionDetails({
+            dhtConnected: status.dhtConnected || false,
+            peerCount: status.peerCount || 0,
+            proxyPort: status.proxyPort || proxyPort || 0,
+            browseDrives: status.browseDrives || 0,
+            installedApps: status.installedApps || 0,
+            publishedSites: status.publishedSites || 0,
+          })
+        }
+      } catch {}
+    }
+    
+    if (showStatusPanel) {
+      fetchDetails()
+      const interval = setInterval(fetchDetails, 3000)
+      return () => clearInterval(interval)
+    }
+  }, [showStatusPanel, proxyPort])
+
   // Network change monitoring
   useEffect(() => {
     // Start network monitoring
     networkMonitor.start(async (info: NetworkInfo) => {
       console.log('Network changed:', info)
+      
+      setIsOffline(!info.isConnected)
       
       if (!info.isConnected) {
         // Went offline - P2P will handle this via swarm
@@ -190,6 +242,13 @@ export default function App() {
     setBrowseUrl(url)
     setActiveTab('browse')
   }, [])
+
+  // Track when browse tab was first opened to keep WebView mounted
+  useEffect(() => {
+    if (activeTab === 'browse') {
+      setHasBrowseOpened(true)
+    }
+  }, [activeTab])
 
   // Launch saved site by ID (from home screen)
   const handleLaunchApp = useCallback(async (appId: string) => {
@@ -242,6 +301,90 @@ export default function App() {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
 
+      {/* Status Panel Modal */}
+      <Modal
+        visible={showStatusPanel}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowStatusPanel(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.statusPanel}>
+            <View style={styles.statusPanelHeader}>
+              <Text style={styles.statusPanelTitle}>Connection Status</Text>
+              <TouchableOpacity onPress={() => setShowStatusPanel(false)} style={styles.closeBtn}>
+                <Text style={styles.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            
+            <ScrollView style={styles.statusPanelContent}>
+              <View style={styles.statusSection}>
+                <Text style={styles.statusSectionTitle}>Network</Text>
+                <View style={styles.statusDetailRow}>
+                  <Text style={styles.statusDetailLabel}>DHT Status</Text>
+                  <View style={styles.statusBadge}>
+                    <View style={[styles.statusDot, connectionDetails.dhtConnected ? styles.statusDotOk : styles.statusDotError]} />
+                    <Text style={[styles.statusDetailValue, connectionDetails.dhtConnected && styles.statusOk]}>
+                      {connectionDetails.dhtConnected ? 'Connected' : 'Disconnected'}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.statusDetailRow}>
+                  <Text style={styles.statusDetailLabel}>Active Peers</Text>
+                  <Text style={styles.statusDetailValue}>{connectionDetails.peerCount}</Text>
+                </View>
+                <View style={styles.statusDetailRow}>
+                  <Text style={styles.statusDetailLabel}>Connection State</Text>
+                  <Text style={[styles.statusDetailValue, connectionStatus === 'connected' && styles.statusOk]}>
+                    {connectionStatus === 'connected' ? 'Ready' : 
+                     connectionStatus === 'connecting' ? 'Connecting...' : 'Offline'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.statusSection}>
+                <Text style={styles.statusSectionTitle}>Services</Text>
+                <View style={styles.statusDetailRow}>
+                  <Text style={styles.statusDetailLabel}>Local Proxy</Text>
+                  <Text style={styles.statusDetailValue}>
+                    {connectionDetails.proxyPort > 0 ? `Port ${connectionDetails.proxyPort}` : 'Not running'}
+                  </Text>
+                </View>
+                <View style={styles.statusDetailRow}>
+                  <Text style={styles.statusDetailLabel}>Browse Drives</Text>
+                  <Text style={styles.statusDetailValue}>{connectionDetails.browseDrives}</Text>
+                </View>
+                <View style={styles.statusDetailRow}>
+                  <Text style={styles.statusDetailLabel}>Installed Apps</Text>
+                  <Text style={styles.statusDetailValue}>{connectionDetails.installedApps}</Text>
+                </View>
+                <View style={styles.statusDetailRow}>
+                  <Text style={styles.statusDetailLabel}>Published Sites</Text>
+                  <Text style={styles.statusDetailValue}>{connectionDetails.publishedSites}</Text>
+                </View>
+              </View>
+
+              <View style={styles.statusFooter}>
+                <Text style={styles.statusFooterText}>
+                  Tap the status dot anywhere in the app to view this panel
+                </Text>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Header with StatusDot */}
+      <View style={styles.header}>
+        <View style={styles.headerSpacer} />
+        <StatusDot 
+          status={connectionStatus} 
+          peerCount={peerCount}
+          showLabel
+          onPress={() => setShowStatusPanel(true)}
+        />
+      </View>
+
       {/* Active screen */}
       <View style={styles.screenContainer}>
         {activeTab === 'home' && (
@@ -258,14 +401,18 @@ export default function App() {
             onVisit={handleLaunchByKey}
           />
         )}
-        {activeTab === 'browse' && rpcRef.current && (
-          <BrowseScreen
-            rpc={rpcRef.current}
-            proxyPort={proxyPort}
-            peerCount={peerCount}
-            status={connectionStatus}
-            initialUrl={browseUrl}
-          />
+        {/* BrowseScreen - keep mounted after first open, hide when not active */}
+        {(activeTab === 'browse' || hasBrowseOpened) && rpcRef.current && (
+          <View style={[styles.screenContainer, activeTab !== 'browse' && styles.hiddenScreen]}>
+            <BrowseScreen
+              rpc={rpcRef.current}
+              proxyPort={proxyPort}
+              peerCount={peerCount}
+              status={connectionStatus}
+              initialUrl={browseUrl}
+              isOffline={isOffline}
+            />
+          </View>
         )}
         {activeTab === 'browse' && !rpcRef.current && (
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -354,7 +501,7 @@ export default function App() {
           label="Browse"
           icon="<>"
           active={activeTab === 'browse'}
-          onPress={() => setActiveTab('browse')}
+          badge={isOffline ? '!' : undefined}
         />
         <TabButton
           label="More"
@@ -367,12 +514,19 @@ export default function App() {
   )
 }
 
-function TabButton({ label, icon, active, onPress }: {
-  label: string; icon: string; active: boolean; onPress: () => void
+function TabButton({ label, icon, active, onPress, badge }: {
+  label: string; icon: string; active: boolean; onPress: () => void; badge?: string
 }) {
   return (
     <TouchableOpacity onPress={onPress} style={tabStyles.button} activeOpacity={0.6}>
-      <Text style={[tabStyles.icon, active && tabStyles.activeIcon]}>{icon}</Text>
+      <View>
+        <Text style={[tabStyles.icon, active && tabStyles.activeIcon]}>{icon}</Text>
+        {badge && (
+          <View style={tabStyles.badge}>
+            <Text style={tabStyles.badgeText}>{badge}</Text>
+          </View>
+        )}
+      </View>
       <Text style={[tabStyles.label, active && tabStyles.activeLabel]}>{label}</Text>
     </TouchableOpacity>
   )
@@ -386,6 +540,120 @@ const styles = StyleSheet.create({
   errorTitle: { color: colors.error, fontSize: 20, fontWeight: '600', marginBottom: 12 },
   errorMsg: { color: '#fca5a5', fontSize: 14, textAlign: 'center' },
   screenContainer: { flex: 1 },
+  hiddenScreen: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    opacity: 0,
+    pointerEvents: 'none',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 4,
+    backgroundColor: colors.bg,
+  },
+  headerSpacer: { flex: 1 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  statusPanel: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '70%',
+    minHeight: 400,
+  },
+  statusPanelHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  statusPanelTitle: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  closeBtn: {
+    padding: 4,
+  },
+  closeBtnText: {
+    color: colors.textSecondary,
+    fontSize: 20,
+    fontWeight: '400',
+  },
+  statusPanelContent: {
+    padding: 20,
+  },
+  statusSection: {
+    marginBottom: 24,
+  },
+  statusSectionTitle: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 12,
+  },
+  statusDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  statusDetailLabel: {
+    color: colors.textSecondary,
+    fontSize: 14,
+  },
+  statusDetailValue: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  statusOk: {
+    color: '#22c55e',
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 6,
+  },
+  statusDotOk: {
+    backgroundColor: '#22c55e',
+  },
+  statusDotError: {
+    backgroundColor: colors.error,
+  },
+  statusFooter: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  statusFooterText: {
+    color: colors.textMuted,
+    fontSize: 12,
+    textAlign: 'center',
+  },
   tabBar: {
     flexDirection: 'row', backgroundColor: colors.surface,
     borderTopWidth: 1, borderTopColor: colors.border,
@@ -399,4 +667,20 @@ const tabStyles = StyleSheet.create({
   activeIcon: { color: colors.accent },
   label: { fontSize: 10, color: colors.textMuted, marginTop: 2 },
   activeLabel: { color: colors.accent },
+  badge: {
+    position: 'absolute',
+    top: -4,
+    right: -8,
+    backgroundColor: colors.error,
+    borderRadius: 10,
+    minWidth: 16,
+    height: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
 })

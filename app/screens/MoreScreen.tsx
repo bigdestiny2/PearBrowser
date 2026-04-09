@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert,
   TextInput, Clipboard,
@@ -17,9 +17,56 @@ type Props = {
   onNavigateToSettings: () => void
 }
 
+interface ConnectionDetails {
+  dhtConnected: boolean
+  peerCount: number
+  proxyPort: number
+  browseDrives: number
+  installedApps: number
+  storageUsed: number
+  storageLimit: number
+  publishedSites: number
+}
+
 export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSites, onNavigateToBookmarks, onNavigateToHistory, onNavigateToSettings }: Props) {
   const [showIdentity, setShowIdentity] = useState(false)
   const [publicKey, setPublicKey] = useState<string | null>(null)
+  const [connectionDetails, setConnectionDetails] = useState<ConnectionDetails>({
+    dhtConnected: false,
+    peerCount: 0,
+    proxyPort: 0,
+    browseDrives: 0,
+    installedApps: 0,
+    storageUsed: 0,
+    storageLimit: 0,
+    publishedSites: 0,
+  })
+
+  // Fetch connection details periodically
+  useEffect(() => {
+    async function fetchDetails() {
+      if (!rpc) return
+      try {
+        const status = await rpc.getStatus()
+        if (status) {
+          setConnectionDetails({
+            dhtConnected: status.dhtConnected || false,
+            peerCount: status.peerCount || 0,
+            proxyPort: status.proxyPort || proxyPort || 0,
+            browseDrives: status.browseDrives || 0,
+            installedApps: status.installedApps || 0,
+            storageUsed: status.storageUsed || 0,
+            storageLimit: status.storageLimit || 0,
+            publishedSites: status.publishedSites || 0,
+          })
+        }
+      } catch {}
+    }
+    
+    fetchDetails()
+    const interval = setInterval(fetchDetails, 5000) // Update every 5s
+    return () => clearInterval(interval)
+  }, [rpc, proxyPort])
 
   const handleShowStatus = async () => {
     if (!rpc) {
@@ -85,6 +132,15 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
     )
   }
 
+  // Format bytes to human readable
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 B'
+    const k = 1024
+    const sizes = ['B', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+  }
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.header}>More</Text>
@@ -93,6 +149,52 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
         <MenuItem label="My Sites" subtitle="Create and manage P2P websites" onPress={onNavigateToSites} />
         <MenuItem label="Bookmarks" subtitle="Saved sites" onPress={onNavigateToBookmarks} />
         <MenuItem label="History" subtitle="Recently visited" onPress={onNavigateToHistory} />
+      </View>
+
+      {/* Connection Status Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Connection Status</Text>
+        
+        <View style={styles.statusRow}>
+          <Text style={styles.statusLabel}>DHT Network</Text>
+          <View style={styles.statusBadge}>
+            <View style={[styles.statusDot, connectionDetails.dhtConnected ? styles.statusDotOk : styles.statusDotError]} />
+            <Text style={[styles.statusValue, connectionDetails.dhtConnected && styles.statusOk]}>
+              {connectionDetails.dhtConnected ? 'Connected' : 'Disconnected'}
+            </Text>
+          </View>
+        </View>
+        
+        <View style={styles.statusRow}>
+          <Text style={styles.statusLabel}>Active Peers</Text>
+          <Text style={styles.statusValue}>{connectionDetails.peerCount}</Text>
+        </View>
+        
+        <View style={styles.statusRow}>
+          <Text style={styles.statusLabel}>Local Proxy</Text>
+          <Text style={styles.statusValue}>
+            {connectionDetails.proxyPort > 0 ? `Port ${connectionDetails.proxyPort}` : 'Not running'}
+          </Text>
+        </View>
+        
+        <View style={styles.statusRow}>
+          <Text style={styles.statusLabel}>Browse Drives</Text>
+          <Text style={styles.statusValue}>{connectionDetails.browseDrives}</Text>
+        </View>
+        
+        <View style={styles.statusRow}>
+          <Text style={styles.statusLabel}>Installed Apps</Text>
+          <Text style={styles.statusValue}>{connectionDetails.installedApps}</Text>
+        </View>
+
+        {connectionDetails.storageLimit > 0 && (
+          <View style={styles.statusRow}>
+            <Text style={styles.statusLabel}>Storage Used</Text>
+            <Text style={styles.statusValue}>
+              {formatBytes(connectionDetails.storageUsed)} / {formatBytes(connectionDetails.storageLimit)}
+            </Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.section}>
@@ -153,6 +255,54 @@ const styles = StyleSheet.create({
   section: {
     backgroundColor: colors.surface, borderRadius: 12,
     marginBottom: 16, overflow: 'hidden',
+    paddingVertical: 8,
+  },
+  sectionTitle: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  statusLabel: {
+    color: colors.textSecondary,
+    fontSize: 14,
+  },
+  statusValue: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  statusOk: {
+    color: '#22c55e',
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 6,
+  },
+  statusDotOk: {
+    backgroundColor: '#22c55e',
+  },
+  statusDotError: {
+    backgroundColor: colors.error,
   },
   identityCard: {
     backgroundColor: colors.surface, borderRadius: 12,

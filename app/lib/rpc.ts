@@ -147,6 +147,10 @@ export class PearRPC {
     return this.request(CMD.DELETE_SITE, { siteId })
   }
 
+  clearCache() {
+    return this.request(CMD.CLEAR_CACHE)
+  }
+
   // --- Events ---
 
   on(event: number, cb: EventCallback) {

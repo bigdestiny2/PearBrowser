@@ -8,6 +8,7 @@
  */
 
 const Hyperdrive = require('hyperdrive')
+const { getUserFriendlyError } = require('./hyper-proxy')
 
 class CatalogManager {
   constructor (store, swarm) {
@@ -28,7 +29,7 @@ class CatalogManager {
     try {
       await drive.ready()
     } catch (err) {
-      throw new Error(`Failed to open catalog drive: ${err.message}`)
+      throw new Error(`Could not load the app store: ${getUserFriendlyError(err.message)}`)
     }
 
     this.swarm.join(drive.discoveryKey, { server: false, client: true })
@@ -37,7 +38,7 @@ class CatalogManager {
     await this._waitForData(drive)
 
     const catalogBuf = await drive.get('/catalog.json')
-    if (!catalogBuf) throw new Error('No catalog.json found in drive')
+    if (!catalogBuf) throw new Error(getUserFriendlyError('No catalog.json found'))
 
     // SECURITY: Parse JSON with prototype pollution protection
     const data = this._safeJSONParse(catalogBuf.toString())

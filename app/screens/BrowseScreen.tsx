@@ -6,6 +6,7 @@ import {
 import { WebView } from 'react-native-webview'
 import { colors } from '../lib/theme'
 import { StatusDot } from '../components/StatusDot'
+import { OfflineIndicator } from '../components/OfflineIndicator'
 import { addToHistory, addBookmark, getSettings } from '../lib/storage'
 import { createBridgeScript } from '../lib/bridge-inject'
 import type { PearRPC } from '../lib/rpc'
@@ -16,9 +17,10 @@ type Props = {
   peerCount: number
   status: 'connected' | 'connecting' | 'offline'
   initialUrl?: string | null
+  isOffline?: boolean
 }
 
-export function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl }: Props) {
+export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl, isOffline }: Props) {
   const webViewRef = useRef<WebView>(null)
   const [currentUrl, setCurrentUrl] = useState(initialUrl || '')
   const [inputText, setInputText] = useState('')
@@ -127,6 +129,11 @@ export function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl }: 
 
   return (
     <View style={styles.container}>
+      <OfflineIndicator 
+        isOffline={!!isOffline || status === 'offline'} 
+        onRetry={() => currentUrl && handleNavigate(currentUrl)}
+      />
+      
       {/* WebView */}
       {webViewUrl ? (
         <WebView
@@ -197,7 +204,7 @@ export function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl }: 
       </KeyboardAvoidingView>
     </View>
   )
-}
+})
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },

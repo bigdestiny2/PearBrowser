@@ -2,32 +2,43 @@ import React from 'react'
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native'
 import { colors } from '../lib/theme'
 
-type Status = 'connected' | 'connecting' | 'offline'
+type Status = 'connected' | 'connecting' | 'offline' | 'error'
 
-type Props = {
+interface Props {
   status: Status
-  peerCount: number
-  privateMode?: boolean
+  peerCount?: number
+  showLabel?: boolean
   onPress?: () => void
 }
 
-export function StatusDot({ status, peerCount, privateMode, onPress }: Props) {
-  const dotColor = privateMode ? '#8b5cf6' :
-    status === 'connected' ? colors.success :
-    status === 'connecting' ? colors.warning :
-    colors.error
-
-  const label = privateMode
-    ? (status === 'connected' ? 'Private' : 'Private...')
-    : status === 'connected' ? (peerCount > 0 ? `${peerCount} peers` : 'Ready')
-    : status === 'connecting' ? 'Connecting...'
-    : 'Offline'
-
+export function StatusDot({ status, peerCount, showLabel, onPress }: Props) {
+  const getStatusColor = () => {
+    switch (status) {
+      case 'connected': return '#22c55e'
+      case 'connecting': return '#f59e0b'
+      case 'error': return colors.error
+      case 'offline': return '#666'
+    }
+  }
+  
+  const getStatusLabel = () => {
+    switch (status) {
+      case 'connected': return peerCount ? `${peerCount} peers` : 'Connected'
+      case 'connecting': return 'Connecting...'
+      case 'error': return 'Error'
+      case 'offline': return 'Offline'
+    }
+  }
+  
+  const Container = onPress ? TouchableOpacity : View
+  
   return (
-    <TouchableOpacity onPress={onPress} style={styles.container} activeOpacity={0.7}>
-      <View style={[styles.dot, { backgroundColor: dotColor }]} />
-      <Text style={styles.label}>{label}</Text>
-    </TouchableOpacity>
+    <Container style={styles.container} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.dot, { backgroundColor: getStatusColor() }, status === 'connecting' && styles.pulse]} />
+      {showLabel && (
+        <Text style={styles.label}>{getStatusLabel()}</Text>
+      )}
+    </Container>
   )
 }
 
@@ -43,6 +54,10 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     marginRight: 6,
+  },
+  pulse: {
+    // Pulse animation could be added here with Animated
+    opacity: 0.7,
   },
   label: {
     color: colors.textSecondary,

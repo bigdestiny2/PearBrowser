@@ -24,6 +24,11 @@ const C = require('./constants.js')
 const { IPC } = BareKit
 const storagePath = Bare.argv[0] || './pearbrowser-storage'
 
+// --- Storage Limits ---
+const STORAGE_LIMIT = 1024 * 1024 * 1024 // 1GB max
+const STORAGE_CHECK_INTERVAL = 5 * 60 * 1000 // Check every 5 minutes
+const EVICT_THRESHOLD = 0.8 // Start cleanup at 80% capacity
+
 // --- State ---
 
 let swarm = null
@@ -61,14 +66,22 @@ rpc.handle(C.CMD_NAVIGATE, async (data) => {
   }
 })
 
-rpc.handle(C.CMD_GET_STATUS, () => {
+rpc.handle(C.CMD_GET_STATUS, async () => {
+  let storageSize = 0
+  try {
+    storageSize = await getStorageSize(storagePath)
+  } catch {}
+
   return {
     dhtConnected: swarm !== null,
     peerCount,
     browseDrives: browseDrives.size,
     installedApps: appManager ? appManager.installed.size : 0,
     publishedSites: siteManager ? siteManager.sites.size : 0,
-    proxyPort: proxy ? proxy.port : 0
+    proxyPort: proxy ? proxy.port : 0,
+    storageUsed: storageSize,
+    storageLimit: STORAGE_LIMIT,
+    storagePercent: Math.round((storageSize / STORAGE_LIMIT) * 100)
   }
 })
 
@@ -185,6 +198,24 @@ rpc.handle(C.CMD_STOP, async () => {
   return { ok: true }
 })
 
+rpc.handle(C.CMD_CLEAR_CACHE, async () => {
+  let cleared = 0
+  
+  // Clear proxy cache
+  if (proxy) {
+    const cacheStats = proxy.getCacheStats?.()
+    proxy.clearCache?.()
+    cleared += cacheStats?.size || 0
+  }
+  
+  // Clear browse drives cache
+  for (const [key, { drive }] of browseDrives) {
+    try { await drive.clear?.() } catch {}
+  }
+  
+  return { cleared, message: 'Cache cleared successfully' }
+})
+
 // --- Drive Management ---
 
 const MAX_BROWSE_DRIVES = 20
@@ -204,17 +235,21 @@ async function ensureBrowseDrive (keyHex) {
     throw new Error('Invalid drive key format')
   }
 
-  if (browseDrives.has(keyHex)) return browseDrives.get(keyHex)
+  if (browseDrives.has(keyHex)) {
+    const entry = browseDrives.get(keyHex)
+    entry.lastAccess = Date.now()
+    return entry.drive
+  }
 
   // Evict oldest drive if at capacity
   if (browseDrives.size >= MAX_BROWSE_DRIVES) {
     const oldest = browseDrives.keys().next().value
-    const oldDrive = browseDrives.get(oldest)
+    const oldEntry = browseDrives.get(oldest)
     browseDrives.delete(oldest)
-    try { await swarm.leave(oldDrive.discoveryKey) } catch (err) {
+    try { await swarm.leave(oldEntry.drive.discoveryKey) } catch (err) {
       console.error('Failed to leave swarm:', err.message)
     }
-    try { await oldDrive.close() } catch (err) {
+    try { await oldEntry.drive.close() } catch (err) {
       console.error('Failed to close drive:', err.message)
     }
   }
@@ -222,13 +257,20 @@ async function ensureBrowseDrive (keyHex) {
   const drive = new Hyperdrive(store, Buffer.from(keyHex, 'hex'))
   await drive.ready()
   swarm.join(drive.discoveryKey, { server: false, client: true })
-  browseDrives.set(keyHex, drive)
+  browseDrives.set(keyHex, {
+    drive,
+    lastAccess: Date.now()
+  })
   return drive
 }
 
 async function getDriveForProxy (keyHex) {
   // Check browse drives
-  if (browseDrives.has(keyHex)) return browseDrives.get(keyHex)
+  if (browseDrives.has(keyHex)) {
+    const entry = browseDrives.get(keyHex)
+    entry.lastAccess = Date.now()
+    return entry.drive
+  }
   // Check app drives
   if (appManager && appManager.activeDrives.has(keyHex)) {
     return appManager.activeDrives.get(keyHex)
@@ -316,6 +358,9 @@ async function boot () {
 
   const port = await proxy.start()
 
+  // Start storage monitoring
+  setInterval(() => checkStorageQuota(), STORAGE_CHECK_INTERVAL)
+
   // Notify React Native
   rpc.event(C.EVT_READY, { port })
 }
@@ -326,10 +371,81 @@ async function shutdown () {
   if (siteManager) { try { await siteManager.close() } catch {} siteManager = null }
   if (appManager) { try { await appManager.close() } catch {} appManager = null }
   if (catalogManager) { try { await catalogManager.close() } catch {} catalogManager = null }
-  for (const [, drive] of browseDrives) { try { await drive.close() } catch {} }
+  for (const [, entry] of browseDrives) { try { await entry.drive.close() } catch {} }
   browseDrives.clear()
   if (swarm) { try { await swarm.destroy() } catch {} swarm = null }
   if (store) { try { await store.close() } catch {} store = null }
+}
+
+// --- Storage Management ---
+
+async function checkStorageQuota () {
+  try {
+    const stats = await getStorageSize(storagePath)
+    console.log(`Storage usage: ${formatBytes(stats)} / ${formatBytes(STORAGE_LIMIT)}`)
+
+    if (stats > STORAGE_LIMIT * EVICT_THRESHOLD) {
+      console.log('Storage above threshold, running cleanup...')
+      await cleanupOldData()
+    }
+  } catch (err) {
+    console.error('Storage check failed:', err.message)
+  }
+}
+
+async function getStorageSize (dir) {
+  const fs = require('bare-fs')
+  const path = require('bare-path')
+
+  let total = 0
+
+  async function calcSize (currentPath) {
+    const entries = await fs.promises.readdir(currentPath)
+    for (const entry of entries) {
+      const fullPath = path.join(currentPath, entry)
+      const stat = await fs.promises.stat(fullPath)
+      if (stat.isDirectory()) {
+        await calcSize(fullPath)
+      } else {
+        total += stat.size
+      }
+    }
+  }
+
+  await calcSize(dir)
+  return total
+}
+
+function formatBytes (bytes) {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+async function cleanupOldData () {
+  // 1. Evict least recently used browse drives
+  const sortedDrives = Array.from(browseDrives.entries())
+    .sort((a, b) => (a[1].lastAccess || 0) - (b[1].lastAccess || 0))
+
+  // Remove oldest 20% of drives
+  const toRemove = Math.ceil(sortedDrives.length * 0.2)
+  for (let i = 0; i < toRemove && i < sortedDrives.length; i++) {
+    const [key, entry] = sortedDrives[i]
+    console.log(`Evicting old browse drive: ${key.slice(0, 8)}...`)
+    browseDrives.delete(key)
+    try { await swarm.leave(entry.drive.discoveryKey) } catch {}
+    try { await entry.drive.close() } catch {}
+  }
+
+  // 2. Clear proxy cache
+  if (proxy) {
+    proxy.clearCache?.()
+    console.log('Cleared proxy cache')
+  }
+
+  // 3. In future: could also prune old/unused app versions
 }
 
 // --- Lifecycle ---
