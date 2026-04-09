@@ -70,6 +70,13 @@ class HyperProxy {
     this._server = null
     this._port = 0
     this._stats = { relayHits: 0, p2pHits: 0, total: 0 }
+    this._inFlight = new Map() // key -> Promise
+
+    // LRU content cache
+    this._cache = new Map() // Simple LRU implementation
+    this._cacheMaxSize = 50 * 1024 * 1024 // 50MB
+    this._cacheCurrentSize = 0
+    this._cacheStats = { hits: 0, misses: 0 }
   }
 
   setHttpBridge (bridge) {
@@ -96,13 +103,21 @@ class HyperProxy {
   }
 
   async _handle (req, res) {
-    res.setHeader('Access-Control-Allow-Origin', '*')
+    // Validate origin - only allow localhost
+    const origin = req.headers.origin
+    if (origin && !origin.startsWith('http://localhost') && !origin.startsWith('http://127.0.0.1')) {
+      res.statusCode = 403
+      res.setHeader('Content-Type', 'text/plain')
+      return res.end('Invalid origin: only localhost is allowed')
+    }
+
+    // Set CORS headers for valid origins
+    res.setHeader('Access-Control-Allow-Origin', origin || 'http://localhost')
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 
-    // CORS preflight - only allow localhost origins
+    // CORS preflight handler
     if (req.method === 'OPTIONS') {
-      const origin = req.headers.origin
       if (origin && !origin.startsWith('http://localhost') && !origin.startsWith('http://127.0.0.1')) {
         res.statusCode = 403
         return res.end('Invalid origin')
@@ -110,13 +125,6 @@ class HyperProxy {
       res.setHeader('Access-Control-Allow-Origin', origin || 'http://localhost')
       res.statusCode = 204
       return res.end()
-    }
-
-    // Validate origin for non-localhost requests
-    const origin = req.headers.origin
-    if (origin && !origin.startsWith('http://localhost') && !origin.startsWith('http://127.0.0.1')) {
-      res.statusCode = 403
-      return res.end('Invalid origin')
     }
 
     const url = new URL(req.url, `http://localhost:${this._port}`)
@@ -169,6 +177,31 @@ class HyperProxy {
 
       this._stats.total++
 
+      // Check if this is a directory request
+      if (filePath.endsWith('/') || filePath === '') {
+        const drive = await this._getDrive(driveKeyHex)
+        if (drive) {
+          // Check if there's an index.html
+          const indexExists = await drive.entry(filePath + 'index.html').catch(() => null)
+          if (!indexExists) {
+            // No index, show directory listing
+            return this._serveDirectoryListing(res, drive, driveKeyHex, filePath)
+          }
+          // Has index, serve it (filePath stays as directory path)
+        }
+      }
+
+      // Check cache first
+      const cacheKey = this._getCacheKey(driveKeyHex, filePath)
+      const cached = this._getFromCache(cacheKey)
+      if (cached) {
+        res.setHeader('Content-Type', cached.contentType)
+        res.setHeader('X-Cache', 'HIT')
+        res.statusCode = 200
+        return res.end(cached.content)
+      }
+      this._cacheStats.misses++
+
       // HYBRID FETCH: race relay (fast) vs P2P (reliable)
       const result = await this._hybridFetch(driveKeyHex, filePath)
 
@@ -177,8 +210,12 @@ class HyperProxy {
         return res.end('File not found')
       }
 
+      // Cache successful result
+      this._setCache(cacheKey, result.content, result.contentType)
+
       const contentType = result.contentType
       const content = result.content
+      res.setHeader('X-Cache', 'MISS')
 
       res.setHeader('Content-Type', contentType)
       res.setHeader('X-Source', result.source)
@@ -233,9 +270,34 @@ class HyperProxy {
 
   /**
    * Hybrid fetch — race relay HTTP (fast) vs P2P Hyperdrive (reliable).
+   * Deduplicates concurrent requests for the same file.
    * Returns { content, contentType, source } or null.
    */
   async _hybridFetch (keyHex, filePath) {
+    const cacheKey = `${keyHex}:${filePath}`
+
+    // Return existing promise if already fetching
+    if (this._inFlight.has(cacheKey)) {
+      return this._inFlight.get(cacheKey)
+    }
+
+    // Create the fetch promise
+    const promise = this._doHybridFetch(keyHex, filePath)
+    this._inFlight.set(cacheKey, promise)
+
+    // Clean up when done
+    promise.finally(() => {
+      this._inFlight.delete(cacheKey)
+    })
+
+    return promise
+  }
+
+  /**
+   * Internal hybrid fetch implementation — race relay HTTP (fast) vs P2P Hyperdrive (reliable).
+   * Returns { content, contentType, source } or null.
+   */
+  async _doHybridFetch (keyHex, filePath) {
     // Resolve directory paths
     let resolvedPath = filePath
     if (filePath.endsWith('/') || filePath === '') {
@@ -290,14 +352,107 @@ class HyperProxy {
     return { content, contentType: guessType(filePath) }
   }
 
+  _getCacheKey (driveKeyHex, filePath) {
+    return `${driveKeyHex}:${filePath}`
+  }
+
+  _getFromCache (key) {
+    const entry = this._cache.get(key)
+    if (!entry) return null
+
+    // Check TTL (5 minutes)
+    if (Date.now() - entry.timestamp > 5 * 60 * 1000) {
+      this._cache.delete(key)
+      this._cacheCurrentSize -= entry.size
+      return null
+    }
+
+    // Update access order (LRU)
+    entry.lastAccess = Date.now()
+    this._cacheStats.hits++
+    return entry
+  }
+
+  _setCache (key, content, contentType) {
+    const size = content.length
+
+    // Don't cache files > 5MB
+    if (size > 5 * 1024 * 1024) return
+
+    // Evict oldest entries if needed
+    while (this._cacheCurrentSize + size > this._cacheMaxSize && this._cache.size > 0) {
+      let oldest = null
+      let oldestTime = Infinity
+      for (const [k, v] of this._cache) {
+        if (v.lastAccess < oldestTime) {
+          oldestTime = v.lastAccess
+          oldest = k
+        }
+      }
+      if (oldest) {
+        const entry = this._cache.get(oldest)
+        this._cacheCurrentSize -= entry.size
+        this._cache.delete(oldest)
+      }
+    }
+
+    this._cache.set(key, {
+      content,
+      contentType,
+      size,
+      timestamp: Date.now(),
+      lastAccess: Date.now()
+    })
+    this._cacheCurrentSize += size
+  }
+
+  /**
+   * Invalidate cache entries for a specific drive key
+   * @param {string} driveKeyHex - The drive key to invalidate
+   */
+  invalidateCache (driveKeyHex) {
+    for (const key of this._cache.keys()) {
+      if (key.startsWith(`${driveKeyHex}:`)) {
+        const entry = this._cache.get(key)
+        this._cacheCurrentSize -= entry.size
+        this._cache.delete(key)
+      }
+    }
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats () {
+    return {
+      ...this._cacheStats,
+      size: this._cacheCurrentSize,
+      maxSize: this._cacheMaxSize,
+      entries: this._cache.size
+    }
+  }
+
+  /**
+   * Clear the entire cache
+   */
+  clearCache () {
+    this._cache.clear()
+    this._cacheCurrentSize = 0
+    this._cacheStats.hits = 0
+    this._cacheStats.misses = 0
+  }
+
   async _serveDirectoryListing (res, drive, keyHex, dirPath) {
     const entries = []
     const MAX_ENTRIES = 1000 // Prevent memory exhaustion
     const TIMEOUT_MS = 5000
     const startTime = Date.now()
 
+    // Normalize dirPath for listing (ensure it ends with / for prefix matching)
+    const normalizedDirPath = dirPath.endsWith('/') ? dirPath : dirPath + '/'
+
     try {
-      for await (const entry of drive.list(dirPath)) {
+      for await (const entry of drive.list(normalizedDirPath)) {
         // Check timeout
         if (Date.now() - startTime > TIMEOUT_MS) {
           break

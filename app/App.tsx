@@ -7,15 +7,19 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
-  View, Text, StyleSheet, StatusBar,
-  ActivityIndicator, TouchableOpacity,
+  View, Text, StyleSheet, StatusBar, Platform,
+  ActivityIndicator, TouchableOpacity, NativeModules,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Paths } from 'expo-file-system'
 import { PearRPC } from './lib/rpc'
+import { networkMonitor, NetworkInfo } from './lib/network'
 
-// @ts-ignore — bare-pack bundle exports a string
-import backendBundle from '../assets/backend.bundle.mjs'
+// @ts-ignore — bare-pack bundles, platform-specific
+import iosBundleImport from '../assets/backend.bundle.mjs'
+// @ts-ignore
+import androidBundleImport from '../assets/backend.android.bundle.mjs'
+const backendBundle = Platform.OS === 'android' ? androidBundleImport : iosBundleImport
 
 // Worklet may not be available in dev mode (JSI module)
 let Worklet: any = null
@@ -88,6 +92,10 @@ export default function App() {
           gotReady = true
           setProxyPort(port)
           setState('ready')
+          // Start foreground service on Android to keep P2P connections alive
+          if (Platform.OS === 'android') {
+            NativeModules.P2PModule?.startService()
+          }
         })
 
         rpc.onPeerCount((count) => {
@@ -102,18 +110,34 @@ export default function App() {
           }
         })
 
-        // NOW start the worklet
-        const documentDir = Paths.document.uri.substring('file://'.length)
-        const storagePath = Paths.join(documentDir, 'pearbrowser')
+        // Resolve storage path (platform-specific)
+        let storagePath: string
+        try {
+          const documentDir = Paths.document.uri.substring('file://'.length)
+          storagePath = Paths.join(documentDir, 'pearbrowser')
+        } catch {
+          storagePath = Platform.OS === 'android'
+            ? '/data/data/com.pearbrowser.app/files/pearbrowser'
+            : './pearbrowser-storage'
+        }
+
+        // Start the worklet
         worklet.start('/app.bundle', backendBundle, [storagePath])
 
         if (!mounted) return
         setState('connecting')
 
-        // Timeout fallback
+        // Timeout fallback - if we haven't gotten ready in 30s, it's an error
         setTimeout(() => {
           if (mounted && !gotReady) {
-            setState('ready')
+            setState('error')
+            setError('P2P engine failed to start within 30s. Check your connection and restart the app.')
+            // Optionally try to restart the worklet
+            try { 
+              if (workletRef.current) {
+                workletRef.current.terminate()
+              }
+            } catch {}
           }
         }, 30000)
       } catch (err: any) {
@@ -129,6 +153,37 @@ export default function App() {
       if (workletRef.current) try { workletRef.current.terminate() } catch {}
     }
   }, [])
+
+  // Network change monitoring
+  useEffect(() => {
+    // Start network monitoring
+    networkMonitor.start(async (info: NetworkInfo) => {
+      console.log('Network changed:', info)
+      
+      if (!info.isConnected) {
+        // Went offline - P2P will handle this via swarm
+        console.log('Device went offline')
+      } else {
+        // Came back online or changed networks
+        console.log('Network available:', info.type)
+        
+        // Optional: Check if we need to re-bootstrap P2P
+        if (state === 'ready' && rpcRef.current) {
+          try {
+            const status = await rpcRef.current.getStatus()
+            if (!status.dhtConnected) {
+              console.log('DHT disconnected, attempting reconnect...')
+              // Could trigger worklet restart here
+            }
+          } catch {}
+        }
+      }
+    })
+    
+    return () => {
+      networkMonitor.stop()
+    }
+  }, [state])
 
   // Navigate to hyper:// URL (switches to Browse tab)
   const handleNavigate = useCallback((url: string) => {

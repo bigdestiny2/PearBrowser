@@ -25,7 +25,11 @@ class AppManager {
 
     // Open the app's Hyperdrive
     const drive = new Hyperdrive(this.store, Buffer.from(keyHex, 'hex'))
-    await drive.ready()
+    try {
+      await drive.ready()
+    } catch (err) {
+      throw new Error(`Failed to open app drive: ${err.message}`)
+    }
 
     // Join swarm to download
     this.swarm.join(drive.discoveryKey, { server: false, client: true })
@@ -55,7 +59,16 @@ class AppManager {
 
     const drive = this.activeDrives.get(app.driveKey)
     if (drive) {
-      try { await drive.close() } catch (err) {
+      // Leave swarm first to stop announcing this drive
+      try {
+        await this.swarm.leave(drive.discoveryKey)
+      } catch (err) {
+        console.error('Failed to leave swarm:', err.message)
+      }
+      // Then close the drive
+      try {
+        await drive.close()
+      } catch (err) {
         console.error('Failed to close drive:', err.message)
       }
       this.activeDrives.delete(app.driveKey)
@@ -74,7 +87,11 @@ class AppManager {
     }
 
     const drive = new Hyperdrive(this.store, Buffer.from(driveKeyHex, 'hex'))
-    await drive.ready()
+    try {
+      await drive.ready()
+    } catch (err) {
+      throw new Error(`Failed to open drive ${driveKeyHex.slice(0, 8)}...: ${err.message}`)
+    }
     this.swarm.join(drive.discoveryKey, { server: false, client: true })
     this.activeDrives.set(driveKeyHex, drive)
     return drive
@@ -111,23 +128,36 @@ class AppManager {
 
   async _waitForContent (drive, onProgress) {
     if (drive.version > 0) return
+
     return new Promise((resolve) => {
-      const timeout = setTimeout(resolve, 30000) // 30s max for app download
+      let completed = false
+
+      const timeout = setTimeout(() => {
+        if (!completed) {
+          completed = true
+          resolve()
+        }
+      }, 30000)
+
       let checks = 0
       const check = async () => {
+        if (completed) return
+
         checks++
         if (onProgress) onProgress(Math.min(95, checks * 5))
+
         const entry = await drive.entry('/index.html').catch(() => null)
-        if (entry) {
+        if (entry && !completed) {
+          completed = true
           clearTimeout(timeout)
           if (onProgress) onProgress(100)
           resolve()
-        } else {
+        } else if (!completed) {
           setTimeout(check, 500)
         }
       }
       check()
-    })
+    }))
   }
 
   /**

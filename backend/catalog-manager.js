@@ -25,7 +25,11 @@ class CatalogManager {
     }
 
     const drive = new Hyperdrive(this.store, Buffer.from(keyHex, 'hex'))
-    await drive.ready()
+    try {
+      await drive.ready()
+    } catch (err) {
+      throw new Error(`Failed to open catalog drive: ${err.message}`)
+    }
 
     this.swarm.join(drive.discoveryKey, { server: false, client: true })
 
