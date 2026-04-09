@@ -5,7 +5,6 @@
  * Handles both request/reply and push events from the worklet.
  */
 
-import b4a from 'b4a'
 import { CMD, EVT } from './constants'
 
 type EventCallback = (data: any) => void
@@ -188,7 +187,14 @@ export class PearRPC {
       }
 
       const json = JSON.stringify(msg)
-      const buf = b4a.from(json.length.toString(16).padStart(8, '0') + json)
+      const header = json.length.toString(16).padStart(8, '0')
+      const fullStr = header + json
+      
+      // Use plain Uint8Array for native bridge compatibility (Hermes)
+      const buf = new Uint8Array(fullStr.length)
+      for (let i = 0; i < fullStr.length; i++) {
+        buf[i] = fullStr.charCodeAt(i)
+      }
       this.ipc.write(buf)
     } catch (err: any) {
       console.error('RPC send failed:', err)
@@ -220,7 +226,12 @@ export class PearRPC {
   }
 
   private onData(chunk: Uint8Array) {
-    this.buffer += b4a.toString(chunk)
+    // Convert Uint8Array to string without b4a for Hermes compatibility
+    let str = ''
+    for (let i = 0; i < chunk.length; i++) {
+      str += String.fromCharCode(chunk[i])
+    }
+    this.buffer += str
 
     // Prevent buffer from growing unbounded - only clear corrupted portion
     if (this.buffer.length > 20_000_000) {

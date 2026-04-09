@@ -300,10 +300,15 @@ function persistState () {
 // --- Boot ---
 
 async function boot () {
+  console.log('Boot starting, storagePath:', storagePath)
   store = new Corestore(storagePath)
+  console.log('Corestore created, waiting for ready...')
   await store.ready()
+  console.log('Corestore ready')
 
+  console.log('Creating Hyperswarm...')
   swarm = new Hyperswarm()
+  console.log('Hyperswarm created')
   swarm.on('connection', (conn) => {
     store.replicate(conn)
     peerCount++
@@ -356,12 +361,15 @@ async function boot () {
   const httpBridge = new HttpBridge(pearBridge, swarm, getDriveForProxy)
   proxy.setHttpBridge(httpBridge)
 
+  console.log('Starting HTTP proxy...')
   const port = await proxy.start()
+  console.log('HTTP proxy started on port:', port)
 
   // Start storage monitoring
   setInterval(() => checkStorageQuota(), STORAGE_CHECK_INTERVAL)
 
   // Notify React Native
+  console.log('Sending READY event')
   rpc.event(C.EVT_READY, { port })
 }
 
@@ -455,6 +463,8 @@ Bare.on('resume', () => IPC.ref())
 
 // --- Start ---
 
+console.log('Starting boot...')
 boot().catch((err) => {
-  rpc.event(C.EVT_ERROR, { type: 'boot-error', message: err.message })
+  console.error('Boot failed:', err)
+  rpc.event(C.EVT_ERROR, { type: 'boot-error', message: err.message, stack: err.stack })
 })

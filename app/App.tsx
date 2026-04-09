@@ -16,6 +16,7 @@ import { Paths } from 'expo-file-system'
 import { PearRPC } from './lib/rpc'
 import { networkMonitor, NetworkInfo } from './lib/network'
 import { StatusDot } from './components/StatusDot'
+import * as FileSystem from 'expo-file-system'
 
 // @ts-ignore — bare-pack bundles, platform-specific
 import iosBundleImport from '../assets/backend.bundle.mjs'
@@ -146,7 +147,28 @@ export default function App() {
         }
 
         // Start the worklet
-        worklet.start('/app.bundle', backendBundle, [storagePath])
+        if (Platform.OS === 'android') {
+          // Android: write bundle to file, load from filesystem
+          try {
+            const RNFS = require('expo-file-system')
+            // Ensure storage directory exists for Corestore
+            await RNFS.makeDirectoryAsync(storagePath, { intermediates: true }).catch(() => {})
+            // Write bundle to file — strip file:// prefix for bare-kit
+            const docDir = (RNFS.documentDirectory || '').replace('file://', '')
+            const dir = docDir + 'pearbrowser/'
+            const bundlePath = dir + 'app.bundle'
+            // Use RNFS with file:// URI for writing
+            await RNFS.makeDirectoryAsync('file://' + dir, { intermediates: true }).catch(() => {})
+            await RNFS.writeAsStringAsync('file://' + bundlePath, backendBundle)
+            // bare-kit startFile needs bare filesystem path (no file:// prefix)
+            worklet.start(bundlePath, [storagePath])
+          } catch (androidErr: any) {
+            // Show the actual Android error
+            throw new Error('Android worklet: ' + androidErr.message)
+          }
+        } else {
+          worklet.start('/app.bundle', backendBundle, [storagePath])
+        }
 
         if (!mounted) return
         setState('connecting')
