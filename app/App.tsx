@@ -2,7 +2,7 @@
  * PearBrowser — Root Component
  *
  * Boots the Bare worklet (P2P engine), sets up tab navigation,
- * and manages global state (peer count, installed apps, etc.)
+ * and manages global state (peer count, saved sites, etc.)
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react'
@@ -26,7 +26,7 @@ try {
 }
 import { colors } from './lib/theme'
 import { HomeScreen } from './screens/HomeScreen'
-import { AppStoreScreen } from './screens/AppStoreScreen'
+import { ExploreScreen } from './screens/ExploreScreen'
 import { BrowseScreen } from './screens/BrowseScreen'
 import { MoreScreen } from './screens/MoreScreen'
 import { BookmarksScreen } from './screens/BookmarksScreen'
@@ -38,7 +38,7 @@ import type { Template } from './screens/TemplatePickerScreen'
 import { SiteEditorScreen } from './screens/SiteEditorScreen'
 
 type AppState = 'booting' | 'connecting' | 'ready' | 'error'
-type Tab = 'home' | 'store' | 'browse' | 'more'
+type Tab = 'home' | 'explore' | 'browse' | 'more'
 
 export default function App() {
   const [state, setState] = useState<AppState>('booting')
@@ -47,7 +47,6 @@ export default function App() {
   const [peerCount, setPeerCount] = useState(0)
   const [activeTab, setActiveTab] = useState<Tab>('home')
   const [browseUrl, setBrowseUrl] = useState<string | null>(null)
-  const [installedApps, setInstalledApps] = useState<any[]>([])
   const [showSites, setShowSites] = useState(false)
   const [showBookmarks, setShowBookmarks] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
@@ -137,7 +136,7 @@ export default function App() {
     setActiveTab('browse')
   }, [])
 
-  // Launch installed app by ID (from home screen)
+  // Launch saved site by ID (from home screen)
   const handleLaunchApp = useCallback(async (appId: string) => {
     if (!rpcRef.current) return
     try {
@@ -147,7 +146,7 @@ export default function App() {
     } catch {}
   }, [])
 
-  // Launch app by drive key or URL (from app store)
+  // Launch app by drive key or URL (from explore directory)
   const handleLaunchByKey = useCallback((keyOrUrl: string) => {
     if (keyOrUrl.startsWith('http')) {
       // Direct HTTP URL from relay — load in WebView directly
@@ -195,15 +194,13 @@ export default function App() {
             rpc={rpcRef.current!}
             peerCount={peerCount}
             status={connectionStatus}
-            installedApps={installedApps}
             onNavigate={handleNavigate}
-            onLaunchApp={handleLaunchApp}
           />
         )}
-        {activeTab === 'store' && (
-          <AppStoreScreen
+        {activeTab === 'explore' && (
+          <ExploreScreen
             rpc={rpcRef.current}
-            onLaunchApp={handleLaunchByKey}
+            onVisit={handleLaunchByKey}
           />
         )}
         {activeTab === 'browse' && rpcRef.current && (
@@ -293,10 +290,10 @@ export default function App() {
           onPress={() => setActiveTab('home')}
         />
         <TabButton
-          label="Apps"
+          label="Explore"
           icon="[ ]"
-          active={activeTab === 'store'}
-          onPress={() => setActiveTab('store')}
+          active={activeTab === 'explore'}
+          onPress={() => setActiveTab('explore')}
         />
         <TabButton
           label="Browse"

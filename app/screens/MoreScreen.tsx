@@ -33,7 +33,7 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
         `Peers: ${s.peerCount}`,
         `Proxy port: ${s.proxyPort || proxyPort || 'N/A'}`,
         `Browse drives: ${s.browseDrives}`,
-        `Installed apps: ${s.installedApps}`,
+        `Saved sites: ${s.installedApps}`,
         `Published sites: ${s.publishedSites}`,
       ].join('\n'))
     } catch (err: any) {

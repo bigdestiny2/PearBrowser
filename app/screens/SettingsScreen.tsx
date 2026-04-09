@@ -29,7 +29,7 @@ export function SettingsScreen({ onBack }: Props) {
   }, [catalogInput])
 
   const handleClearData = useCallback(() => {
-    Alert.alert('Clear All Data', 'This will remove all bookmarks, history, and settings. App data and installed apps will remain.', [
+    Alert.alert('Clear All Data', 'This will remove all bookmarks, history, and settings.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Clear Everything', style: 'destructive',
@@ -58,7 +58,7 @@ export function SettingsScreen({ onBack }: Props) {
 
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
         {/* Catalog */}
-        <Text style={styles.sectionTitle}>APP STORE</Text>
+        <Text style={styles.sectionTitle}>EXPLORE DIRECTORY</Text>
         <View style={styles.card}>
           <Text style={styles.label}>Default Catalog URL</Text>
           <View style={styles.inputRow}>
@@ -75,7 +75,7 @@ export function SettingsScreen({ onBack }: Props) {
               <Text style={styles.saveBtnText}>Save</Text>
             </TouchableOpacity>
           </View>
-          <Text style={styles.hint}>The App Store tab loads this catalog on startup</Text>
+          <Text style={styles.hint}>The Explore tab loads this directory on startup</Text>
         </View>
 
         {/* Privacy */}
