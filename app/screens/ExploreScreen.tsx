@@ -23,7 +23,7 @@ type Props = {
 }
 
 export function ExploreScreen({ rpc, onVisit }: Props) {
-  const [directoryUrl, setDirectoryUrl] = useState('https://relay.p2phiverelay.xyz')
+  const [directoryUrl, setDirectoryUrl] = useState('https://relay-us.p2phiverelay.xyz')
   const [sites, setSites] = useState<SiteInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

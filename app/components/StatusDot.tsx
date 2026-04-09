@@ -2,7 +2,7 @@ import React from 'react'
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native'
 import { colors } from '../lib/theme'
 
-type Status = 'connected' | 'connecting' | 'offline' | 'error'
+type Status = 'connected' | 'connecting' | 'offline' | 'error' | 'http-only'
 
 interface Props {
   status: Status
@@ -18,6 +18,7 @@ export function StatusDot({ status, peerCount, showLabel, onPress }: Props) {
       case 'connecting': return '#f59e0b'
       case 'error': return colors.error
       case 'offline': return '#666'
+      case 'http-only': return '#3b82f6' // Blue for HTTP mode
     }
   }
   
@@ -27,6 +28,7 @@ export function StatusDot({ status, peerCount, showLabel, onPress }: Props) {
       case 'connecting': return 'Connecting...'
       case 'error': return 'Error'
       case 'offline': return 'Offline'
+      case 'http-only': return 'HTTP Mode'
     }
   }
   

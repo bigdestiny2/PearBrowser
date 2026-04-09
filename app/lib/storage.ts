@@ -92,7 +92,7 @@ export async function clearHistory(): Promise<void> {
 // --- Settings ---
 
 const DEFAULT_SETTINGS: Settings = {
-  catalogUrl: 'https://relay.p2phiverelay.xyz',
+  catalogUrl: 'https://relay-us.p2phiverelay.xyz',
   theme: 'dark',
   defaultTab: 'home',
   privateMode: false,

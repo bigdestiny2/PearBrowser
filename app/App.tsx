@@ -89,16 +89,24 @@ export default function App() {
   const workletRef = useRef<any>(null)
   const rpcRef = useRef<PearRPC | null>(null)
 
-  const connectionStatus: 'connected' | 'connecting' | 'offline' | 'error' = state === 'ready'
-    ? (proxyPort > 0 ? 'connected' : 'connecting')
+  const connectionStatus: 'connected' | 'connecting' | 'offline' | 'error' | 'http-only' = state === 'ready'
+    ? (Platform.OS === 'android' ? 'http-only' : proxyPort > 0 ? 'connected' : 'connecting')
     : state === 'error' ? 'offline' : 'connecting'
 
-  // Boot worklet
+  // Boot - HTTP-only mode for Android (P2P worklet disabled)
+  // See: ANDROID_WORKLET_ISSUE.md for details
   useEffect(() => {
+    // HTTP-only mode: Skip worklet entirely, use relay HTTP for everything
+    if (Platform.OS === 'android') {
+      setState('ready')
+      setProxyPort(0) // No local proxy in HTTP mode
+      return
+    }
+
+    // iOS: Full P2P mode with worklet
     let mounted = true
 
     async function boot() {
-      // If bare-kit not available or no bundle, run in demo mode
       if (!Worklet) {
         if (mounted) setState('ready')
         return
@@ -118,10 +126,6 @@ export default function App() {
           gotReady = true
           setProxyPort(port)
           setState('ready')
-          // Start foreground service on Android to keep P2P connections alive
-          if (Platform.OS === 'android') {
-            NativeModules.P2PModule?.startService()
-          }
         })
 
         rpc.onPeerCount((count) => {
@@ -136,61 +140,27 @@ export default function App() {
           }
         })
 
-        rpc.onBootProgress((progress) => {
-          if (!mounted) return
-          console.log('Boot progress:', progress.stage, progress.message)
-          setBootProgress(progress.message)
-          if (progress.error) {
-            setError(progress.message + ': ' + progress.error.substring(0, 200))
-          }
-        })
-
-        // Resolve storage path (platform-specific)
         let storagePath: string
         try {
           const documentDir = Paths.document.uri.substring('file://'.length)
           storagePath = Paths.join(documentDir, 'pearbrowser')
         } catch {
-          storagePath = Platform.OS === 'android'
-            ? '/data/data/com.pearbrowser.app/files/pearbrowser'
-            : './pearbrowser-storage'
+          storagePath = './pearbrowser-storage'
         }
 
-        // Start the worklet
-        if (Platform.OS === 'android') {
-          // Android: demo mode with inline source
-          // Full P2P bundle loading requires further bare-kit investigation
-          // (JNI rejects large strings, startFile doesn't execute bundle format)
-          const demoSource = `
-            const { IPC } = BareKit
-            const msg = JSON.stringify({ event: 100, data: { port: 0 } })
-            IPC.write(Buffer.from(msg.length.toString(16).padStart(8, '0') + msg))
-          `
-          worklet.start('/demo.js', demoSource)
-        } else {
-          worklet.start('/app.bundle', backendBundle, [storagePath])
-        }
+        worklet.start('/app.bundle', backendBundle, [storagePath])
 
         if (!mounted) return
         setState('connecting')
 
-        // Timeout fallback - if we haven't gotten ready in 30s, it's an error
         setTimeout(() => {
           if (mounted && !gotReady) {
             setState('error')
-            setError('P2P engine failed to start within 30s. Check your connection and restart the app.')
-            // Optionally try to restart the worklet
-            try { 
-              if (workletRef.current) {
-                workletRef.current.terminate()
-              }
-            } catch {}
+            setError('P2P engine failed to start within 30s.')
           }
         }, 30000)
       } catch (err: any) {
-        if (mounted) {
-          setState('ready')
-        }
+        if (mounted) setState('ready')
       }
     }
 
