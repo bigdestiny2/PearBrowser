@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "PearBrowser",
-    "slug": "pearbrowser",
+    "slug": "pear-browser",
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -42,6 +42,12 @@
         }
       ]
     ],
-    "scheme": "pearbrowser"
+    "scheme": "pearbrowser",
+    "extra": {
+      "eas": {
+        "projectId": "f84eafc6-f7c2-4489-b81e-479410ab3340"
+      }
+    },
+    "owner": "bigdestiny22s-organization"
   }
 }

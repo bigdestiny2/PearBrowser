@@ -90,20 +90,13 @@ export default function App() {
   const rpcRef = useRef<PearRPC | null>(null)
 
   const connectionStatus: 'connected' | 'connecting' | 'offline' | 'error' | 'http-only' = state === 'ready'
-    ? (Platform.OS === 'android' ? 'http-only' : proxyPort > 0 ? 'connected' : 'connecting')
+    ? (proxyPort > 0 ? 'connected' : (Worklet ? 'connecting' : 'http-only'))
     : state === 'error' ? 'offline' : 'connecting'
 
-  // Boot - HTTP-only mode for Android (P2P worklet disabled)
-  // See: ANDROID_WORKLET_ISSUE.md for details
+  // Boot P2P worklet
+  // Android: Write bundle to filesystem first to avoid JNI string size limits
+  // iOS: Pass bundle inline (works fine)
   useEffect(() => {
-    // HTTP-only mode: Skip worklet entirely, use relay HTTP for everything
-    if (Platform.OS === 'android') {
-      setState('ready')
-      setProxyPort(0) // No local proxy in HTTP mode
-      return
-    }
-
-    // iOS: Full P2P mode with worklet
     let mounted = true
 
     async function boot() {
@@ -148,7 +141,17 @@ export default function App() {
           storagePath = './pearbrowser-storage'
         }
 
-        worklet.start('/app.bundle', backendBundle, [storagePath])
+        if (Platform.OS === 'android') {
+          // Android: Convert bundle to Uint8Array to use startBytes instead of
+          // startUTF8, avoiding JNI string size limits on large bundles.
+          // startBytes passes ArrayBuffer with offset/length — different native path.
+          const encoder = new TextEncoder()
+          const bundleBytes = encoder.encode(backendBundle)
+          worklet.start('/app.bundle', bundleBytes, [storagePath])
+        } else {
+          // iOS: Inline source works fine
+          worklet.start('/app.bundle', backendBundle, [storagePath])
+        }
 
         if (!mounted) return
         setState('connecting')
@@ -160,7 +163,10 @@ export default function App() {
           }
         }, 30000)
       } catch (err: any) {
-        if (mounted) setState('ready')
+        if (mounted) {
+          console.error('Worklet boot failed:', err)
+          setState('ready') // Fall back to HTTP-only mode
+        }
       }
     }
 

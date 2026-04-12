@@ -40,7 +40,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.0",
-    "@types/react": "~19.0.0",
+    "@types/react": "^19.2.14",
     "bare-pack": "^2.0.0",
     "typescript": "~5.8.0"
   },
