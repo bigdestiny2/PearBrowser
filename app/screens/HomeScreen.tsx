@@ -14,9 +14,10 @@ type Props = {
   peerCount: number
   status: 'connected' | 'connecting' | 'offline'
   onNavigate: (url: string) => void
+  onOpenQR?: () => void
 }
 
-export function HomeScreen({ rpc, peerCount, status, onNavigate }: Props) {
+export function HomeScreen({ rpc, peerCount, status, onNavigate, onOpenQR }: Props) {
   const [searchText, setSearchText] = useState('')
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
 
@@ -59,7 +60,11 @@ export function HomeScreen({ rpc, peerCount, status, onNavigate }: Props) {
           autoCorrect={false}
           returnKeyType="go"
         />
-        <TouchableOpacity onPress={handlePasteAndGo} style={styles.scanBtn}>
+        <TouchableOpacity
+          onPress={onOpenQR || handlePasteAndGo}
+          onLongPress={handlePasteAndGo}
+          style={styles.scanBtn}
+        >
           <Text style={styles.scanBtnText}>QR</Text>
         </TouchableOpacity>
       </View>

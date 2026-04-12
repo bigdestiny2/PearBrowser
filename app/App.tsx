@@ -39,6 +39,7 @@ import { MoreScreen } from './screens/MoreScreen'
 import { BookmarksScreen } from './screens/BookmarksScreen'
 import { HistoryScreen } from './screens/HistoryScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
+import { QRScannerScreen } from './screens/QRScannerScreen'
 import { MySitesScreen } from './screens/MySitesScreen'
 import { TemplatePickerScreen } from './screens/TemplatePickerScreen'
 import type { Template } from './screens/TemplatePickerScreen'
@@ -74,6 +75,7 @@ export default function App() {
   const [isOffline, setIsOffline] = useState(false)
   const [hasBrowseOpened, setHasBrowseOpened] = useState(false)
   const [bootProgress, setBootProgress] = useState<string>('Initializing...')
+  const [showQRScanner, setShowQRScanner] = useState(false)
   
   // Connection status panel state
   const [showStatusPanel, setShowStatusPanel] = useState(false)
@@ -373,6 +375,21 @@ export default function App() {
         </View>
       </Modal>
 
+      {/* QR Scanner Modal */}
+      <Modal
+        visible={showQRScanner}
+        animationType="slide"
+        onRequestClose={() => setShowQRScanner(false)}
+      >
+        <QRScannerScreen
+          onScan={(url) => {
+            setShowQRScanner(false)
+            handleNavigate(url)
+          }}
+          onClose={() => setShowQRScanner(false)}
+        />
+      </Modal>
+
       {/* Header with StatusDot */}
       <View style={styles.header}>
         <View style={styles.headerSpacer} />
@@ -392,6 +409,7 @@ export default function App() {
             peerCount={peerCount}
             status={connectionStatus}
             onNavigate={handleNavigate}
+            onOpenQR={() => setShowQRScanner(true)}
           />
         )}
         {activeTab === 'explore' && (
