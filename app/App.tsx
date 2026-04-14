@@ -419,10 +419,10 @@ export default function App() {
           />
         )}
         {/* BrowseScreen - keep mounted after first open, hide when not active */}
-        {(activeTab === 'browse' || hasBrowseOpened) && rpcRef.current && (
+        {(activeTab === 'browse' || hasBrowseOpened) && (
           <View style={[styles.screenContainer, activeTab !== 'browse' && styles.hiddenScreen]}>
             <BrowseScreen
-              rpc={rpcRef.current}
+              rpc={rpcRef.current!}
               proxyPort={proxyPort}
               peerCount={peerCount}
               status={connectionStatus}
@@ -431,7 +431,7 @@ export default function App() {
             />
           </View>
         )}
-        {activeTab === 'browse' && !rpcRef.current && (
+        {false && (
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
             <Text style={{ color: colors.textSecondary, fontSize: 14 }}>P2P engine not connected — browsing unavailable in demo mode</Text>
           </View>

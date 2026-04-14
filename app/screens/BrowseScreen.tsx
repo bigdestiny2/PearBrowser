@@ -51,6 +51,12 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
       return
     }
 
+    if (!rpc) {
+      setError('P2P engine not available. Use Explore to browse via relay.')
+      setLoading(false)
+      return
+    }
+
     try {
       const result = await rpc.navigate(url)
       if (result.error) {
