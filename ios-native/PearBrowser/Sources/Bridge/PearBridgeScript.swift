@@ -62,9 +62,29 @@ enum PearBridgeScript {
         if (opts && opts.limit) url += '&limit=' + opts.limit;
         return apiGet(url);
       },
+      range: function(appId, opts) {
+        var url = '/api/sync/range?appId=' + encodeURIComponent(appId);
+        if (opts && opts.gte) url += '&gte=' + encodeURIComponent(opts.gte);
+        if (opts && opts.gt)  url += '&gt='  + encodeURIComponent(opts.gt);
+        if (opts && opts.lte) url += '&lte=' + encodeURIComponent(opts.lte);
+        if (opts && opts.lt)  url += '&lt='  + encodeURIComponent(opts.lt);
+        if (opts && opts.reverse) url += '&reverse=1';
+        if (opts && opts.limit) url += '&limit=' + opts.limit;
+        return apiGet(url);
+      },
+      count: function(appId, prefix) {
+        var url = '/api/sync/count?appId=' + encodeURIComponent(appId);
+        if (prefix) url += '&prefix=' + encodeURIComponent(prefix);
+        return apiGet(url);
+      },
       status: function(appId) { return apiGet('/api/sync/status?appId=' + encodeURIComponent(appId)); }
     },
-    identity: { getPublicKey: function() { return apiGet('/api/identity'); } },
+    identity: {
+      getPublicKey: function() { return apiGet('/api/identity'); },
+      sign: function(payload, namespace) {
+        return apiPost('/api/identity/sign', { payload: String(payload), namespace: namespace || '' });
+      }
+    },
     bridge: { status: function() { return apiGet('/api/bridge/status'); } },
     navigate: function(url) {
       if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.PearBrowserNative) {

@@ -19,6 +19,7 @@ class HttpBridge {
     this._getDrive = getDriveFn || null // async (keyHex) => Hyperdrive
     this._allowedOrigins = opts.allowedOrigins || ['http://localhost', 'http://127.0.0.1']
     this._validateToken = opts.validateToken || (() => null)
+    this._identity = opts.identity || null
     this._rateLimiter = new Map() // Simple rate limiting per IP
   }
 
@@ -192,6 +193,41 @@ class HttpBridge {
         return this._json(res, result)
       }
 
+      // Phase 4 addition — range queries with explicit bounds + reverse
+      if (req.method === 'GET' && path === '/api/sync/range') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
+        const appId = url.searchParams.get('appId')
+        if (!this._isValidAppId(appId)) {
+          return this._jsonError(res, 'Invalid appId format', 400)
+        }
+        const opts = {
+          gte: url.searchParams.get('gte') || undefined,
+          gt: url.searchParams.get('gt') || undefined,
+          lte: url.searchParams.get('lte') || undefined,
+          lt: url.searchParams.get('lt') || undefined,
+          reverse: url.searchParams.get('reverse') === '1' || url.searchParams.get('reverse') === 'true',
+          limit: parseInt(url.searchParams.get('limit') || '100') || 100,
+        }
+        const scopedAppId = this._scopeAppId(auth.driveKeyHex, appId)
+        const result = await this._bridge.range(scopedAppId, opts)
+        return this._json(res, result)
+      }
+
+      // Phase 4 addition — count under a prefix (for UI counters)
+      if (req.method === 'GET' && path === '/api/sync/count') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
+        const appId = url.searchParams.get('appId')
+        const prefix = url.searchParams.get('prefix') || ''
+        if (!this._isValidAppId(appId)) {
+          return this._jsonError(res, 'Invalid appId format', 400)
+        }
+        const scopedAppId = this._scopeAppId(auth.driveKeyHex, appId)
+        const count = await this._bridge.count(scopedAppId, prefix)
+        return this._json(res, { count })
+      }
+
       if (req.method === 'GET' && path === '/api/sync/status') {
         const auth = this._requireToken(req, res)
         if (!auth) return true
@@ -212,7 +248,39 @@ class HttpBridge {
         const publicKey = this._swarm
           ? this._swarm.keyPair.publicKey.toString('hex')
           : null
-        return this._json(res, { publicKey, driveKey: auth.driveKeyHex })
+        const signingPubkey = this._identity
+          ? (() => { try { return this._identity.getSigningKeypair().publicKey.toString('hex') } catch { return null } })()
+          : null
+        return this._json(res, {
+          publicKey,
+          driveKey: auth.driveKeyHex,
+          signingPublicKey: signingPubkey
+        })
+      }
+
+      // Phase 4 addition — sign arbitrary payload with user's root keypair (ed25519)
+      if (req.method === 'POST' && path === '/api/identity/sign') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
+        if (!this._identity) return this._jsonError(res, 'identity not available', 503)
+        let body
+        try { body = await this._readBody(req) } catch (err) {
+          return this._jsonError(res, 'Invalid JSON body', 400)
+        }
+        if (!body || typeof body.payload !== 'string') {
+          return this._jsonError(res, '`payload` (string) required', 400)
+        }
+        // Security: require a per-app namespace prefix so one app can't
+        // trick the user into signing a payload intended for another app
+        // or a different protocol. The drive key is injected automatically;
+        // apps see an auto-namespaced signature.
+        const namespaced = `pear.app.${auth.driveKeyHex}:${body.namespace || ''}:${body.payload}`
+        try {
+          const result = this._identity.sign(namespaced)
+          return this._json(res, { ...result, namespaced })
+        } catch (err) {
+          return this._jsonError(res, err.message || 'sign failed', 500)
+        }
       }
 
       // --- Drive Operations (Vinjari-inspired) ---

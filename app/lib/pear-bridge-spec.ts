@@ -21,16 +21,29 @@
 // reference this type when writing their bridge contracts.
 
 export interface PearSyncAPI {
-  create(appId: string): Promise<{ inviteKey: string; appId: string }>
-  join(appId: string, inviteKey: string): Promise<{ success: boolean; appId: string }>
-  append(appId: string, op: unknown): Promise<{ success: boolean }>
+  create(appId: string): Promise<{ inviteKey: string; appId: string; writerPublicKey: string }>
+  join(appId: string, inviteKey: string): Promise<{ inviteKey: string; appId: string; writerPublicKey: string }>
+  append(appId: string, op: unknown): Promise<{ ok: true }>
   get(appId: string, key: string): Promise<unknown>
   list(appId: string, prefix?: string, opts?: { limit?: number }): Promise<Array<{ key: string; value: unknown }>>
-  status(appId: string): Promise<{ peers: number; head: number }>
+  /** Range query with explicit bounds + reverse. Phase 4 addition. */
+  range(appId: string, opts?: {
+    gte?: string; gt?: string; lte?: string; lt?: string
+    reverse?: boolean; limit?: number
+  }): Promise<Array<{ key: string; value: unknown }>>
+  /** Count entries under a prefix. Phase 4 addition. */
+  count(appId: string, prefix?: string): Promise<{ count: number }>
+  status(appId: string): Promise<{ appId: string; inviteKey: string; writerCount: number; viewLength: number }>
 }
 
 export interface PearIdentityAPI {
-  getPublicKey(): Promise<{ publicKey: string }>
+  getPublicKey(): Promise<{ publicKey: string; driveKey: string; signingPublicKey: string | null }>
+  /** Sign an arbitrary payload with the user's root ed25519 keypair.
+   *  The payload is automatically namespaced to prevent cross-app
+   *  signature reuse. Phase 4 addition. */
+  sign(payload: string, namespace?: string): Promise<{
+    signature: string; publicKey: string; algorithm: 'ed25519'; namespaced: string
+  }>
 }
 
 export interface PearBridgeStatusAPI {
@@ -118,10 +131,28 @@ export const PEAR_BRIDGE_SCRIPT_TEMPLATE: string = `
         if (opts && opts.limit) url += '&limit=' + opts.limit;
         return apiGet(url);
       },
+      range: function(appId, opts) {
+        var url = '/api/sync/range?appId=' + encodeURIComponent(appId);
+        if (opts && opts.gte) url += '&gte=' + encodeURIComponent(opts.gte);
+        if (opts && opts.gt)  url += '&gt='  + encodeURIComponent(opts.gt);
+        if (opts && opts.lte) url += '&lte=' + encodeURIComponent(opts.lte);
+        if (opts && opts.lt)  url += '&lt='  + encodeURIComponent(opts.lt);
+        if (opts && opts.reverse) url += '&reverse=1';
+        if (opts && opts.limit) url += '&limit=' + opts.limit;
+        return apiGet(url);
+      },
+      count: function(appId, prefix) {
+        var url = '/api/sync/count?appId=' + encodeURIComponent(appId);
+        if (prefix) url += '&prefix=' + encodeURIComponent(prefix);
+        return apiGet(url);
+      },
       status: function(appId) { return apiGet('/api/sync/status?appId=' + encodeURIComponent(appId)); }
     },
     identity: {
-      getPublicKey: function() { return apiGet('/api/identity'); }
+      getPublicKey: function() { return apiGet('/api/identity'); },
+      sign: function(payload, namespace) {
+        return apiPost('/api/identity/sign', { payload: String(payload), namespace: namespace || '' });
+      }
     },
     bridge: {
       status: function() { return apiGet('/api/bridge/status'); }

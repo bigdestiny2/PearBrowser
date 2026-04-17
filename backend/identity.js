@@ -28,6 +28,12 @@ const crypto = require('bare-crypto')
 const b4a = require('b4a')
 const WORDLIST = require('./bip39-wordlist.js')
 
+// sodium-universal is already in the dependency graph via hyperswarm /
+// autobase. We use it for ed25519 detached signing so pages can sign
+// arbitrary payloads with the user's root identity.
+let sodium = null
+try { sodium = require('sodium-universal') } catch (_) { /* optional */ }
+
 if (!Array.isArray(WORDLIST) || WORDLIST.length !== 2048) {
   throw new Error('BIP-39 wordlist integrity check failed')
 }
@@ -182,6 +188,55 @@ class Identity {
     }
     // Fallback: hash of the seed
     return b4a.toString(crypto.createHash('sha256').update(this._seed).digest(), 'hex')
+  }
+
+  /**
+   * Derive the ed25519 keypair from the seed. Cached. Returns
+   * `{ publicKey: Buffer(32), secretKey: Buffer(64) }`.
+   *
+   * The seed is the full 32-byte pseudo-random output from
+   * entropyToSeed() — we pass it straight into sodium's
+   * crypto_sign_seed_keypair to produce a deterministic keypair.
+   *
+   * Added for Phase 1+ (identity.sign) — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
+   */
+  getSigningKeypair () {
+    if (this._keypair) return this._keypair
+    if (!sodium) throw new Error('sodium-universal not available — ed25519 signing disabled')
+    if (!this._seed) throw new Error('Identity not ready')
+
+    const publicKey = b4a.alloc(sodium.crypto_sign_PUBLICKEYBYTES)
+    const secretKey = b4a.alloc(sodium.crypto_sign_SECRETKEYBYTES)
+    sodium.crypto_sign_seed_keypair(publicKey, secretKey, this._seed)
+    this._keypair = { publicKey, secretKey }
+    return this._keypair
+  }
+
+  /**
+   * Sign a binary or UTF-8 string payload with the user's root keypair.
+   * Returns `{ signature: <hex>, publicKey: <hex>, algorithm: 'ed25519' }`.
+   *
+   * NOTE: Pages that call `window.pear.identity.sign(data)` get this
+   * signature back. Validate the payload namespace on the caller side
+   * so a malicious page can't trick a user into signing on their behalf
+   * for a different app. A future hardening step can prefix-wrap the
+   * payload with a domain separator tag (e.g. `PEAR-APP-<driveKey>:`).
+   */
+  sign (payload) {
+    const { publicKey, secretKey } = this.getSigningKeypair()
+    const message = typeof payload === 'string'
+      ? b4a.from(payload, 'utf-8')
+      : b4a.from(payload || [])
+    if (message.length === 0) throw new Error('payload must be non-empty')
+    if (message.length > 64 * 1024) throw new Error('payload too large (>64KB)')
+
+    const signature = b4a.alloc(sodium.crypto_sign_BYTES)
+    sodium.crypto_sign_detached(signature, message, secretKey)
+    return {
+      signature: b4a.toString(signature, 'hex'),
+      publicKey: b4a.toString(publicKey, 'hex'),
+      algorithm: 'ed25519'
+    }
   }
 
   /**

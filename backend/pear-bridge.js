@@ -69,6 +69,7 @@ class PearBridge {
 
     await base.ready()
     const inviteKey = (base.key || base.local.key).toString('hex')
+    const writerPublicKey = base.local.key.toString('hex')
 
     // Derive topic and join swarm
     const topic = crypto.createHash('sha256').update(inviteKey).digest()
@@ -76,7 +77,7 @@ class PearBridge {
 
     this._syncGroups.set(appId, { base, topic, inviteKey })
 
-    return { inviteKey, appId }
+    return { inviteKey, appId, writerPublicKey }
   }
 
   /**
@@ -109,7 +110,8 @@ class PearBridge {
 
     this._syncGroups.set(appId, { base, topic, inviteKey: inviteKeyHex })
 
-    return { inviteKey: inviteKeyHex, appId }
+    const writerPublicKey = base.local.key.toString('hex')
+    return { inviteKey: inviteKeyHex, appId, writerPublicKey }
   }
 
   /**
@@ -197,6 +199,82 @@ class PearBridge {
     }
 
     return results
+  }
+
+  /**
+   * Range query with explicit bounds (gte/lte/lt/gt), optional reverse.
+   *
+   * Tickets-style apps need this for sorted pagination (e.g. attendees list
+   * scrolled by registration time). More flexible than list(prefix, limit).
+   *
+   * opts: { gte?, lte?, gt?, lt?, limit?, reverse? }
+   */
+  async range (appId, opts = {}) {
+    this._validateAppId(appId)
+    const group = this._syncGroups.get(appId)
+    if (!group) throw new Error('Sync group not found: ' + appId)
+
+    // Validate + clamp limit
+    let limit = opts.limit || 100
+    if (typeof limit !== 'number' || limit < 1) limit = 100
+    if (limit > 1000) limit = 1000
+
+    // Validate bound strings
+    const bound = (k) => {
+      const v = opts[k]
+      if (v === undefined || v === null) return undefined
+      if (typeof v !== 'string' || v.length > 1024) throw new Error(`Invalid ${k} bound`)
+      return v
+    }
+
+    const rangeOpts = {
+      gte: bound('gte'),
+      gt: bound('gt'),
+      lte: bound('lte'),
+      lt: bound('lt'),
+      reverse: !!opts.reverse,
+    }
+    // Strip undefined so Hyperbee defaults apply cleanly
+    Object.keys(rangeOpts).forEach((k) => rangeOpts[k] === undefined && delete rangeOpts[k])
+
+    await group.base.view.update()
+    const results = []
+    for await (const node of group.base.view.createReadStream(rangeOpts)) {
+      if (results.length >= limit) break
+      try {
+        results.push({ key: node.key, value: JSON.parse(node.value.toString()) })
+      } catch (err) {
+        console.error('range: failed to parse node:', err.message)
+      }
+    }
+    return results
+  }
+
+  /**
+   * Count entries under a prefix. O(n) scan but capped — useful for
+   * dashboard tiles ("12 tickets sold") without fetching all the values.
+   */
+  async count (appId, prefix) {
+    this._validateAppId(appId)
+    const group = this._syncGroups.get(appId)
+    if (!group) throw new Error('Sync group not found: ' + appId)
+
+    if (prefix !== undefined && (typeof prefix !== 'string' || prefix.length > 1024)) {
+      throw new Error('Invalid prefix')
+    }
+
+    await group.base.view.update()
+    const rangeOpts = {}
+    if (prefix) {
+      rangeOpts.gte = prefix
+      rangeOpts.lt = prefix + '\xff'
+    }
+    let n = 0
+    const MAX = 100_000 // sanity cap
+    for await (const _ of group.base.view.createReadStream(rangeOpts)) {
+      if (++n >= MAX) break
+    }
+    return n
   }
 
   /**
@@ -289,6 +367,110 @@ class PearBridge {
             await b.put('config!merchant', enc({ ...(existing || {}), ...op.data, updated_at: op.timestamp }))
             break
           }
+
+          // ---- Tickets ops (13 handlers) ------------------------------------
+          // Generic — used by any appId. Scoping lives in the caller's appId
+          // so two different events go into two different sync groups.
+          case 'event:create': {
+            const e = op.data
+            if (!e || !e.id) break
+            await b.put(k('events', e.id), enc({ ...e, status: e.status || 'draft', created_at: op.timestamp }))
+            if (e.name) await b.put(k('events-by-name', e.name.toLowerCase(), e.id), enc(e.id))
+            break
+          }
+          case 'event:update': {
+            const { id, updates } = op.data
+            const existing = dec(await b.get(k('events', id)))
+            if (!existing) break
+            const next = { ...existing, ...updates, id, updated_at: op.timestamp }
+            await b.put(k('events', id), enc(next))
+            break
+          }
+          case 'event:publish': {
+            const { id } = op.data
+            const existing = dec(await b.get(k('events', id)))
+            if (!existing) break
+            await b.put(k('events', id), enc({ ...existing, status: 'live', published_at: op.timestamp }))
+            break
+          }
+          case 'event:cancel': {
+            const { id, reason } = op.data
+            const existing = dec(await b.get(k('events', id)))
+            if (!existing) break
+            await b.put(k('events', id), enc({ ...existing, status: 'cancelled', cancel_reason: reason, updated_at: op.timestamp }))
+            break
+          }
+          case 'ticket-type:create': {
+            const t = op.data
+            if (!t || !t.id || !t.event_id) break
+            await b.put(k('ticket-types', t.event_id, t.id), enc({ ...t, created_at: op.timestamp }))
+            break
+          }
+          case 'ticket-type:update': {
+            const { event_id, id, updates } = op.data
+            const existing = dec(await b.get(k('ticket-types', event_id, id)))
+            if (!existing) break
+            await b.put(k('ticket-types', event_id, id), enc({ ...existing, ...updates, updated_at: op.timestamp }))
+            break
+          }
+          case 'ticket:mint': {
+            const t = op.data
+            if (!t || !t.id || !t.event_id) break
+            const full = { ...t, status: t.status || 'issued', minted_at: op.timestamp }
+            await b.put(k('tickets', t.event_id, t.id), enc(full))
+            if (t.holder_pubkey) await b.put(k('tickets-by-holder', t.holder_pubkey, t.id), enc(t.id))
+            break
+          }
+          case 'ticket:transfer': {
+            const { event_id, id, new_holder_pubkey } = op.data
+            const existing = dec(await b.get(k('tickets', event_id, id)))
+            if (!existing) break
+            if (existing.holder_pubkey) {
+              await b.del(k('tickets-by-holder', existing.holder_pubkey, id))
+            }
+            const next = { ...existing, holder_pubkey: new_holder_pubkey, updated_at: op.timestamp }
+            await b.put(k('tickets', event_id, id), enc(next))
+            await b.put(k('tickets-by-holder', new_holder_pubkey, id), enc(id))
+            break
+          }
+          case 'ticket:redeem': {
+            const { event_id, id, redeemed_by } = op.data
+            const existing = dec(await b.get(k('tickets', event_id, id)))
+            if (!existing) break
+            if (existing.status === 'redeemed') break // idempotent — first redeem wins
+            const next = { ...existing, status: 'redeemed', redeemed_at: op.timestamp, redeemed_by }
+            await b.put(k('tickets', event_id, id), enc(next))
+            break
+          }
+          case 'ticket:refund': {
+            const { event_id, id, reason } = op.data
+            const existing = dec(await b.get(k('tickets', event_id, id)))
+            if (!existing) break
+            await b.put(k('tickets', event_id, id), enc({ ...existing, status: 'refunded', refund_reason: reason, updated_at: op.timestamp }))
+            break
+          }
+          case 'ticket:void': {
+            const { event_id, id, reason } = op.data
+            const existing = dec(await b.get(k('tickets', event_id, id)))
+            if (!existing) break
+            await b.put(k('tickets', event_id, id), enc({ ...existing, status: 'void', void_reason: reason, updated_at: op.timestamp }))
+            break
+          }
+          case 'attendee:register': {
+            const a = op.data
+            if (!a || !a.pubkey) break
+            await b.put(k('attendees', a.pubkey), enc({ ...a, registered_at: op.timestamp }))
+            if (a.email) await b.put(k('attendees-by-email', a.email.toLowerCase()), enc(a.pubkey))
+            break
+          }
+          case 'venue:set': {
+            const v = op.data
+            if (!v || !v.event_id) break
+            await b.put(k('venues', v.event_id), enc({ ...v, updated_at: op.timestamp }))
+            break
+          }
+          // -------------------------------------------------------------------
+
           default: {
             // Generic fallback for unknown op types
             if (op.data && op.data.id) {

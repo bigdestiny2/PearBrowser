@@ -26,6 +26,11 @@ settings:
     ENABLE_BITCODE: NO
     SWIFT_STRICT_CONCURRENCY: minimal
 
+packages:
+  BareKit:
+    url: https://github.com/holepunchto/bare-kit-swift
+    branch: main
+
 targets:
   PearBrowser:
     type: application
@@ -39,13 +44,16 @@ targets:
         buildPhase: none
       - path: PearBrowser/Assets.xcassets
       - path: PearBrowser/LaunchScreen.storyboard
+      # The bare-packed worklet bundle. Produce with:
+      #   npm run bundle-backend-native-ios (at repo root)
+      # Output path is backend/dist/backend.ios.bundle; XcodeGen picks it
+      # up here and copies it into the .app's resource folder.
+      - path: ../backend/dist/backend.ios.bundle
+        type: file
+        optional: true
     resources:
       - path: PearBrowser/Assets.xcassets
       - path: PearBrowser/LaunchScreen.storyboard
-      # The bare-packed worklet bundle. Produce with:
-      #   npm run bundle-backend-native-ios
-      # from the repo root. Output lands in backend/dist/backend.ios.bundle
-      # which the build step below copies into the app bundle.
       - path: ../backend/dist/backend.ios.bundle
         optional: true
     settings:
@@ -58,22 +66,20 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
         OTHER_LDFLAGS: "-ObjC"
-    # BareKit dependency is added AFTER you drop in the .xcframework.
-    # See BUILD.md "Linking BareKit" for the exact steps. Keeping it
-    # out of the default project config means `xcodegen generate` and
-    # a clean build succeed in "demo mode" (no worklet) — useful for
-    # UI iteration before you're set up with a BareKit release.
+    # BareKit integration has two parts:
+    #   1. The .xcframework provides the native C/ObjC binary (bare-kit v2.0.2)
+    #   2. The bare-kit-swift SPM package provides the Swift overlay
+    #      (Worklet, IPC classes) that our code imports as `import BareKit`
     #
-    # Once ios-native/PearBrowser/Frameworks/BareKit.xcframework exists,
-    # uncomment the block below and rerun `xcodegen generate`.
-    #
-    # dependencies:
-    #   - framework: PearBrowser/Frameworks/BareKit.xcframework
-    #     embed: true
-    # Do NOT auto-generate Info.plist — the one at PearBrowser/Info.plist is
-    # hand-maintained with URL schemes, ATS exceptions, camera + local
-    # network usage descriptions, and Bonjour services. If we let XcodeGen
-    # regenerate it, those all disappear.
+    # Setup (see BUILD.md):
+    #   - Run `npm run barekit:fetch` at the repo root to download
+    #     prebuilds.zip and place the xcframework in Frameworks/.
+    #   - `xcodegen generate` resolves the SPM package automatically.
+    dependencies:
+      - framework: PearBrowser/Frameworks/BareKit.xcframework
+        embed: true
+      - package: BareKit
+        product: BareKit
 
 schemes:
   PearBrowser:

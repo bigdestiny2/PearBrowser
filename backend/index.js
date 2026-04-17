@@ -358,6 +358,13 @@ rpc.handle(C.CMD_IDENTITY_VALIDATE_PHRASE, async ({ mnemonic } = {}) => {
   return { valid: validateMnemonic(mnemonic || '') }
 })
 
+rpc.handle(C.CMD_IDENTITY_SIGN, async ({ payload } = {}) => {
+  if (payload === undefined || payload === null) throw new Error('payload required')
+  // Accept string (UTF-8) or array-of-bytes from the RN side
+  const msg = typeof payload === 'string' ? payload : Buffer.from(payload)
+  return requireIdentity().sign(msg)
+})
+
 // Also enrich the existing CMD_GET_IDENTITY response with mnemonic hint
 // (without exposing the phrase itself) so the UI can show identity status.
 
@@ -547,7 +554,8 @@ async function boot () {
 
   // Mount direct HTTP bridge (WebView → localhost → Bare, bypasses RN relay)
   const httpBridge = new HttpBridge(pearBridge, swarm, getDriveForProxy, {
-    validateToken: (token) => proxy ? proxy.validateApiToken(token) : null
+    validateToken: (token) => proxy ? proxy.validateApiToken(token) : null,
+    identity: identity // for /api/identity/sign
   })
   proxy.setHttpBridge(httpBridge)
 
