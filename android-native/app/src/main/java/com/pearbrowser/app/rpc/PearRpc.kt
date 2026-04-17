@@ -180,13 +180,22 @@ class PearRpc(
             .jsonObject["valid"]!!.jsonPrimitive.boolean
 
     // ---------- Internal framing ----------
+    //
+    // Wire format matches backend/rpc.js _send():
+    //   [8-char ASCII hex length][JSON body bytes]
+    // Example: "0000002a{...}" for a 42-byte body.
+    //
+    // Event wire shape   : { event: <id>, data: <any> }   (key is `event`, not `evt`)
+    // Response success   : { id, result }
+    // Response error     : { id, error }
 
     private suspend fun sendFramed(bytes: ByteArray) {
         writeLock.withLock {
-            val frame = ByteArray(4 + bytes.size)
-            val buf = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN)
-            buf.putInt(bytes.size)
-            buf.put(bytes)
+            val lengthHex = "%08x".format(bytes.size)
+            val hexBytes = lengthHex.toByteArray(Charsets.US_ASCII)
+            val frame = ByteArray(hexBytes.size + bytes.size)
+            System.arraycopy(hexBytes, 0, frame, 0, hexBytes.size)
+            System.arraycopy(bytes, 0, frame, hexBytes.size, bytes.size)
             ipc.write(frame)
         }
     }
@@ -195,18 +204,19 @@ class PearRpc(
         buffer.write(chunk)
         while (true) {
             val current = buffer.toByteArray()
-            if (current.size < 4) return
-            val len = ByteBuffer.wrap(current, 0, 4).order(ByteOrder.LITTLE_ENDIAN).int
-            if (len < 0 || len > 10_000_000) {
-                Log.e(TAG, "Bad frame length $len; resetting buffer")
+            if (current.size < 8) return
+            val lenHex = String(current, 0, 8, Charsets.US_ASCII)
+            val len = lenHex.toIntOrNull(16)
+            if (len == null || len <= 0 || len > 10_000_000) {
+                Log.e(TAG, "Bad frame length $lenHex; resetting buffer")
                 buffer = ByteArrayOutputStream()
                 return
             }
-            if (current.size < 4 + len) return
-            val payload = current.copyOfRange(4, 4 + len)
+            if (current.size < 8 + len) return
+            val payload = current.copyOfRange(8, 8 + len)
             // Shift remaining
             buffer = ByteArrayOutputStream().apply {
-                write(current, 4 + len, current.size - 4 - len)
+                write(current, 8 + len, current.size - 8 - len)
             }
             handleMessage(payload)
         }
@@ -220,22 +230,22 @@ class PearRpc(
             Log.w(TAG, "Invalid JSON from worklet: ${text.take(200)}", e)
             return
         }
-        // Event?
-        json["evt"]?.jsonPrimitive?.intOrNull?.let { evtId ->
+        // Event: { event: <id>, data: <any> }
+        json["event"]?.jsonPrimitive?.intOrNull?.let { evtId ->
             val data = json["data"] ?: JsonNull
             eventListeners[evtId]?.toList()?.forEach { listener ->
                 try { listener(data) } catch (e: Throwable) { Log.w(TAG, "event listener threw", e) }
             }
             return
         }
-        // Response
+        // Response: { id, result } (success) or { id, error } (failure)
         val id = json["id"]?.jsonPrimitive?.intOrNull ?: return
         val deferred = pending.remove(id) ?: return
-        if (json["ok"]?.jsonPrimitive?.boolean == true) {
-            deferred.complete(json["result"] ?: JsonNull)
+        val error = json["error"]?.jsonPrimitive?.contentOrNull
+        if (error != null) {
+            deferred.completeExceptionally(RuntimeException(error))
         } else {
-            val msg = json["error"]?.jsonPrimitive?.content ?: "RPC error"
-            deferred.completeExceptionally(RuntimeException(msg))
+            deferred.complete(json["result"] ?: JsonNull)
         }
     }
 }

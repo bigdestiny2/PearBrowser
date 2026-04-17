@@ -93,7 +93,11 @@ final class PearWorkletHost: ObservableObject {
             }
         }
         await rpc.on(Evt.ERROR) { payload in
-            if let dict = payload as? [String: Any], let message = dict["message"] as? String {
+            NSLog("[PearWorkletHost] ERROR event: \(payload ?? "nil")")
+            if let dict = payload as? [String: Any] {
+                let message = (dict["message"] as? String)
+                    ?? (dict["error"] as? String)
+                    ?? String(describing: dict)
                 Task { @MainActor in
                     weakSelf.value?.bootMessage = "Error: \(message)"
                     weakSelf.value?.bootStage = "error"

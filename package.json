@@ -15,6 +15,7 @@
     "bundle-all": "npm run bundle-backend && npm run bundle-backend-android",
     "bundle-all-native": "npm run bundle-backend-native-ios && npm run bundle-backend-native-android",
     "barekit:fetch": "node scripts/fetch-barekit.js",
+    "barekit:fetch:addons": "node scripts/fetch-barekit-addons.js",
     "test": "npx tsc --noEmit && node --check backend/index.js backend/hyper-proxy.js backend/http-bridge.js backend/site-manager.js backend/relay-client.js backend/catalog-manager.js backend/app-manager.js backend/pear-bridge.js backend/rpc.js && node --test test/*.test.js"
   },
   "dependencies": {

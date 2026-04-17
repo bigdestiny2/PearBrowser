@@ -9,8 +9,10 @@ DerivedData/
 *.dSYM.zip
 *.dSYM/
 
-# BareKit prebuilt framework — download per BUILD.md, not distributed here
+# Frameworks mirrored from node_modules/react-native-bare-kit by
+# `npm run barekit:fetch:addons` — not distributed in git.
 PearBrowser/Frameworks/BareKit.xcframework/
+PearBrowser/Frameworks/addons/
 
 # Generated worklet bundle
 PearBrowser/backend.ios.bundle

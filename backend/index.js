@@ -470,8 +470,10 @@ async function boot () {
 
   // Derive the Corestore from the user's identity seed so rotating the
   // identity gives a clean store. The seed is 32 bytes — exactly what
-  // Corestore's primaryKey expects.
-  store = new Corestore(storagePath, { primaryKey: identity.getSeed() })
+  // Corestore's primaryKey expects. `unsafe: true` acknowledges that we
+  // know what we're doing (corestore >= 7.x guards the primaryKey path
+  // because a wrong value destroys existing hypercore data).
+  store = new Corestore(storagePath, { primaryKey: identity.getSeed(), unsafe: true })
   console.log('Corestore created, waiting for ready...')
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'corestore-ready', message: 'Storage ready' })
   await store.ready()

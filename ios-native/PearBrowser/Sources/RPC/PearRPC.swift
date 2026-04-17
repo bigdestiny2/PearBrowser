@@ -3,11 +3,14 @@
 //  Actor-based IPC client for the Bare worklet.
 //
 //  Wire format (must match backend/rpc.js, app/lib/rpc.ts, PearRpc.kt):
-//     [4-byte little-endian length][JSON payload]
+//     [8-char ASCII-hex length][JSON payload]
 //
 //       Request  : { id: int, cmd: int, data: any }
-//       Response : { id: int, ok: bool, result?: any, error?: string }
-//       Event    : { evt: int, data: any }
+//       Response : { id: int, result?: any, error?: string }
+//       Event    : { event: int, data: any }
+//
+//  NB: `result` field (not `ok`), `event` field name (not `evt`) —
+//  matches backend/rpc.js _send() exactly.
 //
 //  Phase 3 ticket 2 — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
 
@@ -198,53 +201,72 @@ actor PearRPC {
     }
 
     // MARK: - Framing
+    //
+    // Wire format matches backend/rpc.js _send():
+    //     [8-char ASCII hex length][JSON body bytes]
+    //   e.g. "0000002a{\"event\":100,...}" for a 42-byte body.
+    //
+    // The backend is UTF-8 / string-oriented: it concats the hex length
+    // with the JSON and calls ipc.write(Buffer.from(string)). So our
+    // Swift encode emits hex-as-ASCII too, and decode parses it as ASCII.
 
     private func encodeFrame(_ payload: [String: Any]) throws -> Data {
         let body = try JSONSerialization.data(withJSONObject: payload, options: [.fragmentsAllowed])
+        let hex = String(body.count, radix: 16).padLeft(to: 8, with: "0")
         var frame = Data()
-        var length = UInt32(body.count).littleEndian
-        withUnsafeBytes(of: &length) { frame.append(contentsOf: $0) }
+        frame.append(hex.data(using: .ascii)!)
         frame.append(body)
         return frame
     }
 
     private func handleIncoming(_ chunk: Data) {
         buffer.append(chunk)
-        while buffer.count >= 4 {
-            let lengthData = buffer.prefix(4)
-            let length = lengthData.withUnsafeBytes { ptr -> UInt32 in
-                ptr.load(as: UInt32.self).littleEndian
+        while buffer.count >= 8 {
+            // First 8 ASCII hex chars = body length
+            let lenBytes = buffer.prefix(8)
+            guard let lenHex = String(data: lenBytes, encoding: .ascii),
+                  let length = Int(lenHex, radix: 16) else {
+                NSLog("[PearRPC] Bad frame: length prefix not hex, resetting buffer")
+                buffer.removeAll()
+                return
             }
-            guard length <= 10_000_000 else {
+            guard length > 0, length <= 10_000_000 else {
                 NSLog("[PearRPC] Bad frame length \(length); resetting buffer")
                 buffer.removeAll()
                 return
             }
-            guard buffer.count >= 4 + Int(length) else { return }
-            let payload = buffer[4..<(4 + Int(length))]
-            buffer.removeSubrange(0..<(4 + Int(length)))
+            guard buffer.count >= 8 + length else { return }
+            let payload = buffer[8..<(8 + length)]
+            buffer.removeSubrange(0..<(8 + length))
             handleMessage(Data(payload))
         }
     }
 
     private func handleMessage(_ payload: Data) {
         guard let json = try? JSONSerialization.jsonObject(with: payload, options: [.fragmentsAllowed]) as? [String: Any] else {
-            NSLog("[PearRPC] invalid JSON from worklet")
+            let preview = String(data: payload.prefix(200), encoding: .utf8) ?? "<binary>"
+            NSLog("[PearRPC] invalid JSON from worklet (\(payload.count) bytes): \(preview)")
             return
         }
-        // Event?
-        if let evtId = json["evt"] as? Int {
+        // Event: { event: <id>, data: <any> }
+        if let evtId = json["event"] as? Int {
             let data = json["data"]
             listeners[evtId]?.forEach { $0(data) }
             return
         }
-        // Response?
+        // Response: { id, result } (success) or { id, error } (failure)
         guard let id = json["id"] as? Int, let cont = pending.removeValue(forKey: id) else { return }
-        if (json["ok"] as? Bool) == true {
-            cont.resume(returning: json["result"])
+        if let errorMsg = json["error"] as? String {
+            cont.resume(throwing: RPCError(message: errorMsg))
         } else {
-            let msg = (json["error"] as? String) ?? "RPC error"
-            cont.resume(throwing: RPCError(message: msg))
+            cont.resume(returning: json["result"])
         }
+    }
+}
+
+private extension String {
+    func padLeft(to width: Int, with pad: Character) -> String {
+        if count >= width { return self }
+        return String(repeating: pad, count: width - count) + self
     }
 }

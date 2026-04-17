@@ -8,13 +8,13 @@ Pure Swift + SwiftUI + `BareKit` shell, reusing `backend/` verbatim.
 | Area | Status |
 |---|---|
 | XcodeGen project (`project.yml`) | ✅ iPhone + iPad, iOS 16+ |
-| Swift IPC client (`PearRPC.swift`) | ✅ actor-based async/await |
+| Swift IPC client (`PearRPC.swift`) | ✅ actor-based async/await, 8-char hex length framing |
 | Worklet host (`PearWorkletHost.swift`) | ✅ wires BareKit `Worklet` + `IPC` (AsyncSequence) |
 | Pear bridge injection | ✅ WKScriptMessageHandler path |
 | SwiftUI theme | ✅ matches RN theme exactly |
 | HomeScreen / ExploreScreen / BrowseScreen | ✅ |
-| BareKit.framework linked + app builds | ✅ via SPM + xcframework drop-in |
-| **Worklet boots native addons** | ⚠️ **known blocker** — see "iOS addon linking" below |
+| BareKit.framework + 17 native addons linked | ✅ sourced from `react-native-bare-kit/ios/addons/` |
+| **Worklet boots end-to-end on simulator** | ✅ **green "Connected" dot confirmed on iPhone 17 Pro sim** |
 | Remaining screen ports (More, Bookmarks, Settings, MySites, Editor, QR, TemplatePicker, BackupPhrase, Restore) | ⏳ |
 
 ## Prerequisites
@@ -61,55 +61,42 @@ The build also succeeds **without** `BareKit.xcframework` or the bundle —
 in that case `PearWorkletHost` enters "demo mode" where the UI renders
 but no worklet runs. Useful for UI iteration.
 
-## ⚠️ iOS addon linking — known blocker
+## iOS addon linking — SOLVED
 
 The worklet bundle includes native addons: **sodium-native**, **udx-native**,
 **rocksdb-native**, etc. These are compiled C/C++ modules that the backend
 loads at runtime.
 
-**bare-kit's prebuilt `BareKit.xcframework` does NOT include them.** When
-the worklet's `require('sodium-universal')` runs inside `PearBrowser.app`,
-`bare_runtime__abort()` fires because the addon can't be found.
+**The `react-native-bare-kit` npm package ships all 17 addons pre-built
+as xcframeworks** (produced by its `node ios/link.mjs` postinstall hook
+running `bare-link`). We reuse those directly — saves us from setting up
+our own `bare-link` toolchain.
 
-### Stack trace you'll see
+### How it works
+- `node_modules/react-native-bare-kit/ios/BareKit.xcframework` — the runtime
+- `node_modules/react-native-bare-kit/ios/addons/*.xcframework` — 17 pre-built addons
+
+We copy both into `ios-native/PearBrowser/Frameworks/` and list each in
+`project.yml` as an embedded framework dependency. XcodeGen resolves,
+Xcode embeds them in `PearBrowser.app/Frameworks/`, bare-kit's runtime
+loader finds them via `bare_addon_load_dynamic` at worklet start.
+
+### Refreshing addons after an `npm install`
+The `barekit:fetch:addons` script mirrors the addons from node_modules:
+
+```bash
+npm run barekit:fetch:addons
 ```
-libsystem_c.dylib        abort
-BareKit                  bare_runtime__abort
-BareKit                  js__on_function_call
-JavaScriptCore           JSC::callJSCallbackFunction
-```
 
-### Why this isn't blocking on Android
-Android solves it by having `bare-link` (a Gradle task) pre-process
-`addons.yml` and link each addon as a static library into the
-`bare-kit.so`. The `holepunchto/bare-android` template wires this up
-automatically.
+Run this after `npm install` or `npm update react-native-bare-kit` to
+pick up addon version bumps.
 
-### The fix for iOS (not done yet)
-We need to either:
-
-1. **Build a custom BareKit.xcframework with our addons statically linked.**
-   Follow `holepunchto/bare-kit`'s build instructions with an `addons.yml`
-   listing sodium-native, udx-native, rocksdb-native, bare-fs, etc.
-   Produces an xcframework that's specific to PearBrowser's backend.
-
-2. **Ship addons as separate dynamic libraries.** Use `bare_addon_load_dynamic`
-   (the symbol already exists in the prebuilt framework). Requires each
-   addon to be built as an iOS `.dylib` and embedded in the app's Frameworks
-   dir. Complex — each addon has its own build toolchain.
-
-3. **Prune the backend to not need native addons** for a minimal "browser
-   only" mode. Removes identity signing, encryption, much of the P2P —
-   basically not viable for shipping.
-
-**Recommended path:** Option (1). Estimated 1-2 days with the bare-kit
-build environment set up. Until then, the iOS shell boots fine, the UI
-works, the Explore tab loads the catalog over HTTPS, the BrowseScreen
-renders relay URLs — but `hyper://` P2P content requires the worklet
-which requires the addons.
-
-Tracked in `docs/HOLEPUNCH_ALIGNMENT_PLAN.md` under "iOS addon linking
-follow-up".
+### RPC wire format (important for anyone touching PearRPC.swift)
+The worklet RPC is length-prefixed JSON, but **the length prefix is
+8 ASCII hex characters, not a 4-byte binary integer** (mirrors
+`backend/rpc.js` `_send()`). Both `PearRPC.swift` and `PearRpc.kt`
+follow this format. Event messages use the key `event` (not `evt`);
+responses use `result` (not `ok`).
 
 ## Size budget
 

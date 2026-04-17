@@ -80,6 +80,46 @@ targets:
         embed: true
       - package: BareKit
         product: BareKit
+      # Native addons (17) required by the backend worklet.
+      # Sourced from node_modules/react-native-bare-kit/ios/addons/ —
+      # the same pre-built xcframeworks the RN shell uses. Without these
+      # the worklet aborts inside `bare_runtime__abort` when the bundle
+      # calls require('sodium-universal'), require('udx-native'), etc.
+      # Keep in sync with `npm run barekit:fetch:addons`.
+      - framework: PearBrowser/Frameworks/addons/bare-crypto.1.13.4.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/bare-dns.2.1.4.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/bare-fs.4.6.0.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/bare-inspect.3.1.4.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/bare-os.3.8.7.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/bare-pipe.4.1.5.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/bare-subprocess.5.2.3.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/bare-tcp.2.2.7.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/bare-type.1.1.0.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/bare-url.2.4.0.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/fs-native-extensions.1.4.5.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/quickbit-native.2.4.8.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/rabin-native.2.0.0.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/rocksdb-native.3.15.0.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/simdle-native.1.3.9.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/sodium-native.5.1.0.xcframework
+        embed: true
+      - framework: PearBrowser/Frameworks/addons/udx-native.1.19.2.xcframework
+        embed: true
 
 schemes:
   PearBrowser:
