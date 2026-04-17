@@ -9,7 +9,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View, Text, StyleSheet, StatusBar, Platform,
   ActivityIndicator, TouchableOpacity, NativeModules,
-  Modal, ScrollView,
+  Modal, ScrollView, Alert,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Paths } from 'expo-file-system'
@@ -17,6 +17,7 @@ import { PearRPC } from './lib/rpc'
 import { networkMonitor, NetworkInfo } from './lib/network'
 import { StatusDot } from './components/StatusDot'
 import * as FileSystem from 'expo-file-system'
+import { getSession, saveSession } from './lib/storage'
 
 // @ts-ignore — bare-pack bundles, platform-specific
 import iosBundleImport from '../assets/backend.bundle.mjs'
@@ -62,8 +63,9 @@ export default function App() {
   const [proxyPort, setProxyPort] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [peerCount, setPeerCount] = useState(0)
-  const [activeTab, setActiveTab] = useState<Tab>('home')
-  const [browseUrl, setBrowseUrl] = useState<string | null>(null)
+  const [activeTab, setActiveTabState] = useState<Tab>('home')
+  const [browseUrl, setBrowseUrlState] = useState<string | null>(null)
+  const [sessionRestored, setSessionRestored] = useState(false)
   const [showSites, setShowSites] = useState(false)
   const [showBookmarks, setShowBookmarks] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
@@ -95,6 +97,39 @@ export default function App() {
     ? (proxyPort > 0 ? 'connected' : (Worklet ? 'connecting' : 'http-only'))
     : state === 'error' ? 'offline' : 'connecting'
 
+  // Persist tab changes (throttled — only after initial restore completes)
+  const setActiveTab = useCallback((tab: Tab) => {
+    setActiveTabState(tab)
+    if (sessionRestored) {
+      saveSession({ activeTab: tab }).catch(err => console.warn('[session] save tab failed:', err))
+    }
+  }, [sessionRestored])
+
+  const setBrowseUrl = useCallback((url: string | null) => {
+    setBrowseUrlState(url)
+    if (sessionRestored && url) {
+      saveSession({ lastBrowseUrl: url }).catch(err => console.warn('[session] save url failed:', err))
+    }
+  }, [sessionRestored])
+
+  // Restore session (active tab + last browse URL) on mount
+  useEffect(() => {
+    let cancelled = false
+    getSession()
+      .then(session => {
+        if (cancelled) return
+        if (session.activeTab && session.activeTab !== 'home') {
+          setActiveTabState(session.activeTab)
+        }
+        if (session.lastBrowseUrl) {
+          setBrowseUrlState(session.lastBrowseUrl)
+        }
+      })
+      .catch(err => console.warn('[session] restore failed:', err))
+      .finally(() => { if (!cancelled) setSessionRestored(true) })
+    return () => { cancelled = true }
+  }, [])
+
   // Boot P2P worklet
   // Android: Write bundle to filesystem first to avoid JNI string size limits
   // iOS: Pass bundle inline (works fine)
@@ -125,6 +160,12 @@ export default function App() {
 
         rpc.onPeerCount((count) => {
           if (mounted) setPeerCount(count)
+        })
+
+        rpc.onBootProgress((data) => {
+          if (mounted && data?.message) {
+            setBootProgress(data.message)
+          }
         })
 
         rpc.onError((err) => {
@@ -175,7 +216,10 @@ export default function App() {
     boot()
     return () => {
       mounted = false
-      if (workletRef.current) try { workletRef.current.terminate() } catch {}
+      if (workletRef.current) {
+        try { workletRef.current.terminate() }
+        catch (err) { console.warn('[App] worklet terminate failed:', err) }
+      }
     }
   }, [])
 
@@ -195,9 +239,11 @@ export default function App() {
             publishedSites: status.publishedSites || 0,
           })
         }
-      } catch {}
+      } catch (err) {
+        console.warn('[App] status panel poll failed:', err)
+      }
     }
-    
+
     if (showStatusPanel) {
       fetchDetails()
       const interval = setInterval(fetchDetails, 3000)
@@ -228,7 +274,9 @@ export default function App() {
               console.log('DHT disconnected, attempting reconnect...')
               // Could trigger worklet restart here
             }
-          } catch {}
+          } catch (err) {
+            console.warn('[App] DHT reconnect check failed:', err)
+          }
         }
       }
     })
@@ -242,7 +290,7 @@ export default function App() {
   const handleNavigate = useCallback((url: string) => {
     setBrowseUrl(url)
     setActiveTab('browse')
-  }, [])
+  }, [setBrowseUrl, setActiveTab])
 
   // Track when browse tab was first opened to keep WebView mounted
   useEffect(() => {
@@ -253,24 +301,38 @@ export default function App() {
 
   // Launch saved site by ID (from home screen)
   const handleLaunchApp = useCallback(async (appId: string) => {
-    if (!rpcRef.current) return
+    if (!rpcRef.current) {
+      console.warn('[App] launchApp: no RPC available')
+      return
+    }
     try {
       const result = await rpcRef.current.launchApp(appId)
-      setBrowseUrl(`hyper://${result.appId}`)
+      if (result.driveKey) {
+        setBrowseUrl(`hyper://${result.driveKey}`)
+      } else if (result.localUrl) {
+        setBrowseUrl(result.localUrl)
+      }
       setActiveTab('browse')
-    } catch {}
-  }, [])
+    } catch (err: any) {
+      console.warn('[App] launchApp failed:', err)
+      Alert.alert('Launch failed', err?.message || 'Could not launch this site.')
+    }
+  }, [setActiveTab, setBrowseUrl])
 
   // Launch app by drive key or URL (from explore directory)
   const handleLaunchByKey = useCallback((keyOrUrl: string) => {
     if (keyOrUrl.startsWith('http')) {
-      // Direct HTTP URL from relay — load in WebView directly
-      setBrowseUrl(keyOrUrl)
+      const match = keyOrUrl.match(/\/v1\/hyper\/([a-f0-9]{64})/i)
+      if (match) {
+        setBrowseUrl(`hyper://${match[1]}`)
+      } else {
+        setBrowseUrl(keyOrUrl)
+      }
     } else {
       setBrowseUrl(`hyper://${keyOrUrl}`)
     }
     setActiveTab('browse')
-  }, [])
+  }, [setBrowseUrl, setActiveTab])
 
   // --- Render ---
 
@@ -481,7 +543,10 @@ export default function App() {
                 try {
                   const result = await rpcRef.current.createSite(pendingSiteName)
                   setEditingSiteId(result.siteId)
-                } catch {}
+                } catch (err: any) {
+                  console.warn('[App] createSite failed:', err)
+                  Alert.alert('Could not create site', err?.message || 'An unknown error occurred.')
+                }
               }
             }}
             onBack={() => setShowTemplatePicker(false)}
@@ -518,6 +583,7 @@ export default function App() {
           label="Browse"
           icon="<>"
           active={activeTab === 'browse'}
+          onPress={() => setActiveTab('browse')}
           badge={isOffline ? '!' : undefined}
         />
         <TabButton

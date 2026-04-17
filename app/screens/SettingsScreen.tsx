@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  TextInput, Alert, Switch,
+  TextInput, Alert, Switch, Platform,
 } from 'react-native'
 import { colors } from '../lib/theme'
-import { getSettings, updateSettings, clearAllData, type Settings } from '../lib/storage'
+import { getSettings, updateSettings, clearAllData, addCatalog, removeCatalog, type Settings } from '../lib/storage'
 import { StorageMeter } from '../components/StorageMeter'
 import { PearRPC } from '../lib/rpc'
 
@@ -41,9 +41,12 @@ export function SettingsScreen({ onBack, rpc }: Props) {
             percent: status.storagePercent || 0
           })
         }
-      } catch {}
+      } catch (err) {
+        // Background poll — log only, don't surface (RPC may be momentarily unavailable)
+        console.warn('[Settings] storage poll failed:', err)
+      }
     }
-    
+
     fetchStorage()
     // Refresh every 30 seconds
     const interval = setInterval(fetchStorage, 30000)
@@ -158,17 +161,102 @@ export function SettingsScreen({ onBack, rpc }: Props) {
         <Text style={styles.sectionTitle}>RELAY</Text>
         <View style={styles.card}>
           <View style={styles.settingRow}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.settingLabel}>Primary Relay</Text>
               <Text style={styles.settingValue}>{settings.catalogUrl}</Text>
             </View>
           </View>
           <View style={styles.settingRow}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.settingLabel}>Hybrid Fetch</Text>
               <Text style={styles.settingHint}>Relay HTTP (fast) + P2P Hyperswarm (fallback)</Text>
             </View>
             <Switch value={true} disabled trackColor={{ true: colors.accent }} />
+          </View>
+        </View>
+
+        {/* Catalog list */}
+        <Text style={styles.sectionTitle}>KNOWN CATALOGS</Text>
+        <View style={styles.card}>
+          {settings.catalogList.length === 0 && (
+            <Text style={styles.settingHint}>No catalogs configured.</Text>
+          )}
+          {settings.catalogList.map((url) => {
+            const isPrimary = url === settings.catalogUrl
+            return (
+              <View key={url} style={styles.settingRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingValue} numberOfLines={1} ellipsizeMode="middle">
+                    {url}
+                  </Text>
+                  {isPrimary && <Text style={[styles.settingHint, { color: colors.accent }]}>Primary</Text>}
+                </View>
+                {!isPrimary && (
+                  <TouchableOpacity
+                    onPress={async () => {
+                      try {
+                        const next = await updateSettings({ catalogUrl: url })
+                        setSettings(next)
+                        setCatalogInput(url)
+                      } catch (err: any) {
+                        Alert.alert('Error', err?.message || 'Could not switch primary catalog.')
+                      }
+                    }}
+                    style={{ paddingHorizontal: 8, paddingVertical: 4, marginRight: 4 }}
+                  >
+                    <Text style={{ color: colors.accent, fontSize: 12 }}>Use</Text>
+                  </TouchableOpacity>
+                )}
+                {settings.catalogList.length > 1 && (
+                  <TouchableOpacity
+                    onPress={async () => {
+                      try {
+                        const next = await removeCatalog(url)
+                        setSettings(next)
+                        setCatalogInput(next.catalogUrl)
+                      } catch (err: any) {
+                        Alert.alert('Error', err?.message || 'Could not remove catalog.')
+                      }
+                    }}
+                    style={{ paddingHorizontal: 8, paddingVertical: 4 }}
+                  >
+                    <Text style={{ color: colors.error, fontSize: 12 }}>Remove</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )
+          })}
+          <View style={styles.inputRow}>
+            <TextInput
+              style={styles.input}
+              value={catalogInput}
+              onChangeText={setCatalogInput}
+              placeholder="https://relay.example.com"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              onPress={async () => {
+                const url = catalogInput.trim()
+                if (!url) return
+                if (!/^https?:\/\//.test(url) && !/^[0-9a-f]{52,64}$/i.test(url)) {
+                  Alert.alert('Invalid URL', 'Enter an https:// URL or a hyper:// drive key.')
+                  return
+                }
+                try {
+                  const next = await addCatalog(url)
+                  setSettings(next)
+                  setCatalogInput('')
+                  Alert.alert('Catalog Added', 'Saved to your catalog list.')
+                } catch (err: any) {
+                  Alert.alert('Error', err?.message || 'Could not add catalog.')
+                }
+              }}
+              style={styles.saveBtn}
+            >
+              <Text style={styles.saveBtnText}>Add</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -185,7 +273,10 @@ export function SettingsScreen({ onBack, rpc }: Props) {
         <View style={styles.card}>
           <SettingInfo label="Version" value="0.1.0" />
           <SettingInfo label="Runtime" value="Bare Kit + Hyperswarm" />
-          <SettingInfo label="Platform" value="iOS (React Native)" />
+          <SettingInfo
+            label="Platform"
+            value={`${Platform.OS === 'ios' ? 'iOS' : Platform.OS === 'android' ? 'Android' : Platform.OS} (React Native ${Platform.Version ?? ''})`}
+          />
           <SettingInfo label="Bridge" value="Direct HTTP (localhost)" />
         </View>
       </ScrollView>

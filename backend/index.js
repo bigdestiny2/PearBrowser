@@ -51,6 +51,9 @@ rpc.handle(C.CMD_NAVIGATE, async (data) => {
   const parsed = new URL(url)
   const key = parsed.hostname
   const path = parsed.pathname || '/'
+  const apiToken = /^[0-9a-f]{64}$/i.test(key) && proxy?.issueApiToken
+    ? proxy.issueApiToken(key)
+    : null
 
   // Start loading the drive in the background — don't wait for sync.
   // The proxy will handle waiting for content when WebView requests it.
@@ -62,7 +65,8 @@ rpc.handle(C.CMD_NAVIGATE, async (data) => {
   return {
     localUrl: `http://127.0.0.1:${proxy.port}/hyper/${key}${path}${parsed.search || ''}`,
     key,
-    path
+    path,
+    apiToken
   }
 })
 
@@ -82,6 +86,12 @@ rpc.handle(C.CMD_GET_STATUS, async () => {
     storageUsed: storageSize,
     storageLimit: STORAGE_LIMIT,
     storagePercent: Math.round((storageSize / STORAGE_LIMIT) * 100)
+  }
+})
+
+rpc.handle(C.CMD_GET_IDENTITY, async () => {
+  return {
+    publicKey: swarm ? swarm.keyPair.publicKey.toString('hex') : null
   }
 })
 
@@ -114,7 +124,9 @@ rpc.handle(C.CMD_LAUNCH_APP, async (data) => {
   return {
     localUrl: `http://127.0.0.1:${proxy.port}/app/${app.driveKey}/index.html`,
     appId: data.id,
-    name: app.name
+    name: app.name,
+    driveKey: app.driveKey,
+    apiToken: proxy?.issueApiToken ? proxy.issueApiToken(app.driveKey) : null
   }
 })
 
@@ -342,9 +354,7 @@ async function boot () {
     const raw = fs.readFileSync(stateFile, 'utf-8')
     const data = safeJSONParse(raw)
     if (data.installedApps) appManager.import(data.installedApps)
-    if (data.sites) {
-      // Sites need their drives reopened — handled by siteManager.import() in future
-    }
+    if (data.sites) await siteManager.import(data.sites)
   } catch (err) {
     // No saved state yet — first run
     if (err.code !== 'ENOENT') {
@@ -365,7 +375,9 @@ async function boot () {
   }, relayClient)
 
   // Mount direct HTTP bridge (WebView → localhost → Bare, bypasses RN relay)
-  const httpBridge = new HttpBridge(pearBridge, swarm, getDriveForProxy)
+  const httpBridge = new HttpBridge(pearBridge, swarm, getDriveForProxy, {
+    validateToken: (token) => proxy ? proxy.validateApiToken(token) : null
+  })
   proxy.setHttpBridge(httpBridge)
 
   console.log('Starting HTTP proxy...')

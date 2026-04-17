@@ -18,6 +18,7 @@ export const CMD = {
   DELETE_SITE: 25,
   LOAD_TEMPLATE: 26,
   CLEAR_CACHE: 30,
+  GET_IDENTITY: 31,
   BRIDGE: 200,
   STOP: 99,
 } as const

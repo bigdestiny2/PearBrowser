@@ -27,6 +27,7 @@ export function MySitesScreen({ rpc, onEditSite, onPreviewSite, onCreateNew }: P
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     loadSites()
@@ -34,10 +35,14 @@ export function MySitesScreen({ rpc, onEditSite, onPreviewSite, onCreateNew }: P
 
   const loadSites = useCallback(async () => {
     if (!rpc) { setLoading(false); return }
+    setLoadError(null)
     try {
       const list = await rpc.listSites()
       setSites(list)
-    } catch {}
+    } catch (err: any) {
+      console.warn('[MySites] listSites failed:', err)
+      setLoadError(err?.message || 'Could not load your sites.')
+    }
     setLoading(false)
   }, [rpc])
 
@@ -79,7 +84,9 @@ export function MySitesScreen({ rpc, onEditSite, onPreviewSite, onCreateNew }: P
         message: `Check out my P2P site: ${site.url}`,
         url: site.url,
       })
-    } catch {}
+    } catch (err) {
+      console.warn('[MySites] share dismissed or failed:', err)
+    }
   }, [])
 
   const handleDelete = useCallback(async (siteId: string, name: string) => {
@@ -92,7 +99,10 @@ export function MySitesScreen({ rpc, onEditSite, onPreviewSite, onCreateNew }: P
           try {
             await rpc.deleteSite(siteId)
             await loadSites()
-          } catch {}
+          } catch (err: any) {
+            console.warn('[MySites] deleteSite failed:', err)
+            Alert.alert('Delete failed', err?.message || 'Could not delete the site.')
+          }
         }
       }
     ])
@@ -136,6 +146,21 @@ export function MySitesScreen({ rpc, onEditSite, onPreviewSite, onCreateNew }: P
       </View>
 
       {loading && <ActivityIndicator style={{ marginTop: 40 }} color={colors.accent} />}
+
+      {!loading && loadError && (
+        <View style={{ backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 16 }}>
+          <Text style={{ color: colors.error, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
+            Could not load sites
+          </Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 10 }}>{loadError}</Text>
+          <TouchableOpacity
+            onPress={loadSites}
+            style={{ alignSelf: 'flex-start', backgroundColor: colors.surfaceElevated, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}
+          >
+            <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '500' }}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Site list */}
       {sites.map((site) => (

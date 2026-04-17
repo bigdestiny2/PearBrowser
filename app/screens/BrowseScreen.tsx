@@ -15,9 +15,23 @@ type Props = {
   rpc: PearRPC
   proxyPort: number
   peerCount: number
-  status: 'connected' | 'connecting' | 'offline'
+  status: 'connected' | 'connecting' | 'offline' | 'http-only' | 'error'
   initialUrl?: string | null
   isOffline?: boolean
+}
+
+function isTrustedRelayAppUrl (url: string) {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.toLowerCase()
+    const isTrustedRelay = host === 'p2phiverelay.xyz' || host.endsWith('.p2phiverelay.xyz')
+    return (parsed.protocol === 'https:' || parsed.protocol === 'http:') &&
+      parsed.pathname.includes('/v1/hyper/')
+      ? isTrustedRelay || host === '127.0.0.1' || host === 'localhost'
+      : false
+  } catch {
+    return false
+  }
 }
 
 export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl, isOffline }: Props) {
@@ -27,6 +41,7 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
   const [inputFocused, setInputFocused] = useState(false)
   const [loading, setLoading] = useState(false)
   const [webViewUrl, setWebViewUrl] = useState<string | null>(null)
+  const [bridgeToken, setBridgeToken] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Navigate on initial URL
@@ -38,15 +53,22 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
     setLoading(true)
     setError(null)
     setCurrentUrl(url)
+    setBridgeToken(null)
 
-    // Direct HTTP/HTTPS URLs (from relay gateway) — load directly in WebView
+    // Only allow trusted relay app URLs in-app; everything else opens externally.
     if (url.startsWith('http://') || url.startsWith('https://')) {
-      setWebViewUrl(url)
+      if (isTrustedRelayAppUrl(url)) {
+        setWebViewUrl(url)
+      } else {
+        setLoading(false)
+        Linking.openURL(url)
+      }
       return
     }
 
     // hyper:// URLs — route through the worklet proxy
     if (!url.startsWith('hyper://')) {
+      setLoading(false)
       Linking.openURL(url)
       return
     }
@@ -64,6 +86,7 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
         setLoading(false)
         return
       }
+      setBridgeToken(result.apiToken || null)
       setWebViewUrl(result.localUrl)
     } catch (err: any) {
       setError(err.message)
@@ -102,10 +125,7 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
     // Allow proxy URLs
     if (url.startsWith(`http://127.0.0.1:${proxyPort}`)) return true
     if (url.startsWith(`http://localhost:${proxyPort}`)) return true
-    // Allow relay gateway URLs (apps served from relay HTTP)
-    if (url.startsWith('http://127.0.0.1:9') || url.startsWith('http://localhost:9')) return true
-    if (url.includes('p2phiverelay.xyz')) return true
-    if (url.includes('/v1/hyper/')) return true
+    if (isTrustedRelayAppUrl(url)) return true
     if (url.startsWith('hyper://')) { handleNavigate(url); return false }
     if (url.startsWith('http://') || url.startsWith('https://')) { Linking.openURL(url); return false }
     return true
@@ -133,6 +153,13 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
     ? currentUrl.slice(0, 20) + '...' + currentUrl.slice(-12)
     : currentUrl
 
+  const shouldInjectBridge = !!bridgeToken && (
+    webViewUrl?.startsWith(`http://127.0.0.1:${proxyPort}/`) ||
+    webViewUrl?.startsWith(`http://localhost:${proxyPort}/`) ||
+    isTrustedRelayAppUrl(webViewUrl || '')
+  )
+  const bridgeScript = shouldInjectBridge ? createBridgeScript(proxyPort, bridgeToken || '') : 'true;'
+
   return (
     <View style={styles.container}>
       <OfflineIndicator 
@@ -149,8 +176,8 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
           onNavigationStateChange={handleWebViewNav}
           onShouldStartLoadWithRequest={handleShouldLoad}
           onMessage={handleBridgeMessage}
-          injectedJavaScriptBeforeContentLoaded={createBridgeScript(proxyPort)}
-          injectedJavaScript={createBridgeScript(proxyPort)}
+          injectedJavaScriptBeforeContentLoaded={bridgeScript}
+          injectedJavaScript={bridgeScript}
           allowsBackForwardNavigationGestures
           javaScriptEnabled
           domStorageEnabled

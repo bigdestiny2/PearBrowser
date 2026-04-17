@@ -10,28 +10,33 @@
  * The port is injected by React Native when starting the WebView.
  */
 
-export function createBridgeScript(port: number): string {
+export function createBridgeScript(port: number, apiToken = ''): string {
   return `
 (function() {
   if (window.__pearBridgeInjected) return;
   window.__pearBridgeInjected = true;
 
   var PORT = ${port};
+  var TOKEN = ${JSON.stringify(apiToken)};
   var BASE = 'http://127.0.0.1:' + PORT;
 
   // --- HTTP helpers ---
 
   function apiGet(path) {
-    return fetch(BASE + path).then(function(r) {
+    if (!TOKEN) return Promise.reject(new Error('Bridge unauthorized for this page'));
+    return fetch(BASE + path, {
+      headers: { 'X-Pear-Token': TOKEN }
+    }).then(function(r) {
       if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || 'API error') });
       return r.json();
     });
   }
 
   function apiPost(path, body) {
+    if (!TOKEN) return Promise.reject(new Error('Bridge unauthorized for this page'));
     return fetch(BASE + path, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Pear-Token': TOKEN },
       body: JSON.stringify(body)
     }).then(function(r) {
       if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || 'API error') });
@@ -231,4 +236,4 @@ export function createBridgeScript(port: number): string {
 }
 
 // Legacy export for backward compatibility
-export const BRIDGE_INJECT_JS = createBridgeScript(0);
+export const BRIDGE_INJECT_JS = createBridgeScript(0, '');

@@ -348,6 +348,38 @@ blockquote { border-left: 3px solid var(--primary); padding-left: 16px; color: #
     return out
   }
 
+  /**
+   * Import previously persisted sites and reopen their Hyperdrives.
+   */
+  async import (data) {
+    if (!data || typeof data !== 'object') return
+
+    for (const [siteId, info] of Object.entries(data)) {
+      try {
+        const keyHex = typeof info?.keyHex === 'string' ? info.keyHex : ''
+        if (!/^[0-9a-f]{64}$/i.test(keyHex)) continue
+
+        const drive = new Hyperdrive(this.store, Buffer.from(keyHex, 'hex'))
+        await drive.ready()
+
+        const published = !!info.published
+        if (published) {
+          this.swarm.join(drive.discoveryKey, { server: true, client: false })
+        }
+
+        this.sites.set(siteId, {
+          drive,
+          keyHex,
+          name: this._validateSiteName(info.name || 'My Site'),
+          published,
+          createdAt: typeof info.createdAt === 'number' ? info.createdAt : Date.now()
+        })
+      } catch (err) {
+        console.error('Failed to restore site:', siteId, err.message)
+      }
+    }
+  }
+
   async close () {
     for (const [, site] of this.sites) {
       if (site.published) {

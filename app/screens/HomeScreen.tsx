@@ -12,7 +12,7 @@ import type { PearRPC } from '../lib/rpc'
 type Props = {
   rpc: PearRPC
   peerCount: number
-  status: 'connected' | 'connecting' | 'offline'
+  status: 'connected' | 'connecting' | 'offline' | 'http-only' | 'error'
   onNavigate: (url: string) => void
   onOpenQR?: () => void
 }

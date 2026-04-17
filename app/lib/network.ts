@@ -8,11 +8,12 @@
 import { Platform } from 'react-native'
 
 // Try to import NetInfo, with graceful fallback if not installed
+let NetInfo: any
 try {
-  var NetInfo = require('@react-native-community/netinfo').default
+  NetInfo = require('@react-native-community/netinfo').default
 } catch {
   // Fallback if not installed
-  var NetInfo = {
+  NetInfo = {
     addEventListener: () => () => {},
     fetch: async () => ({ isConnected: true, type: 'unknown', details: {} })
   }
@@ -37,7 +38,7 @@ class NetworkMonitor {
     
     if (this.unsubscribe) return
     
-    this.unsubscribe = NetInfo.addEventListener(state => {
+    this.unsubscribe = NetInfo.addEventListener((state: any) => {
       const info: NetworkInfo = {
         isConnected: state.isConnected ?? false,
         isWifi: state.type === 'wifi',

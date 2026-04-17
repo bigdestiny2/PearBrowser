@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react'
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert,
-  TextInput, Clipboard,
+  TextInput, Clipboard, Platform,
 } from 'react-native'
 import { colors } from '../lib/theme'
 import type { PearRPC } from '../lib/rpc'
+import { addCatalog } from '../lib/storage'
 
 type Props = {
   rpc: PearRPC | null
   peerCount: number
   proxyPort?: number
-  status: 'connected' | 'connecting' | 'offline'
+  status: 'connected' | 'connecting' | 'offline' | 'http-only' | 'error'
   onNavigateToSites: () => void
   onNavigateToBookmarks: () => void
   onNavigateToHistory: () => void
@@ -60,7 +61,9 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
             publishedSites: status.publishedSites || 0,
           })
         }
-      } catch {}
+      } catch (err) {
+        console.warn('[MoreScreen] status poll failed:', err)
+      }
     }
     
     fetchDetails()
@@ -89,20 +92,22 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
   }
 
   const handleShowIdentity = async () => {
-    if (!rpc) return
+    if (!rpc) {
+      Alert.alert('Identity unavailable', 'P2P engine not connected.')
+      return
+    }
     try {
-      const s = await rpc.getStatus()
-      // The identity is the swarm keypair public key — we don't have
-      // a direct RPC for this yet, so use the proxy port to query the HTTP bridge
-      if (proxyPort) {
-        try {
-          const res = await fetch(`http://127.0.0.1:${proxyPort}/api/identity`)
-          const data = await res.json()
-          setPublicKey(data.publicKey)
-          setShowIdentity(true)
-        } catch {}
+      const identity = await rpc.getIdentity()
+      if (identity?.publicKey) {
+        setPublicKey(identity.publicKey)
+        setShowIdentity(true)
+      } else {
+        Alert.alert('Identity unavailable', 'No public key returned from the engine.')
       }
-    } catch {}
+    } catch (err: any) {
+      console.warn('[MoreScreen] getIdentity failed:', err)
+      Alert.alert('Identity error', err?.message || 'Could not fetch device public key.')
+    }
   }
 
   const handleCopyKey = () => {
@@ -112,24 +117,54 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
     }
   }
 
-  const handleAddCatalog = () => {
-    Alert.prompt(
-      'Add Catalog',
-      'Enter the URL of a HiveRelay catalog:',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Add',
-          onPress: (url) => {
-            if (url) {
-              Alert.alert('Catalog Added', `Added: ${url}\n\nSwitch to the Apps tab and tap Load to browse this catalog.`)
-            }
-          }
+  const handleAddCatalog = async () => {
+    const save = async (url: string) => {
+      const trimmed = url.trim()
+      if (!trimmed) return
+      // Validate
+      if (!/^https?:\/\//.test(trimmed) && !/^[0-9a-f]{52,64}$/i.test(trimmed)) {
+        Alert.alert('Invalid URL', 'Enter an https:// URL or a hyper:// drive key.')
+        return
+      }
+      try {
+        await addCatalog(trimmed)
+        Alert.alert('Catalog Added', `Added: ${trimmed}\n\nOpen Explore and tap the directory selector to switch catalogs.`)
+      } catch (err: any) {
+        console.warn('[MoreScreen] addCatalog failed:', err)
+        Alert.alert('Error', err?.message || 'Could not save catalog.')
+      }
+    }
+
+    if (Platform.OS === 'ios' && Alert.prompt) {
+      Alert.prompt(
+        'Add Catalog',
+        'Enter a HiveRelay URL or hyper:// drive key:',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Add', onPress: (url?: string) => url && save(url) },
+        ],
+        'plain-text',
+        'https://relay.example.com',
+      )
+    } else {
+      // Android: no Alert.prompt — copy from clipboard as a workable fallback
+      try {
+        const clip = await Clipboard.getString()
+        if (clip && /^https?:\/\//.test(clip)) {
+          Alert.alert('Add Catalog', `Add this URL from clipboard?\n\n${clip}`, [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Add', onPress: () => save(clip) },
+          ])
+        } else {
+          Alert.alert(
+            'Add Catalog',
+            'Copy a catalog URL (https://relay.example.com) to your clipboard first, then tap Add Catalog again.',
+          )
         }
-      ],
-      'plain-text',
-      'https://relay.example.com'
-    )
+      } catch (err) {
+        Alert.alert('Add Catalog', 'Copy a catalog URL to your clipboard, then tap this again.')
+      }
+    }
   }
 
   // Format bytes to human readable

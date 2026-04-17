@@ -9,6 +9,7 @@
  */
 
 const http = require('bare-http1')
+const crypto = require('bare-crypto')
 
 const USER_FRIENDLY_ERRORS = {
   'Invalid drive key': 'This link appears to be broken or incomplete',
@@ -33,6 +34,17 @@ function getUserFriendlyError(technicalError) {
     }
   }
   return 'Something went wrong. Please try again.'
+}
+
+function isLoopbackOrigin (origin) {
+  if (typeof origin !== 'string') return false
+  try {
+    const parsed = new URL(origin)
+    return parsed.protocol === 'http:' &&
+      (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost')
+  } catch {
+    return false
+  }
 }
 
 const CONTENT_TYPES = {
@@ -102,6 +114,8 @@ class HyperProxy {
     this._cacheMaxSize = 50 * 1024 * 1024 // 50MB
     this._cacheCurrentSize = 0
     this._cacheStats = { hits: 0, misses: 0 }
+    this._apiTokens = new Map() // token -> { driveKeyHex, issuedAt }
+    this._apiTokenTtlMs = 10 * 60 * 1000 // 10 minutes
   }
 
   setHttpBridge (bridge) {
@@ -128,26 +142,26 @@ class HyperProxy {
   }
 
   async _handle (req, res) {
-    // Validate origin - only allow localhost
+    // Validate origin - only allow strict loopback origins
     const origin = req.headers.origin
-    if (origin && !origin.startsWith('http://localhost') && !origin.startsWith('http://127.0.0.1')) {
+    if (origin && !isLoopbackOrigin(origin)) {
       res.statusCode = 403
       res.setHeader('Content-Type', 'text/plain')
       return res.end('Invalid origin: only localhost is allowed')
     }
 
     // Set CORS headers for valid origins
-    res.setHeader('Access-Control-Allow-Origin', origin || 'http://localhost')
+    res.setHeader('Access-Control-Allow-Origin', origin || 'http://127.0.0.1')
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Pear-Token')
 
     // CORS preflight handler
     if (req.method === 'OPTIONS') {
-      if (origin && !origin.startsWith('http://localhost') && !origin.startsWith('http://127.0.0.1')) {
+      if (origin && !isLoopbackOrigin(origin)) {
         res.statusCode = 403
         return res.end('Invalid origin')
       }
-      res.setHeader('Access-Control-Allow-Origin', origin || 'http://localhost')
+      res.setHeader('Access-Control-Allow-Origin', origin || 'http://127.0.0.1')
       res.statusCode = 204
       return res.end()
     }
@@ -503,6 +517,33 @@ class HyperProxy {
     this._cacheCurrentSize = 0
     this._cacheStats.hits = 0
     this._cacheStats.misses = 0
+  }
+
+  issueApiToken (driveKeyHex) {
+    if (!isValidDriveKey(driveKeyHex)) {
+      throw new Error('Invalid drive key format')
+    }
+    this._cleanupExpiredApiTokens()
+    const token = crypto.randomBytes(32).toString('hex')
+    this._apiTokens.set(token, { driveKeyHex, issuedAt: Date.now() })
+    return token
+  }
+
+  validateApiToken (token) {
+    if (typeof token !== 'string' || token.length < 32) return null
+    this._cleanupExpiredApiTokens()
+    const entry = this._apiTokens.get(token)
+    if (!entry) return null
+    return entry.driveKeyHex
+  }
+
+  _cleanupExpiredApiTokens () {
+    const now = Date.now()
+    for (const [token, entry] of this._apiTokens) {
+      if (now - entry.issuedAt > this._apiTokenTtlMs) {
+        this._apiTokens.delete(token)
+      }
+    }
   }
 
   async _serveDirectoryListing (res, drive, keyHex, dirPath) {

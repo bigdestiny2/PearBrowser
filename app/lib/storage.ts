@@ -27,9 +27,15 @@ export type Tab = {
 
 export type Settings = {
   catalogUrl: string
+  catalogList: string[]
   theme: 'dark' | 'light'
   defaultTab: 'home' | 'store' | 'browse' | 'more'
   privateMode: boolean
+}
+
+export type SessionState = {
+  activeTab: 'home' | 'explore' | 'browse' | 'more'
+  lastBrowseUrl: string | null
 }
 
 const KEYS = {
@@ -37,6 +43,7 @@ const KEYS = {
   HISTORY: 'pearbrowser_history',
   SETTINGS: 'pearbrowser_settings',
   TABS: 'pearbrowser_tabs',
+  SESSION: 'pearbrowser_session',
 }
 
 const MAX_HISTORY = 200
@@ -93,6 +100,7 @@ export async function clearHistory(): Promise<void> {
 
 const DEFAULT_SETTINGS: Settings = {
   catalogUrl: 'https://relay-us.p2phiverelay.xyz',
+  catalogList: ['https://relay-us.p2phiverelay.xyz', 'https://relay-sg.p2phiverelay.xyz'],
   theme: 'dark',
   defaultTab: 'home',
   privateMode: false,
@@ -125,8 +133,57 @@ export async function saveTabs(tabs: Tab[]): Promise<void> {
   await AsyncStorage.setItem(KEYS.TABS, JSON.stringify(tabs))
 }
 
+// --- Catalog list (multiple Explore directories) ---
+
+export async function addCatalog(url: string): Promise<Settings> {
+  const settings = await getSettings()
+  const clean = url.trim()
+  if (!clean) return settings
+  // Normalize (strip trailing slash)
+  const normalized = clean.replace(/\/+$/, '')
+  // De-dupe
+  if (settings.catalogList.includes(normalized)) return settings
+  const next = [...settings.catalogList, normalized]
+  return updateSettings({ catalogList: next })
+}
+
+export async function removeCatalog(url: string): Promise<Settings> {
+  const settings = await getSettings()
+  const next = settings.catalogList.filter(u => u !== url)
+  // Ensure at least one catalog remains
+  const finalList = next.length > 0 ? next : DEFAULT_SETTINGS.catalogList
+  // If we just deleted the primary, fall back to first remaining
+  const updates: Partial<Settings> = { catalogList: finalList }
+  if (settings.catalogUrl === url) updates.catalogUrl = finalList[0]
+  return updateSettings(updates)
+}
+
+// --- Session state (survives restart) ---
+
+const DEFAULT_SESSION: SessionState = {
+  activeTab: 'home',
+  lastBrowseUrl: null,
+}
+
+export async function getSession(): Promise<SessionState> {
+  try {
+    const raw = await AsyncStorage.getItem(KEYS.SESSION)
+    return raw ? { ...DEFAULT_SESSION, ...JSON.parse(raw) } : DEFAULT_SESSION
+  } catch { return DEFAULT_SESSION }
+}
+
+export async function saveSession(state: Partial<SessionState>): Promise<void> {
+  try {
+    const current = await getSession()
+    const next = { ...current, ...state }
+    await AsyncStorage.setItem(KEYS.SESSION, JSON.stringify(next))
+  } catch (err) {
+    console.warn('[storage] saveSession failed:', err)
+  }
+}
+
 // --- Clear all ---
 
 export async function clearAllData(): Promise<void> {
-  await AsyncStorage.multiRemove([KEYS.BOOKMARKS, KEYS.HISTORY, KEYS.SETTINGS, KEYS.TABS])
+  await AsyncStorage.multiRemove([KEYS.BOOKMARKS, KEYS.HISTORY, KEYS.SETTINGS, KEYS.TABS, KEYS.SESSION])
 }

@@ -5,6 +5,7 @@ import {
 } from 'react-native'
 import { colors } from '../lib/theme'
 import { SiteCard } from '../components/SiteCard'
+import { getSettings } from '../lib/storage'
 import type { PearRPC } from '../lib/rpc'
 
 type SiteInfo = {
@@ -28,12 +29,10 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (directoryUrl) handleLoadDirectory()
-  }, [])
+  const [lastLoadSource, setLastLoadSource] = useState<string | null>(null)
 
-  const handleLoadDirectory = useCallback(async () => {
-    const url = directoryUrl.trim()
+  const handleLoadDirectory = useCallback(async (overrideUrl?: string) => {
+    const url = (overrideUrl ?? directoryUrl).trim()
     if (!url) return
     setLoading(true)
     setError(null)
@@ -41,6 +40,9 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
       if (url.startsWith('http://') || url.startsWith('https://')) {
         const catalogUrl = url.endsWith('/catalog.json') ? url : url + '/catalog.json'
         const res = await fetch(catalogUrl)
+        if (!res.ok) {
+          throw new Error(`Relay returned ${res.status} ${res.statusText || ''}`.trim())
+        }
         const catalog = await res.json()
         setSites((catalog.apps || []).map((a: any) => ({
           ...a,
@@ -48,27 +50,53 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
           name: a.name || a.title || 'Untitled',
           description: a.description || '',
         })))
+        setLastLoadSource(url)
       } else if (rpc) {
         let key = url
         if (key.startsWith('hyper://')) key = key.replace('hyper://', '')
         const catalog = await rpc.loadCatalog(key)
         setSites(catalog.apps || [])
+        setLastLoadSource(`hyper://${key}`)
+      } else {
+        throw new Error('P2P engine not available. Use an https:// relay URL instead.')
       }
     } catch (err: any) {
-      setError(err.message)
+      console.warn('[Explore] load failed:', err)
+      setError(err?.message || 'Could not load catalog.')
     } finally {
       setLoading(false)
     }
   }, [rpc, directoryUrl])
 
-  const handleVisit = useCallback((site: SiteInfo) => {
-    if (directoryUrl.startsWith('http')) {
-      const relayBase = directoryUrl.replace(/\/catalog\.json$/, '')
-      onVisit(`${relayBase}/v1/hyper/${site.driveKey}/index.html`)
-    } else {
-      onVisit(`hyper://${site.driveKey}`)
+  useEffect(() => {
+    let mounted = true
+    getSettings().then((settings) => {
+      if (!mounted) return
+      const initialUrl = (settings.catalogUrl || directoryUrl).trim()
+      setDirectoryUrl(initialUrl)
+      handleLoadDirectory(initialUrl)
+    }).catch(() => {
+      if (!mounted) return
+      handleLoadDirectory(directoryUrl)
+    })
+    return () => {
+      mounted = false
     }
-  }, [onVisit, directoryUrl])
+  }, [])
+
+  const handleVisit = useCallback((site: SiteInfo) => {
+    let key = (site.driveKey || (site as any).key || (site as any).appKey || '').toString()
+    if (key.startsWith('hyper://')) key = key.replace('hyper://', '')
+    if (/^[a-f0-9]{64}$/i.test(key)) {
+      onVisit(`hyper://${key}`)
+      return
+    }
+    if (site.id && /^[a-f0-9]{64}$/i.test(site.id)) {
+      onVisit(`hyper://${site.id}`)
+      return
+    }
+    setError(`Invalid drive key for "${site.name}"`)
+  }, [onVisit])
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -80,14 +108,14 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
           style={styles.input}
           value={directoryUrl}
           onChangeText={setDirectoryUrl}
-          onSubmitEditing={handleLoadDirectory}
+          onSubmitEditing={() => { void handleLoadDirectory() }}
           placeholder="Enter relay URL or hyper:// address"
           placeholderTextColor={colors.textMuted}
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="go"
         />
-        <TouchableOpacity onPress={handleLoadDirectory} style={styles.connectBtn} disabled={loading}>
+        <TouchableOpacity onPress={() => { void handleLoadDirectory() }} style={styles.connectBtn} disabled={loading}>
           {loading ? (
             <ActivityIndicator size="small" color={colors.accent} />
           ) : (
@@ -120,12 +148,16 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
         </View>
       )}
 
-      {sites.length === 0 && !loading && (
+      {sites.length === 0 && !loading && !error && (
         <View style={styles.emptyState}>
-          <Text style={styles.emptyIcon}>{ }</Text>
-          <Text style={styles.emptyTitle}>No directory connected</Text>
+          <Text style={styles.emptyIcon}>{'[ ]'}</Text>
+          <Text style={styles.emptyTitle}>
+            {lastLoadSource ? 'Directory is empty' : 'No directory connected'}
+          </Text>
           <Text style={styles.emptyText}>
-            Enter a relay URL above to browse the P2P web directory, or type a hyper:// address to visit a site directly.
+            {lastLoadSource
+              ? `The catalog at ${lastLoadSource} has no sites registered yet. Try another directory, or add one in Settings.`
+              : 'Enter a relay URL above to browse the P2P web directory, or type a hyper:// address to visit a site directly.'}
           </Text>
         </View>
       )}

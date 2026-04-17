@@ -18,6 +18,7 @@ class HttpBridge {
     this._swarm = swarm
     this._getDrive = getDriveFn || null // async (keyHex) => Hyperdrive
     this._allowedOrigins = opts.allowedOrigins || ['http://localhost', 'http://127.0.0.1']
+    this._validateToken = opts.validateToken || (() => null)
     this._rateLimiter = new Map() // Simple rate limiting per IP
   }
 
@@ -46,6 +47,32 @@ class HttpBridge {
     return req.socket?.remoteAddress || '127.0.0.1'
   }
 
+  _isLoopbackOrigin (origin) {
+    if (typeof origin !== 'string') return false
+    try {
+      const parsed = new URL(origin)
+      return parsed.protocol === 'http:' &&
+        (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost')
+    } catch {
+      return false
+    }
+  }
+
+  _scopeAppId (driveKeyHex, appId) {
+    return `${driveKeyHex}:${appId}`
+  }
+
+  _requireToken (req, res) {
+    const rawToken = req.headers['x-pear-token']
+    const token = Array.isArray(rawToken) ? rawToken[0] : rawToken
+    const driveKeyHex = this._validateToken(token)
+    if (!driveKeyHex) {
+      this._jsonError(res, 'Unauthorized', 401)
+      return null
+    }
+    return { driveKeyHex, token }
+  }
+
   /**
    * Handle an incoming HTTP request.
    * Returns true if handled, false if not an API route.
@@ -67,9 +94,8 @@ class HttpBridge {
     // Origin validation
     const origin = req.headers.origin
     if (origin) {
-      const isAllowed = this._allowedOrigins.some(allowed => 
-        origin.startsWith(allowed)
-      )
+      const isAllowed = this._isLoopbackOrigin(origin) &&
+        this._allowedOrigins.some(allowed => origin === allowed || origin.startsWith(allowed + ':'))
       if (!isAllowed) {
         res.statusCode = 403
         res.setHeader('Content-Type', 'application/json')
@@ -90,14 +116,19 @@ class HttpBridge {
       // --- Sync API ---
 
       if (req.method === 'POST' && path === '/api/sync/create') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
         if (!this._isValidAppId(body.appId)) {
           return this._jsonError(res, 'Invalid appId format', 400)
         }
-        const result = await this._bridge.createSyncGroup(body.appId)
-        return this._json(res, result)
+        const scopedAppId = this._scopeAppId(auth.driveKeyHex, body.appId)
+        const result = await this._bridge.createSyncGroup(scopedAppId)
+        return this._json(res, { ...result, appId: body.appId })
       }
 
       if (req.method === 'POST' && path === '/api/sync/join') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
         if (!this._isValidAppId(body.appId)) {
           return this._jsonError(res, 'Invalid appId format', 400)
         }
@@ -105,11 +136,14 @@ class HttpBridge {
         if (!body.inviteKey || !/^[0-9a-f]{64}$/i.test(body.inviteKey)) {
           return this._jsonError(res, 'Invalid invite key format', 400)
         }
-        const result = await this._bridge.joinSyncGroup(body.appId, body.inviteKey)
-        return this._json(res, result)
+        const scopedAppId = this._scopeAppId(auth.driveKeyHex, body.appId)
+        const result = await this._bridge.joinSyncGroup(scopedAppId, body.inviteKey)
+        return this._json(res, { ...result, appId: body.appId })
       }
 
       if (req.method === 'POST' && path === '/api/sync/append') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
         // Validate appId
         if (!this._isValidAppId(body.appId)) {
           return this._jsonError(res, 'Invalid appId format', 400)
@@ -119,11 +153,14 @@ class HttpBridge {
         if (opSize > 100000) { // 100KB max operation
           return this._jsonError(res, 'Operation too large', 413)
         }
-        const result = await this._bridge.append(body.appId, body.op || body)
+        const scopedAppId = this._scopeAppId(auth.driveKeyHex, body.appId)
+        const result = await this._bridge.append(scopedAppId, body.op || body)
         return this._json(res, result)
       }
 
       if (req.method === 'GET' && path === '/api/sync/get') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
         const appId = url.searchParams.get('appId')
         const key = url.searchParams.get('key')
         if (!this._isValidAppId(appId)) {
@@ -133,11 +170,14 @@ class HttpBridge {
         if (!key || typeof key !== 'string' || key.length > 1024) {
           return this._jsonError(res, 'Invalid key', 400)
         }
-        const result = await this._bridge.get(appId, key)
+        const scopedAppId = this._scopeAppId(auth.driveKeyHex, appId)
+        const result = await this._bridge.get(scopedAppId, key)
         return this._json(res, result)
       }
 
       if (req.method === 'GET' && path === '/api/sync/list') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
         const appId = url.searchParams.get('appId')
         const prefix = url.searchParams.get('prefix') || ''
         let limit = parseInt(url.searchParams.get('limit') || '100')
@@ -147,33 +187,43 @@ class HttpBridge {
         // Enforce max limit
         if (isNaN(limit) || limit < 1) limit = 100
         if (limit > 1000) limit = 1000
-        const result = await this._bridge.list(appId, prefix, { limit })
+        const scopedAppId = this._scopeAppId(auth.driveKeyHex, appId)
+        const result = await this._bridge.list(scopedAppId, prefix, { limit })
         return this._json(res, result)
       }
 
       if (req.method === 'GET' && path === '/api/sync/status') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
         const appId = url.searchParams.get('appId')
         if (!this._isValidAppId(appId)) {
           return this._jsonError(res, 'Invalid appId format', 400)
         }
-        const result = this._bridge.getSyncStatus(appId)
-        return this._json(res, result)
+        const scopedAppId = this._scopeAppId(auth.driveKeyHex, appId)
+        const result = this._bridge.getSyncStatus(scopedAppId)
+        return this._json(res, result ? { ...result, appId } : null)
       }
 
       // --- Identity ---
 
       if (req.method === 'GET' && path === '/api/identity') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
         const publicKey = this._swarm
           ? this._swarm.keyPair.publicKey.toString('hex')
           : null
-        return this._json(res, { publicKey })
+        return this._json(res, { publicKey, driveKey: auth.driveKeyHex })
       }
 
       // --- Drive Operations (Vinjari-inspired) ---
 
       if (req.method === 'GET' && path === '/api/drive/info') {
-        const key = url.searchParams.get('key')
-        if (!key) return this._jsonError(res, 'key parameter required', 400)
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
+        const key = url.searchParams.get('key') || auth.driveKeyHex
+        if (key !== auth.driveKeyHex) {
+          return this._jsonError(res, 'Forbidden for this drive', 403)
+        }
         const drive = await this._getDrive(key)
         if (!drive) return this._jsonError(res, 'Drive not found', 404)
         return this._json(res, {
@@ -186,9 +236,16 @@ class HttpBridge {
       }
 
       if (req.method === 'GET' && path === '/api/drive/readdir') {
-        const key = url.searchParams.get('key')
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
+        const key = url.searchParams.get('key') || auth.driveKeyHex
         const dirPath = url.searchParams.get('path') || '/'
-        if (!key) return this._jsonError(res, 'key parameter required', 400)
+        if (key !== auth.driveKeyHex) {
+          return this._jsonError(res, 'Forbidden for this drive', 403)
+        }
+        if (dirPath.includes('..') || dirPath.includes('\x00')) {
+          return this._jsonError(res, 'Invalid path', 400)
+        }
         const drive = await this._getDrive(key)
         if (!drive) return this._jsonError(res, 'Drive not found', 404)
         const entries = []
@@ -203,11 +260,14 @@ class HttpBridge {
       // --- Status ---
 
       if (req.method === 'GET' && path === '/api/bridge/status') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
         return this._json(res, {
           type: 'http-bridge',
           syncGroups: this._bridge._syncGroups ? this._bridge._syncGroups.size : 0,
           swarmConnected: !!this._swarm,
-          peerCount: this._swarm ? this._swarm.connections.size : 0
+          peerCount: this._swarm ? this._swarm.connections.size : 0,
+          driveKey: auth.driveKeyHex
         })
       }
 

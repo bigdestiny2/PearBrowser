@@ -150,6 +150,10 @@ export class PearRPC {
     return this.request(CMD.CLEAR_CACHE)
   }
 
+  getIdentity() {
+    return this.request(CMD.GET_IDENTITY)
+  }
+
   // --- Events ---
 
   on(event: number, cb: EventCallback) {
