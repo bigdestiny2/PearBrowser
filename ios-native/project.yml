@@ -26,10 +26,12 @@ settings:
     ENABLE_BITCODE: NO
     SWIFT_STRICT_CONCURRENCY: minimal
 
-packages:
-  BareKit:
-    url: https://github.com/holepunchto/bare-kit-swift
-    branch: main
+# No remote SPM packages needed — we use the BareKit.xcframework
+# directly with a tiny local bridging header (see
+# PearBrowser/Sources/Bridge/BareKitBridge.h). This avoids the
+# incompatibility between `holepunchto/bare-kit-swift`'s SPM module
+# layout and the RN-shipped BareKit.xcframework (which omits the
+# module.modulemap bare-kit-swift expects).
 
 targets:
   PearBrowser:
@@ -66,6 +68,11 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
         OTHER_LDFLAGS: "-ObjC"
+        # We reference BareKit's ObjC types (BareWorklet, BareIPC) from
+        # Swift via a local bridging header. This avoids the SPM wrapper
+        # entirely — simpler, and the RN-shipped xcframework Just Works.
+        SWIFT_OBJC_BRIDGING_HEADER: PearBrowser/Sources/Bridge/BareKitBridge.h
+        FRAMEWORK_SEARCH_PATHS: $(inherited) $(PROJECT_DIR)/PearBrowser/Frameworks
     # BareKit integration has two parts:
     #   1. The .xcframework provides the native C/ObjC binary (bare-kit v2.0.2)
     #   2. The bare-kit-swift SPM package provides the Swift overlay
@@ -78,8 +85,6 @@ targets:
     dependencies:
       - framework: PearBrowser/Frameworks/BareKit.xcframework
         embed: true
-      - package: BareKit
-        product: BareKit
       # Native addons (17) required by the backend worklet.
       # Sourced from node_modules/react-native-bare-kit/ios/addons/ —
       # the same pre-built xcframeworks the RN shell uses. Without these

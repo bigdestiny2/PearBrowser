@@ -37,23 +37,91 @@ export interface PearSyncAPI {
 }
 
 export interface PearIdentityAPI {
-  getPublicKey(): Promise<{ publicKey: string; driveKey: string; signingPublicKey: string | null }>
-  /** Sign an arbitrary payload with the user's root ed25519 keypair.
-   *  The payload is automatically namespaced to prevent cross-app
-   *  signature reuse. Phase 4 addition. */
+  /** Return the app's PER-APP sub-key (stable for this user + this drive,
+   *  different from what other apps see for the same user). */
+  getPublicKey(): Promise<{ publicKey: string; driveKey: string; algorithm: 'ed25519' }>
+  /** Sign an arbitrary payload with the PER-APP sub-key. Automatically
+   *  namespaced as `pear.app.<driveKey>:<namespace>:<payload>`. */
   sign(payload: string, namespace?: string): Promise<{
-    signature: string; publicKey: string; algorithm: 'ed25519'; namespaced: string
+    signature: string; publicKey: string; algorithm: 'ed25519'; tag: string
   }>
+}
+
+// --- Login ceremony (Identity Plan Phase C) ---
+
+export type PearScope =
+  | 'profile:read'
+  | 'profile:name'
+  | 'profile:contact'
+  | 'contacts:read'
+  | 'pay'
+
+export interface PearLoginOptions {
+  /** Capabilities this app is requesting. If empty, app only gets its
+   *  stable per-app pubkey (profile stays hidden). */
+  scopes?: PearScope[]
+  /** Human-friendly name shown in the consent sheet. */
+  appName?: string
+  /** One-liner explaining why the app needs these scopes. */
+  reason?: string
+}
+
+export interface PearLoginAttestation {
+  appPubkey: string
+  scopes: PearScope[]
+  grantedAt: number
+  expiresAt: number
+  loginProof: string
+  tag: string
+  /** Profile fields the user granted. `null` if no profile:* scope. */
+  profile: Record<string, string> | null
+}
+
+export interface PearLoginStatus {
+  loggedIn: boolean
+  appPubkey?: string
+  scopes?: PearScope[]
+  expiresAt?: number
+  profile?: Record<string, string> | null
+}
+
+export interface PearContact {
+  pubkey: string
+  displayName: string
+  avatar?: string
+  tags?: string[]
+  addedAt: number
+}
+
+export interface PearContactsAPI {
+  /** `contacts:read` scope required. Returns up to `limit` contacts. */
+  list(opts?: { limit?: number }): Promise<PearContact[]>
+  /** `contacts:read` scope required. `null` if not found. */
+  lookup(pubkey: string): Promise<PearContact | null>
 }
 
 export interface PearBridgeStatusAPI {
   status(): Promise<{ ready: boolean; port: number }>
 }
 
+export interface PearLoginAPI {
+  /** Start (or resume) a sign-in. Shows a native consent sheet on first
+   *  use; returns instantly if a valid grant already exists. */
+  (opts?: PearLoginOptions): Promise<PearLoginAttestation>
+  /** Current login status without triggering a prompt. */
+  status(): Promise<PearLoginStatus>
+  /** Revoke this app's grant (log the user out of just this app). */
+  logout(): Promise<void>
+}
+
 export interface PearAPI {
   sync: PearSyncAPI
   identity: PearIdentityAPI
   bridge: PearBridgeStatusAPI
+  /** The one-click sign-in surface. `await window.pear.login()` returns
+   *  an ed25519-signed attestation tied to this user + this app. */
+  login: PearLoginAPI
+  contacts: PearContactsAPI
   navigate(url: string): void
   share(url: string): void
 }
@@ -152,6 +220,31 @@ export const PEAR_BRIDGE_SCRIPT_TEMPLATE: string = `
       getPublicKey: function() { return apiGet('/api/identity'); },
       sign: function(payload, namespace) {
         return apiPost('/api/identity/sign', { payload: String(payload), namespace: namespace || '' });
+      }
+    },
+    // Login ceremony — one call, returns an ed25519-signed attestation
+    // tied to this app. Shows a native consent sheet the first time.
+    login: (function() {
+      function login(opts) {
+        opts = opts || {};
+        return apiPost('/api/login', {
+          scopes: Array.isArray(opts.scopes) ? opts.scopes : [],
+          appName: opts.appName || null,
+          reason: opts.reason || null,
+        });
+      }
+      login.status = function() { return apiGet('/api/login/status'); };
+      login.logout = function() { return apiPost('/api/login/logout', {}); };
+      return login;
+    })(),
+    contacts: {
+      list: function(opts) {
+        var url = '/api/contacts/list';
+        if (opts && opts.limit) url += '?limit=' + opts.limit;
+        return apiGet(url);
+      },
+      lookup: function(pubkey) {
+        return apiGet('/api/contacts/lookup?pubkey=' + encodeURIComponent(pubkey));
       }
     },
     bridge: {

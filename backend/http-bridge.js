@@ -20,6 +20,9 @@ class HttpBridge {
     this._allowedOrigins = opts.allowedOrigins || ['http://localhost', 'http://127.0.0.1']
     this._validateToken = opts.validateToken || (() => null)
     this._identity = opts.identity || null
+    this._profile = opts.profile || null
+    this._contacts = opts.contacts || null
+    this._requestLogin = opts.requestLogin || null  // async (args) => attestation
     this._rateLimiter = new Map() // Simple rate limiting per IP
   }
 
@@ -245,20 +248,23 @@ class HttpBridge {
       if (req.method === 'GET' && path === '/api/identity') {
         const auth = this._requireToken(req, res)
         if (!auth) return true
-        const publicKey = this._swarm
-          ? this._swarm.keyPair.publicKey.toString('hex')
-          : null
-        const signingPubkey = this._identity
-          ? (() => { try { return this._identity.getSigningKeypair().publicKey.toString('hex') } catch { return null } })()
-          : null
+        // PHASE A: return the per-app sub-key (stable per user+app), NOT
+        // the raw swarm or root keypair. Two different apps see two
+        // different pubkeys for the same user — privacy by default.
+        let appPubkey = null
+        if (this._identity) {
+          try { appPubkey = this._identity.getAppKeypair(auth.driveKeyHex).publicKey.toString('hex') }
+          catch { /* demo mode */ }
+        }
         return this._json(res, {
-          publicKey,
+          publicKey: appPubkey,           // per-app sub-key
           driveKey: auth.driveKeyHex,
-          signingPublicKey: signingPubkey
+          algorithm: 'ed25519',
         })
       }
 
-      // Phase 4 addition — sign arbitrary payload with user's root keypair (ed25519)
+      // Sign a payload with the per-app sub-key (ed25519). Safe to expose —
+      // the root keypair stays sealed inside the worklet.
       if (req.method === 'POST' && path === '/api/identity/sign') {
         const auth = this._requireToken(req, res)
         if (!auth) return true
@@ -270,17 +276,104 @@ class HttpBridge {
         if (!body || typeof body.payload !== 'string') {
           return this._jsonError(res, '`payload` (string) required', 400)
         }
-        // Security: require a per-app namespace prefix so one app can't
-        // trick the user into signing a payload intended for another app
-        // or a different protocol. The drive key is injected automatically;
-        // apps see an auto-namespaced signature.
-        const namespaced = `pear.app.${auth.driveKeyHex}:${body.namespace || ''}:${body.payload}`
         try {
-          const result = this._identity.sign(namespaced)
-          return this._json(res, { ...result, namespaced })
+          const result = this._identity.signForApp(
+            auth.driveKeyHex,
+            body.payload,
+            body.namespace || ''
+          )
+          return this._json(res, result)
         } catch (err) {
           return this._jsonError(res, err.message || 'sign failed', 500)
         }
+      }
+
+      // --- Login ceremony (Identity Plan Phase C) ---
+      //
+      // POST /api/login      { scopes, appName, reason } → attestation
+      // GET  /api/login/status                           → current grant
+      // POST /api/login/logout                           → revoke grant for this app
+
+      if (req.method === 'POST' && path === '/api/login') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
+        if (!this._requestLogin) return this._jsonError(res, 'login not available', 503)
+        let body
+        try { body = await this._readBody(req) } catch { return this._jsonError(res, 'Invalid JSON body', 400) }
+        const scopes = Array.isArray(body.scopes) ? body.scopes.map(String) : []
+        const appName = typeof body.appName === 'string' ? body.appName.slice(0, 128) : null
+        const reason = typeof body.reason === 'string' ? body.reason.slice(0, 512) : null
+        try {
+          const attestation = await this._requestLogin({
+            driveKeyHex: auth.driveKeyHex, scopes, appName, reason,
+          })
+          // Attach the visible profile fields the app is allowed to see.
+          let profileFields = null
+          if (this._profile) {
+            try { profileFields = await this._profile.getVisibleProfile(auth.driveKeyHex) } catch {}
+          }
+          return this._json(res, { ...attestation, profile: profileFields })
+        } catch (err) {
+          return this._jsonError(res, err.message || 'Login failed', 403)
+        }
+      }
+
+      if (req.method === 'GET' && path === '/api/login/status') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
+        if (!this._profile || !this._identity) {
+          return this._json(res, { loggedIn: false })
+        }
+        const grant = await this._profile.getGrant(auth.driveKeyHex)
+        if (!grant) return this._json(res, { loggedIn: false })
+        let appPubkey = null
+        try { appPubkey = this._identity.getAppKeypair(auth.driveKeyHex).publicKey.toString('hex') } catch {}
+        let profileFields = null
+        try { profileFields = await this._profile.getVisibleProfile(auth.driveKeyHex) } catch {}
+        return this._json(res, {
+          loggedIn: true,
+          appPubkey,
+          scopes: grant.scopes,
+          expiresAt: grant.expiresAt,
+          profile: profileFields,
+        })
+      }
+
+      if (req.method === 'POST' && path === '/api/login/logout') {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
+        if (this._profile) {
+          try { await this._profile.revokeGrant(auth.driveKeyHex) } catch {}
+        }
+        return this._json(res, { ok: true })
+      }
+
+      // --- Contacts (Identity Plan Phase D) ---
+      //
+      // All endpoints require a valid token AND an active grant with
+      // the `contacts:read` scope.
+
+      if (path.startsWith('/api/contacts')) {
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
+        if (!this._contacts) return this._jsonError(res, 'Contacts not available', 503)
+
+        // Gate on grant+scope
+        const grant = this._profile ? await this._profile.getGrant(auth.driveKeyHex) : null
+        if (!grant || !grant.scopes.includes('contacts:read')) {
+          return this._jsonError(res, 'contacts:read scope required — call pear.login first', 403)
+        }
+
+        if (req.method === 'GET' && path === '/api/contacts/list') {
+          const limit = parseInt(url.searchParams.get('limit') || '1000')
+          return this._json(res, await this._contacts.list({ limit }))
+        }
+        if (req.method === 'GET' && path === '/api/contacts/lookup') {
+          const pk = url.searchParams.get('pubkey')
+          if (!pk) return this._jsonError(res, 'pubkey required', 400)
+          return this._json(res, await this._contacts.lookup(pk))
+        }
+        return this._jsonError(res, 'Not found', 404)
       }
 
       // --- Drive Operations (Vinjari-inspired) ---

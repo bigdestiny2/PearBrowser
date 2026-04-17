@@ -21,6 +21,8 @@ const { PearBridge } = require('./pear-bridge.js')
 const { HttpBridge } = require('./http-bridge.js')
 const { UserData } = require('./user-data.js')
 const { Identity, validateMnemonic } = require('./identity.js')
+const { Profile } = require('./profile.js')
+const { Contacts } = require('./contacts.js')
 const C = require('./constants.js')
 
 const { IPC } = BareKit
@@ -43,6 +45,10 @@ let pearBridge = null
 let relayClient = null
 let userData = null
 let identity = null
+let profile = null
+let contacts = null
+/** Map<requestId, { resolve, reject, timer }> for login() ceremonies. */
+const pendingLogins = new Map()
 let peerCount = 0
 let browseDrives = new Map() // keyHex → Hyperdrive (for ad-hoc browsing)
 
@@ -358,12 +364,186 @@ rpc.handle(C.CMD_IDENTITY_VALIDATE_PHRASE, async ({ mnemonic } = {}) => {
   return { valid: validateMnemonic(mnemonic || '') }
 })
 
-rpc.handle(C.CMD_IDENTITY_SIGN, async ({ payload } = {}) => {
+rpc.handle(C.CMD_IDENTITY_SIGN, async ({ payload, driveKey } = {}) => {
   if (payload === undefined || payload === null) throw new Error('payload required')
-  // Accept string (UTF-8) or array-of-bytes from the RN side
-  const msg = typeof payload === 'string' ? payload : Buffer.from(payload)
-  return requireIdentity().sign(msg)
+  const id = requireIdentity()
+  // If driveKey is provided, sign with the per-app sub-key (Phase A).
+  // Otherwise fall back to the root (kept for backward compat — the
+  // "browser" context on Settings screens uses this).
+  if (typeof driveKey === 'string' && driveKey.length > 0) {
+    return id.signForApp(driveKey, payload)
+  }
+  return id.sign(typeof payload === 'string' ? payload : Buffer.from(payload))
 })
+
+// --- Profile (Identity Plan Phase B) ---
+
+function requireProfile () {
+  if (!profile) throw new Error('Profile not available — worklet still booting')
+  return profile
+}
+
+rpc.handle(C.CMD_PROFILE_GET, async () => {
+  return { profile: await requireProfile().getAll() }
+})
+
+rpc.handle(C.CMD_PROFILE_UPDATE, async ({ updates } = {}) => {
+  return { profile: await requireProfile().update(updates || {}) }
+})
+
+rpc.handle(C.CMD_PROFILE_CLEAR, async () => {
+  await requireProfile().clear()
+  return { ok: true }
+})
+
+// --- Login ceremony (Identity Plan Phase C) ---
+//
+// Flow:
+//   1. Page calls window.pear.login(opts)
+//   2. http-bridge POST /api/login calls ctx.requestLogin(args)
+//      → openLoginCeremony() below
+//   3. We return the EXISTING grant if one is valid.
+//      Otherwise we fire EVT_LOGIN_REQUEST to the RN/Native shell and
+//      park the pending promise in `pendingLogins`.
+//   4. User decides in a native consent sheet → shell calls
+//      CMD_LOGIN_RESOLVE with { requestId, approved, scopes }
+//   5. We record the grant in profile.bee, produce the signed
+//      attestation, resolve the pending promise → http-bridge returns
+//      the attestation to the page.
+
+const LOGIN_TIMEOUT_MS = 2 * 60 * 1000
+const LOGIN_DEFAULT_TTL = 7 * 24 * 60 * 60 * 1000
+
+async function openLoginCeremony ({ driveKeyHex, scopes = [], appName = null, reason = null }) {
+  if (!identity) throw new Error('Identity not available')
+  if (!profile) throw new Error('Profile not available')
+
+  // Reuse an existing valid grant covering ALL requested scopes.
+  const existing = await profile.getGrant(driveKeyHex)
+  if (existing && scopes.every((s) => existing.scopes.includes(s))) {
+    return buildAttestation(driveKeyHex, existing)
+  }
+
+  // Fresh consent — park, ask UI, wait.
+  const requestId = crypto.randomBytes(16).toString('hex')
+  const payload = {
+    requestId,
+    driveKey: driveKeyHex,
+    scopes,
+    appName,
+    reason,
+    currentGrant: existing || null,
+  }
+
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (pendingLogins.has(requestId)) {
+        pendingLogins.delete(requestId)
+        reject(new Error('Login request timed out (user did not respond in 2 minutes)'))
+      }
+    }, LOGIN_TIMEOUT_MS)
+    pendingLogins.set(requestId, {
+      resolve, reject, timer,
+      driveKeyHex,
+      requestedScopes: scopes,
+      requestedAppName: appName,
+    })
+    rpc.event(C.EVT_LOGIN_REQUEST, payload)
+  })
+}
+
+function buildAttestation (driveKeyHex, grant) {
+  // The attestation is:
+  //   pear.login.v1:<driveKey>:<appPubkey>:<scopes-joined>:<expiresAt>
+  // signed with the per-app sub-key. Apps + third parties can verify
+  // by recomputing the app sub-pubkey from the user's root pubkey
+  // (but since root never leaves the device, they verify the
+  // attestation directly with appPubkey which is embedded).
+  const keypair = identity.getAppKeypair(driveKeyHex)
+  const appPubkey = keypair.publicKey.toString('hex')
+  const payload = `pear.login.v1:${driveKeyHex}:${appPubkey}:${grant.scopes.join(',')}:${grant.expiresAt}`
+  const signed = identity.signForApp(driveKeyHex, payload, 'login')
+  return {
+    appPubkey,
+    scopes: grant.scopes,
+    expiresAt: grant.expiresAt,
+    grantedAt: grant.grantedAt,
+    loginProof: signed.signature,
+    tag: signed.tag,
+  }
+}
+
+rpc.handle(C.CMD_LOGIN_RESOLVE, async ({ requestId, approved, scopes, ttlMs } = {}) => {
+  const pending = pendingLogins.get(requestId)
+  if (!pending) throw new Error('No pending login with that id (timed out?)')
+  pendingLogins.delete(requestId)
+  clearTimeout(pending.timer)
+
+  if (!approved) {
+    pending.reject(new Error('User declined'))
+    return { ok: true, approved: false }
+  }
+
+  // UI decides which scopes to grant (can narrow from what was requested).
+  // Fall back to whatever the page asked for if the UI doesn't echo it.
+  const finalScopes = Array.isArray(scopes) && scopes.length > 0
+    ? scopes.map(String)
+    : pending.requestedScopes
+  const expiresAt = Date.now() + (typeof ttlMs === 'number' ? ttlMs : LOGIN_DEFAULT_TTL)
+
+  const grant = await profile.setGrant(pending.driveKeyHex, {
+    scopes: finalScopes,
+    appName: pending.requestedAppName,
+    expiresAt,
+  })
+  const attestation = buildAttestation(pending.driveKeyHex, grant)
+  pending.resolve(attestation)
+  return { ok: true, approved: true, driveKey: pending.driveKeyHex, scopes: finalScopes }
+})
+
+rpc.handle(C.CMD_LOGIN_LIST_GRANTS, async () => {
+  return { grants: await requireProfile().listGrants() }
+})
+
+rpc.handle(C.CMD_LOGIN_REVOKE_GRANT, async ({ driveKeyHex } = {}) => {
+  if (typeof driveKeyHex !== 'string') throw new Error('driveKeyHex required')
+  await requireProfile().revokeGrant(driveKeyHex)
+  return { ok: true }
+})
+
+rpc.handle(C.CMD_LOGIN_REVOKE_ALL, async () => {
+  const n = await requireProfile().revokeAllGrants()
+  return { ok: true, revoked: n }
+})
+
+// --- Contacts (Identity Plan Phase D) ---
+
+function requireContacts () {
+  if (!contacts) throw new Error('Contacts not available — worklet still booting')
+  return contacts
+}
+
+rpc.handle(C.CMD_CONTACTS_LIST, async ({ limit } = {}) => {
+  return { contacts: await requireContacts().list({ limit }) }
+})
+
+rpc.handle(C.CMD_CONTACTS_LOOKUP, async ({ pubkey } = {}) => {
+  return { contact: await requireContacts().lookup(pubkey) }
+})
+
+rpc.handle(C.CMD_CONTACTS_ADD, async (input = {}) => {
+  return { contact: await requireContacts().add(input) }
+})
+
+rpc.handle(C.CMD_CONTACTS_UPDATE, async ({ pubkey, updates } = {}) => {
+  return { contact: await requireContacts().update(pubkey, updates || {}) }
+})
+
+rpc.handle(C.CMD_CONTACTS_REMOVE, async ({ pubkey } = {}) => {
+  await requireContacts().remove(pubkey)
+  return { ok: true }
+})
+
 
 // Also enrich the existing CMD_GET_IDENTITY response with mnemonic hint
 // (without exposing the phrase itself) so the UI can show identity status.
@@ -515,6 +695,15 @@ async function boot () {
     userData = null
   }
 
+  // Identity Plan Phase B + D — profile attributes + contacts Hyperbees.
+  profile = new Profile(store)
+  try { await profile.ready(); console.log('Profile ready') }
+  catch (err) { console.error('Profile init failed:', err && err.message); profile = null }
+
+  contacts = new Contacts(store)
+  try { await contacts.ready(); console.log('Contacts ready') }
+  catch (err) { console.error('Contacts init failed:', err && err.message); contacts = null }
+
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'managers-ready', message: 'Managers loaded' })
 
   // Restore persisted app/site state from disk
@@ -557,7 +746,14 @@ async function boot () {
   // Mount direct HTTP bridge (WebView → localhost → Bare, bypasses RN relay)
   const httpBridge = new HttpBridge(pearBridge, swarm, getDriveForProxy, {
     validateToken: (token) => proxy ? proxy.validateApiToken(token) : null,
-    identity: identity // for /api/identity/sign
+    identity,
+    profile,
+    contacts,
+    // Login ceremony plumbing — http-bridge calls requestLogin() when a
+    // page invokes pear.login(). We fire EVT_LOGIN_REQUEST up to the
+    // UI, which calls CMD_LOGIN_RESOLVE after the user decides. See
+    // the ceremony handler below.
+    requestLogin: (args) => openLoginCeremony(args),
   })
   proxy.setHttpBridge(httpBridge)
 

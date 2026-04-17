@@ -3,33 +3,16 @@
 //  Hosts the Bare worklet that runs the backend (Hyperswarm, Corestore,
 //  HyperProxy, sync groups).
 //
-//  Uses Holepunch's `bare-kit-swift` SPM package which wraps the BareKit
-//  xcframework. See BUILD.md — you must BOTH add the SPM package AND
-//  drop the xcframework into PearBrowser/Frameworks/.
+//  Talks DIRECTLY to the BareKit ObjC API via our local bridging header
+//  (Sources/Bridge/BareKitBridge.h imports <BareKit/BareKit.h>). This
+//  avoids the bare-kit-swift SPM wrapper which expects a module layout
+//  the RN-shipped BareKit.xcframework doesn't provide.
 //
-//  Real bare-kit Swift API (researched against github.com/holepunchto/bare-kit-swift):
-//
-//      let worklet = Worklet(configuration: Worklet.Configuration(
-//          memoryLimit: 32 * 1024 * 1024
-//      ))
-//      worklet.start(filename: "/app.bundle", source: bundleData, arguments: [storagePath])
-//      // or:
-//      worklet.start(name: "app", ofType: "bundle", arguments: [storagePath])
-//
-//      let ipc = IPC(worklet: worklet)
-//      ipc.readable = { [weak self] in self?.pump(ipc) }
-//      ipc.write(framedBytes)
-//
-//  Phase 3 ticket — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
+//  Phase 3 / Phase 1 — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
 
 import Foundation
 
-#if canImport(BareKit)
-import BareKit
-#endif
-
-/// Adapter + lifecycle owner for the Bare worklet. Keeps a single
-/// PearRPC instance and a reference to the running worklet.
+/// Adapter + lifecycle owner for the Bare worklet.
 @MainActor
 final class PearWorkletHost: ObservableObject {
 
@@ -44,11 +27,8 @@ final class PearWorkletHost: ObservableObject {
 
     let rpc: PearRPC
 
-    #if canImport(BareKit)
-    private var worklet: Worklet?
-    private var ipc: IPC?
-    #endif
-
+    private var worklet: BareWorklet?
+    private var ipc: BareIPC?
     private let ipcAdapter: BareKitIPCAdapter
 
     private init() {
@@ -59,9 +39,7 @@ final class PearWorkletHost: ObservableObject {
 
     /// Boot the worklet. Idempotent.
     func boot() async {
-        #if canImport(BareKit)
         guard worklet == nil else { return }
-        #endif
         await rpc.attach()
 
         // Wire event listeners BEFORE start() so we don't miss READY.
@@ -105,35 +83,47 @@ final class PearWorkletHost: ObservableObject {
             }
         }
 
-        #if canImport(BareKit)
-        let config = Worklet.Configuration(memoryLimit: 64 * 1024 * 1024)
-        let wkt = Worklet(configuration: config)
+        // Resolve the bundle path out of the app's main bundle. The
+        // resource name is `backend.ios` and the extension is `bundle`
+        // (project.yml sources it from ../backend/dist/).
+        guard let bundlePath = Bundle.main.path(forResource: "backend.ios", ofType: "bundle") else {
+            NSLog("[PearWorkletHost] backend.ios.bundle missing from app bundle")
+            bootMessage = "Bundle missing"
+            bootStage = "error"
+            return
+        }
 
         let storagePath = Self.storageURL().path
-        // Load the bare-pack bundle from the app bundle resources.
-        // project.yml references ../backend/dist/backend.ios.bundle so
-        // the file lands at Bundle.main.path(forResource:"backend.ios", ofType:"bundle").
-        wkt.start(name: "backend.ios", ofType: "bundle", arguments: [storagePath])
 
-        let ipc = IPC(worklet: wkt)
+        let config = BareWorkletConfiguration()
+        config.memoryLimit = 64 * 1024 * 1024
+        let wkt = BareWorklet(configuration: config)
+        // Start: `-start:source:arguments:` where source=nil means "read
+        // from filename on disk". Pass our storage path as arg[0].
+        wkt?.start(bundlePath, source: nil, arguments: [storagePath])
+
         self.worklet = wkt
-        self.ipc = ipc
-        ipcAdapter.attach(to: ipc)
-        bootStage = "waiting-ready"
-        bootMessage = "Worklet running, waiting for ready event…"
-        #else
-        NSLog("[PearWorkletHost] BareKit framework not linked — demo mode. See BUILD.md.")
-        bootMessage = "Demo mode — BareKit not linked"
-        bootStage = "demo"
-        #endif
+        if let wkt = wkt {
+            let ipc = BareIPC(worklet: wkt)
+            self.ipc = ipc
+            if let ipc = ipc {
+                ipcAdapter.attach(to: ipc)
+                bootStage = "waiting-ready"
+                bootMessage = "Worklet running, waiting for ready event…"
+            } else {
+                bootStage = "error"
+                bootMessage = "BareIPC initialisation failed"
+            }
+        } else {
+            bootStage = "error"
+            bootMessage = "BareWorklet initialisation failed"
+        }
     }
 
     func shutdown() {
-        #if canImport(BareKit)
         worklet?.terminate()
         worklet = nil
         ipc = nil
-        #endif
     }
 
     // MARK: - Paths
@@ -146,60 +136,29 @@ final class PearWorkletHost: ObservableObject {
     }
 }
 
-/// Adapter from BareKit's IPC struct to our [WorkletIPC] protocol.
+/// Adapter from BareIPC's readable-callback API to our [WorkletIPC]
+/// protocol. BareIPC exposes:
+///   - `readable` property — callback invoked when bytes are available
+///   - `-read` — synchronous drain
+///   - `-write:` — synchronous write
 ///
-/// BareKit's IPC is an AsyncSequence: `for try await data in ipc { ... }`.
-/// We run the consumer loop on a background Task and fan bytes out to
-/// registered listeners. Writes go through the async `write(data:)` API
-/// serialised via our own actor to preserve framing order.
+/// We wrap both sides, surfacing each incoming chunk to listeners.
 final class BareKitIPCAdapter: WorkletIPC {
     private var listeners: [(Data) -> Void] = []
-    private var readTask: Task<Void, Never>?
+    private var ipc: BareIPC?
 
-    #if canImport(BareKit)
-    private var ipc: IPC?
-    private let writeQueue = WriteSerializer()
-    #endif
-
-    func attach(to ipcObject: Any) {
-        #if canImport(BareKit)
-        guard let ipc = ipcObject as? IPC else { return }
+    func attach(to ipc: BareIPC) {
         self.ipc = ipc
-        // Consume IPC.read() in a detached Task; deliver bytes to listeners.
-        readTask?.cancel()
-        readTask = Task.detached { [weak self] in
-            do {
-                for try await chunk in ipc {
-                    guard let self else { return }
-                    await self.deliver(chunk)
-                    if Task.isCancelled { break }
-                }
-            } catch {
-                NSLog("[BareKitIPCAdapter] read loop ended: \(error)")
-            }
-        }
-        #endif
-    }
-
-    private func deliver(_ data: Data) async {
-        // Snapshot listeners under `@MainActor` for safety (we mutate them
-        // from onData which can be called on any thread)
-        await MainActor.run {
-            for listener in self.listeners {
-                listener(data)
+        ipc.readable = { [weak self] ipcInstance in
+            guard let self else { return }
+            while let data = ipcInstance.read(), data.count > 0 {
+                for listener in self.listeners { listener(data) }
             }
         }
     }
 
     func write(_ bytes: Data) {
-        #if canImport(BareKit)
-        guard let ipc else { return }
-        Task.detached { [writeQueue] in
-            await writeQueue.write(ipc: ipc, data: bytes)
-        }
-        #else
-        _ = bytes
-        #endif
+        ipc?.write(bytes)
     }
 
     func onData(_ listener: @escaping (Data) -> Void) {
@@ -208,30 +167,12 @@ final class BareKitIPCAdapter: WorkletIPC {
 
     func close() {
         listeners.removeAll()
-        readTask?.cancel()
-        readTask = nil
-        #if canImport(BareKit)
+        ipc?.readable = nil
         ipc?.close()
-        ipc = nil
-        #endif
     }
 }
 
-#if canImport(BareKit)
-/// Serialises writes to the IPC stream so framed messages stay intact
-/// across concurrent RPC callers.
-private actor WriteSerializer {
-    func write(ipc: IPC, data: Data) async {
-        do {
-            try await ipc.write(data: data)
-        } catch {
-            NSLog("[BareKitIPCAdapter] write failed: \(error)")
-        }
-    }
-}
-#endif
-
-/// Tiny weak box for closure captures that need access to MainActor state.
+/// Tiny weak box for closure captures that need MainActor state.
 private final class WeakBox<T: AnyObject> {
     weak var value: T?
     init(_ value: T) { self.value = value }

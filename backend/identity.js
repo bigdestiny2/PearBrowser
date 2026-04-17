@@ -191,14 +191,12 @@ class Identity {
   }
 
   /**
-   * Derive the ed25519 keypair from the seed. Cached. Returns
+   * Derive the ROOT ed25519 keypair from the seed. Cached. Returns
    * `{ publicKey: Buffer(32), secretKey: Buffer(64) }`.
    *
-   * The seed is the full 32-byte pseudo-random output from
-   * entropyToSeed() — we pass it straight into sodium's
-   * crypto_sign_seed_keypair to produce a deterministic keypair.
-   *
-   * Added for Phase 1+ (identity.sign) — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
+   * The root keypair NEVER leaves the worklet. Pages interact via
+   * per-app sub-keypairs (see getAppKeypair()) — that's what they
+   * see and sign with.
    */
   getSigningKeypair () {
     if (this._keypair) return this._keypair
@@ -210,6 +208,75 @@ class Identity {
     sodium.crypto_sign_seed_keypair(publicKey, secretKey, this._seed)
     this._keypair = { publicKey, secretKey }
     return this._keypair
+  }
+
+  /**
+   * Derive a deterministic per-app ed25519 sub-keypair from the root
+   * seed + drive key. Same user + same app = same pubkey, forever,
+   * across all devices that share the root seed — but different apps
+   * see DIFFERENT pubkeys for the same user, so apps can't correlate
+   * users across each other without explicit consent.
+   *
+   * Derivation:  subSeed = SHA-256(rootSeed || "pear-app-v1:" || driveKey)
+   *              (subPub, subPriv) = ed25519.seed_keypair(subSeed)
+   *
+   * `driveKeyHex` is the hex-encoded 32-byte Hyperdrive key of the app
+   * as served by PearBrowser's proxy. For the "browser-itself" context
+   * (e.g. Settings screen), pass the literal string "browser".
+   *
+   * Phase A of the identity plan — see docs/IDENTITY_PLAN.md.
+   */
+  getAppKeypair (driveKeyHex) {
+    if (!sodium) throw new Error('sodium-universal not available')
+    if (!this._seed) throw new Error('Identity not ready')
+    if (typeof driveKeyHex !== 'string' || driveKeyHex.length === 0) {
+      throw new Error('driveKeyHex must be a non-empty string')
+    }
+    if (!this._appKeypairs) this._appKeypairs = new Map()
+    const cached = this._appKeypairs.get(driveKeyHex)
+    if (cached) return cached
+
+    const hash = crypto.createHash('sha256')
+    hash.update(this._seed)
+    hash.update('pear-app-v1:')
+    hash.update(driveKeyHex)
+    const subSeed = hash.digest()
+
+    const publicKey = b4a.alloc(sodium.crypto_sign_PUBLICKEYBYTES)
+    const secretKey = b4a.alloc(sodium.crypto_sign_SECRETKEYBYTES)
+    sodium.crypto_sign_seed_keypair(publicKey, secretKey, subSeed)
+
+    const keypair = { publicKey, secretKey, driveKeyHex }
+    this._appKeypairs.set(driveKeyHex, keypair)
+    return keypair
+  }
+
+  /**
+   * Sign with the per-app sub-key (not the root). Safe to expose to
+   * pages — the root remains sealed inside the worklet.
+   *
+   * `driveKeyHex` scopes the signing keypair; the payload is also
+   * wrapped with a domain-separator tag so one app's signature can't
+   * be replayed in another app's context.
+   */
+  signForApp (driveKeyHex, payload, namespace = '') {
+    const { publicKey, secretKey } = this.getAppKeypair(driveKeyHex)
+    const tag = `pear.app.${driveKeyHex}:${namespace}:`
+    const message = b4a.concat([
+      b4a.from(tag, 'utf-8'),
+      typeof payload === 'string' ? b4a.from(payload, 'utf-8') : b4a.from(payload || []),
+    ])
+    if (message.length === 0) throw new Error('payload must be non-empty')
+    if (message.length > 64 * 1024) throw new Error('payload too large (>64KB)')
+
+    const signature = b4a.alloc(sodium.crypto_sign_BYTES)
+    sodium.crypto_sign_detached(signature, message, secretKey)
+    return {
+      signature: b4a.toString(signature, 'hex'),
+      publicKey: b4a.toString(publicKey, 'hex'),
+      algorithm: 'ed25519',
+      tag,
+    }
   }
 
   /**

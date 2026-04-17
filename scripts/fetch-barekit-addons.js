@@ -47,6 +47,22 @@ log('Mirroring BareKit.xcframework…')
 if (fs.existsSync(DST_BAREKIT)) execSync(`rm -rf "${DST_BAREKIT}"`)
 execSync(`cp -R "${SRC_BAREKIT}" "${DST_BAREKIT}"`)
 
+// The RN-shipped xcframework omits module.modulemap (RN's import path
+// doesn't need Swift modules). Add it so `import BareKit` works from
+// the bare-kit-swift SPM package.
+const MODULEMAP = `framework module BareKit {
+  umbrella header "BareKit.h"
+  export *
+  module * { export * }
+}
+`
+for (const slice of ['ios-arm64', 'ios-arm64_x86_64-simulator']) {
+  const moduleDir = path.join(DST_BAREKIT, slice, 'BareKit.framework', 'Modules')
+  if (!fs.existsSync(moduleDir)) fs.mkdirSync(moduleDir, { recursive: true })
+  fs.writeFileSync(path.join(moduleDir, 'module.modulemap'), MODULEMAP)
+}
+log('  patched BareKit.xcframework with module.modulemap (needed by bare-kit-swift SPM)')
+
 // ---- Addons ----
 if (!fs.existsSync(SRC_ADDONS)) {
   bail(`${SRC_ADDONS} missing — has react-native-bare-kit's postinstall link step run?`)

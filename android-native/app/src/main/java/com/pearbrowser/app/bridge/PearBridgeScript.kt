@@ -85,6 +85,29 @@ object PearBridgeScript {
         return apiPost('/api/identity/sign', { payload: String(payload), namespace: namespace || '' });
       }
     },
+    login: (function() {
+      function login(opts) {
+        opts = opts || {};
+        return apiPost('/api/login', {
+          scopes: Array.isArray(opts.scopes) ? opts.scopes : [],
+          appName: opts.appName || null,
+          reason: opts.reason || null,
+        });
+      }
+      login.status = function() { return apiGet('/api/login/status'); };
+      login.logout = function() { return apiPost('/api/login/logout', {}); };
+      return login;
+    })(),
+    contacts: {
+      list: function(opts) {
+        var url = '/api/contacts/list';
+        if (opts && opts.limit) url += '?limit=' + opts.limit;
+        return apiGet(url);
+      },
+      lookup: function(pubkey) {
+        return apiGet('/api/contacts/lookup?pubkey=' + encodeURIComponent(pubkey));
+      }
+    },
     bridge: { status: function() { return apiGet('/api/bridge/status'); } },
     navigate: function(url) {
       if (window.PearBrowserNative && window.PearBrowserNative.navigate) window.PearBrowserNative.navigate(url);
