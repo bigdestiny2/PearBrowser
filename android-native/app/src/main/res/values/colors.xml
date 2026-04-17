@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirror of PearColors in ui/theme/Theme.kt and app/lib/theme.ts -->
+    <color name="pear_bg">#FF0A0A0A</color>
+    <color name="pear_surface">#FF1A1A1A</color>
+    <color name="pear_accent">#FFFF9500</color>
+</resources>

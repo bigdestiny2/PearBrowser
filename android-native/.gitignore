@@ -1,0 +1,18 @@
+# Gradle
+.gradle/
+build/
+app/build/
+local.properties
+
+# IDE
+.idea/
+*.iml
+captures/
+
+# Prebuilt bare-kit jar (download per BUILD.md — NOT checked in so we
+# don't distribute Holepunch's prebuilt binaries without attribution)
+app/libs/*.jar
+
+# Generated assets (bare-packed bundle — produce with npm run bundle-all-native)
+app/src/main/assets/backend*.bundle
+!app/src/main/assets/.gitkeep

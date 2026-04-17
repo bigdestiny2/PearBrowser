@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Don't back up to Google Drive — user data is Hyperbee-backed and
+     replicates P2P across their devices already. Identity seed stays local. -->
+<full-backup-content />
