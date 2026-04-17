@@ -200,6 +200,46 @@ actor PearRPC {
         try (await request(Cmd.GET_IDENTITY) as? [String: Any]) ?? [:]
     }
 
+    // MARK: - Profile + grants (Identity Plan Phases B + C + F)
+
+    func profileGet() async throws -> [String: String] {
+        let resp = try await request(Cmd.PROFILE_GET) as? [String: Any]
+        return (resp?["profile"] as? [String: String]) ?? [:]
+    }
+
+    func profileUpdate(_ updates: [String: String]) async throws -> [String: String] {
+        let resp = try await request(Cmd.PROFILE_UPDATE, data: ["updates": updates]) as? [String: Any]
+        return (resp?["profile"] as? [String: String]) ?? [:]
+    }
+
+    func profileClear() async throws {
+        _ = try await request(Cmd.PROFILE_CLEAR)
+    }
+
+    func loginListGrants() async throws -> [[String: Any]] {
+        let resp = try await request(Cmd.LOGIN_LIST_GRANTS) as? [String: Any]
+        return (resp?["grants"] as? [[String: Any]]) ?? []
+    }
+
+    func loginRevokeGrant(driveKeyHex: String) async throws {
+        _ = try await request(Cmd.LOGIN_REVOKE_GRANT, data: ["driveKeyHex": driveKeyHex])
+    }
+
+    func loginRevokeAll() async throws -> Int {
+        let resp = try await request(Cmd.LOGIN_REVOKE_ALL) as? [String: Any]
+        return (resp?["revoked"] as? Int) ?? 0
+    }
+
+    /// Answer a pending consent sheet. Fired from the UI after the user
+    /// decides. `scopes` may narrow what the page asked for; leave
+    /// `approved` false to deny.
+    func loginResolve(requestId: String, approved: Bool, scopes: [String]? = nil, ttlMs: Int? = nil) async throws {
+        var data: [String: Any] = ["requestId": requestId, "approved": approved]
+        if let scopes { data["scopes"] = scopes }
+        if let ttlMs { data["ttlMs"] = ttlMs }
+        _ = try await request(Cmd.LOGIN_RESOLVE, data: data)
+    }
+
     // MARK: - Framing
     //
     // Wire format matches backend/rpc.js _send():

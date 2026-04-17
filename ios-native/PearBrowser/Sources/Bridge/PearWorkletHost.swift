@@ -24,6 +24,9 @@ final class PearWorkletHost: ObservableObject {
     @Published private(set) var apiToken: String = ""
     @Published private(set) var bootMessage: String = "Starting…"
     @Published private(set) var bootStage: String = "init"
+    /// The currently pending login-consent request. MainView observes
+    /// this to pop a native sheet. `nil` when no request is pending.
+    @Published var pendingLogin: LoginRequest? = nil
 
     let rpc: PearRPC
 
@@ -81,6 +84,19 @@ final class PearWorkletHost: ObservableObject {
                     weakSelf.value?.bootStage = "error"
                 }
             }
+        }
+        await rpc.on(Evt.LOGIN_REQUEST) { payload in
+            guard let dict = payload as? [String: Any],
+                  let requestId = dict["requestId"] as? String,
+                  let driveKey = dict["driveKey"] as? String else { return }
+            let request = LoginRequest(
+                requestId: requestId,
+                driveKey: driveKey,
+                appName: (dict["appName"] as? String) ?? "A PearBrowser app",
+                reason: (dict["reason"] as? String) ?? "",
+                scopes: (dict["scopes"] as? [String]) ?? []
+            )
+            Task { @MainActor in weakSelf.value?.pendingLogin = request }
         }
 
         // Resolve the bundle path out of the app's main bundle. The
@@ -176,4 +192,38 @@ final class BareKitIPCAdapter: WorkletIPC {
 private final class WeakBox<T: AnyObject> {
     weak var value: T?
     init(_ value: T) { self.value = value }
+}
+
+// MARK: - Login consent request model
+
+struct LoginRequest: Identifiable, Equatable {
+    var id: String { requestId }
+    let requestId: String
+    /// Full hex drive key of the app asking to sign in.
+    let driveKey: String
+    /// Display name the app asked us to show. Fall back to "A PearBrowser app".
+    let appName: String
+    /// One-liner the app provided. May be empty.
+    let reason: String
+    /// Capabilities the app requested.
+    let scopes: [String]
+}
+
+extension PearWorkletHost {
+    /// Send the user's decision back to the worklet. `scopes` can
+    /// narrow or match what the app asked for.
+    func resolveLogin(_ request: LoginRequest, approved: Bool, scopes: [String]? = nil) async {
+        do {
+            try await rpc.loginResolve(
+                requestId: request.requestId,
+                approved: approved,
+                scopes: scopes
+            )
+        } catch {
+            NSLog("[PearWorkletHost] loginResolve failed: \(error)")
+        }
+        if pendingLogin?.requestId == request.requestId {
+            pendingLogin = nil
+        }
+    }
 }

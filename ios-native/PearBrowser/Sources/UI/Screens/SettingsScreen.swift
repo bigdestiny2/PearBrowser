@@ -18,6 +18,8 @@ struct SettingsScreen: View {
     let onBack: () -> Void
     let onOpenBackupPhrase: () -> Void
     let onOpenRestoreIdentity: () -> Void
+    let onOpenProfile: () -> Void
+    let onOpenConnectedApps: () -> Void
 
     @Environment(\.pearRPC) private var rpc
     @EnvironmentObject private var host: PearWorkletHost
@@ -262,6 +264,14 @@ struct SettingsScreen: View {
 
     private var identitySection: some View {
         VStack(alignment: .leading, spacing: 0) {
+            identityRow("Your Profile",
+                        subtitle: "Display name, avatar, contact info. All opt-in — apps only see what you grant.",
+                        onTap: onOpenProfile)
+            Divider().background(PearColors.border)
+            identityRow("Connected Apps",
+                        subtitle: "Review and revoke sign-ins.",
+                        onTap: onOpenConnectedApps)
+            Divider().background(PearColors.border)
             identityRow("Backup Phrase",
                         subtitle: "View your 12-word seed. Save it — without it you cannot recover.",
                         onTap: onOpenBackupPhrase)

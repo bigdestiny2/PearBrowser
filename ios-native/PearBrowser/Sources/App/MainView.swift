@@ -39,13 +39,15 @@ private enum MoreRoute: Hashable {
     case editor(siteId: String, siteName: String?, initialBlocks: [[String: Any]]?)
     case backupPhrase
     case restoreIdentity
+    case profile
+    case connectedApps
 
-    // Hashable conformance (Any values won't be compared, but Swift needs =)
     static func == (lhs: MoreRoute, rhs: MoreRoute) -> Bool {
         switch (lhs, rhs) {
         case (.hub, .hub), (.bookmarks, .bookmarks), (.history, .history),
              (.settings, .settings), (.sites, .sites), (.backupPhrase, .backupPhrase),
-             (.restoreIdentity, .restoreIdentity):
+             (.restoreIdentity, .restoreIdentity),
+             (.profile, .profile), (.connectedApps, .connectedApps):
             return true
         case (.sitesTemplatePicker(let a), .sitesTemplatePicker(let b)): return a == b
         case (.editor(let a, _, _), .editor(let b, _, _)): return a == b
@@ -63,6 +65,8 @@ private enum MoreRoute: Hashable {
         case .editor(let id, _, _): hasher.combine(6); hasher.combine(id)
         case .backupPhrase: hasher.combine(7)
         case .restoreIdentity: hasher.combine(8)
+        case .profile: hasher.combine(9)
+        case .connectedApps: hasher.combine(10)
         }
     }
 }
@@ -104,6 +108,16 @@ struct MainView: View {
                 onClose: { showQRScanner = false }
             )
         }
+        .sheet(item: $host.pendingLogin) { request in
+            LoginConsentSheet(
+                request: request,
+                identityLabel: "You",
+                identityPubkey: nil,
+                onDecision: { approved, scopes in
+                    Task { await host.resolveLogin(request, approved: approved, scopes: scopes) }
+                }
+            )
+        }
     }
 
     // MARK: - Navigation
@@ -137,7 +151,9 @@ struct MainView: View {
             SettingsScreen(
                 onBack: { moreRoute = .hub },
                 onOpenBackupPhrase: { moreRoute = .backupPhrase },
-                onOpenRestoreIdentity: { moreRoute = .restoreIdentity }
+                onOpenRestoreIdentity: { moreRoute = .restoreIdentity },
+                onOpenProfile: { moreRoute = .profile },
+                onOpenConnectedApps: { moreRoute = .connectedApps }
             )
         case .backupPhrase:
             BackupPhraseScreen(onBack: { moreRoute = .settings })
@@ -146,6 +162,10 @@ struct MainView: View {
                 onBack: { moreRoute = .settings },
                 onRestored: { moreRoute = .hub }
             )
+        case .profile:
+            ProfileEditScreen(onBack: { moreRoute = .settings })
+        case .connectedApps:
+            ConnectedAppsScreen(onBack: { moreRoute = .settings })
         case .sites:
             MySitesScreen(
                 onEdit: { id in moreRoute = .editor(siteId: id, siteName: nil, initialBlocks: nil) },

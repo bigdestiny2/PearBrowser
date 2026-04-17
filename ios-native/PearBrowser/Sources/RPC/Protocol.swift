@@ -56,6 +56,23 @@ enum Cmd {
     static let IDENTITY_IMPORT_PHRASE = 71
     static let IDENTITY_ROTATE = 72
     static let IDENTITY_VALIDATE_PHRASE = 73
+    static let IDENTITY_SIGN = 74
+
+    // Profile + login grants (Identity Plan Phases B + C + F)
+    static let PROFILE_GET = 80
+    static let PROFILE_UPDATE = 81
+    static let PROFILE_CLEAR = 82
+    static let LOGIN_LIST_GRANTS = 83
+    static let LOGIN_REVOKE_GRANT = 84
+    static let LOGIN_REVOKE_ALL = 85
+    static let LOGIN_RESOLVE = 86
+
+    // Contacts (Identity Plan Phase D)
+    static let CONTACTS_LIST = 90
+    static let CONTACTS_LOOKUP = 91
+    static let CONTACTS_ADD = 92
+    static let CONTACTS_UPDATE = 93
+    static let CONTACTS_REMOVE = 94
 
     // Bridge
     static let BRIDGE = 200
@@ -71,4 +88,7 @@ enum Evt {
     static let INSTALL_PROGRESS = 103
     static let SITE_PUBLISHED = 104
     static let BOOT_PROGRESS = 105
+    /// A page called window.pear.login() — show the consent sheet.
+    /// Payload: { requestId, driveKey, appName, reason, scopes, currentGrant? }
+    static let LOGIN_REQUEST = 106
 }
