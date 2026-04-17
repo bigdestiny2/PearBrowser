@@ -1,0 +1,94 @@
+# XcodeGen config for the PearBrowser iOS native shell.
+# Phase 3 of the Holepunch alignment plan — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
+#
+# Generate the .xcodeproj with:
+#    brew install xcodegen
+#    cd ios-native && xcodegen generate
+#
+# This file is the source of truth — the .xcodeproj is a derived artifact
+# (gitignored). Matches the `holepunchto/bare-ios` template pattern.
+
+name: PearBrowser
+options:
+  bundleIdPrefix: com.pearbrowser
+  deploymentTarget:
+    iOS: "16.0"
+  groupSortPosition: top
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""  # fill in for device signing
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_BITCODE: NO
+    SWIFT_STRICT_CONCURRENCY: minimal
+
+targets:
+  PearBrowser:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: PearBrowser/Sources
+      - path: PearBrowser/Info.plist
+        buildPhase: none
+      - path: PearBrowser/PearBrowser.entitlements
+        buildPhase: none
+      - path: PearBrowser/Assets.xcassets
+      - path: PearBrowser/LaunchScreen.storyboard
+    resources:
+      - path: PearBrowser/Assets.xcassets
+      - path: PearBrowser/LaunchScreen.storyboard
+      # The bare-packed worklet bundle. Produce with:
+      #   npm run bundle-backend-native-ios
+      # from the repo root. Output lands in backend/dist/backend.ios.bundle
+      # which the build step below copies into the app bundle.
+      - path: ../backend/dist/backend.ios.bundle
+        optional: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pearbrowser.app
+        INFOPLIST_FILE: PearBrowser/Info.plist
+        CODE_SIGN_ENTITLEMENTS: PearBrowser/PearBrowser.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"   # iPhone + iPad
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: NO
+        OTHER_LDFLAGS: "-ObjC"
+    # BareKit dependency is added AFTER you drop in the .xcframework.
+    # See BUILD.md "Linking BareKit" for the exact steps. Keeping it
+    # out of the default project config means `xcodegen generate` and
+    # a clean build succeed in "demo mode" (no worklet) — useful for
+    # UI iteration before you're set up with a BareKit release.
+    #
+    # Once ios-native/PearBrowser/Frameworks/BareKit.xcframework exists,
+    # uncomment the block below and rerun `xcodegen generate`.
+    #
+    # dependencies:
+    #   - framework: PearBrowser/Frameworks/BareKit.xcframework
+    #     embed: true
+    # Do NOT auto-generate Info.plist — the one at PearBrowser/Info.plist is
+    # hand-maintained with URL schemes, ATS exceptions, camera + local
+    # network usage descriptions, and Bonjour services. If we let XcodeGen
+    # regenerate it, those all disappear.
+
+schemes:
+  PearBrowser:
+    build:
+      targets:
+        PearBrowser: [run, test, profile, analyze, archive]
+    run:
+      config: Debug
+    test:
+      config: Debug
+    profile:
+      config: Release
+    archive:
+      config: Release
+
+configs:
+  Debug: debug
+  Release: release

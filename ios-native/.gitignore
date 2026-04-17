@@ -1,0 +1,23 @@
+# XcodeGen generates this from project.yml — not checked in.
+*.xcodeproj/
+*.xcworkspace/
+
+# Build products
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM/
+
+# BareKit prebuilt framework — download per BUILD.md, not distributed here
+PearBrowser/Frameworks/BareKit.xcframework/
+
+# Generated worklet bundle
+PearBrowser/backend.ios.bundle
+
+# macOS / Xcode junk
+.DS_Store
+.swiftpm/
+Package.resolved
+*.xcuserstate
+xcuserdata/
