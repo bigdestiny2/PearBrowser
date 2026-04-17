@@ -19,6 +19,8 @@ const { AppManager } = require('./app-manager.js')
 const { SiteManager } = require('./site-manager.js')
 const { PearBridge } = require('./pear-bridge.js')
 const { HttpBridge } = require('./http-bridge.js')
+const { UserData } = require('./user-data.js')
+const { Identity, validateMnemonic } = require('./identity.js')
 const C = require('./constants.js')
 
 const { IPC } = BareKit
@@ -39,6 +41,8 @@ let appManager = null
 let siteManager = null
 let pearBridge = null
 let relayClient = null
+let userData = null
+let identity = null
 let peerCount = 0
 let browseDrives = new Map() // keyHex → Hyperdrive (for ad-hoc browsing)
 
@@ -92,13 +96,23 @@ rpc.handle(C.CMD_GET_STATUS, async () => {
 
 rpc.handle(C.CMD_GET_IDENTITY, async () => {
   return {
-    publicKey: swarm ? swarm.keyPair.publicKey.toString('hex') : null
+    publicKey: swarm ? swarm.keyPair.publicKey.toString('hex') : null,
+    // Identity metadata for the Settings "My Identity" panel
+    hasBackupPhrase: !!identity,
+    mnemonicWordCount: identity ? identity.getMnemonic().split(' ').length : 0,
   }
 })
 
 // App Store commands
 rpc.handle(C.CMD_LOAD_CATALOG, async (data) => {
   return await catalogManager.loadCatalog(data.keyHex)
+})
+
+// Phase 1 ticket 1 — Hyperbee-backed catalog (pre-positioning; relay
+// publishes Hyperdrive catalogs today. Once a Hyperbee catalog exists,
+// ExploreScreen can switch by sending `hyperbee://<key>` URLs.)
+rpc.handle(C.CMD_LOAD_CATALOG_BEE, async (data) => {
+  return await catalogManager.loadCatalogBee(data.keyHex)
 })
 
 rpc.handle(C.CMD_INSTALL_APP, async (data) => {
@@ -256,6 +270,97 @@ rpc.handle(C.CMD_SET_RELAY_ENABLED, async ({ enabled } = {}) => {
   return { ok: true, enabled: relayClient.enabled }
 })
 
+// --- User data (Phase 1 ticket 2) ---
+// Hyperbee-backed bookmarks, history, settings, session, tabs.
+// Replaces AsyncStorage usage in the RN layer.
+
+function requireUserData () {
+  if (!userData) throw new Error('User data not available — worklet still booting')
+  return userData
+}
+
+rpc.handle(C.CMD_USERDATA_LIST_BOOKMARKS, async () => {
+  return { bookmarks: await requireUserData().listBookmarks() }
+})
+
+rpc.handle(C.CMD_USERDATA_ADD_BOOKMARK, async ({ url, title } = {}) => {
+  const result = await requireUserData().addBookmark({ url, title })
+  return { bookmark: result }
+})
+
+rpc.handle(C.CMD_USERDATA_REMOVE_BOOKMARK, async ({ url } = {}) => {
+  const removed = await requireUserData().removeBookmark(url)
+  return { removed }
+})
+
+rpc.handle(C.CMD_USERDATA_LIST_HISTORY, async ({ limit } = {}) => {
+  return { history: await requireUserData().listHistory({ limit }) }
+})
+
+rpc.handle(C.CMD_USERDATA_ADD_HISTORY, async ({ url, title } = {}) => {
+  await requireUserData().addHistory({ url, title })
+  return { ok: true }
+})
+
+rpc.handle(C.CMD_USERDATA_CLEAR_HISTORY, async () => {
+  const cleared = await requireUserData().clearHistory()
+  return { cleared }
+})
+
+rpc.handle(C.CMD_USERDATA_GET_SETTINGS, async () => {
+  return { settings: await requireUserData().getSettings() }
+})
+
+rpc.handle(C.CMD_USERDATA_SET_SETTINGS, async ({ updates } = {}) => {
+  const settings = await requireUserData().setSettings(updates || {})
+  return { settings }
+})
+
+rpc.handle(C.CMD_USERDATA_GET_SESSION, async () => {
+  return { session: await requireUserData().getSession() }
+})
+
+rpc.handle(C.CMD_USERDATA_SAVE_SESSION, async ({ state } = {}) => {
+  await requireUserData().saveSession(state || {})
+  return { ok: true }
+})
+
+rpc.handle(C.CMD_USERDATA_IMPORT, async ({ dump } = {}) => {
+  const imported = await requireUserData().importDump(dump || {})
+  return { imported }
+})
+
+// --- Identity (Phase 1 ticket 3) ---
+
+function requireIdentity () {
+  if (!identity) throw new Error('Identity not available — worklet still booting')
+  return identity
+}
+
+rpc.handle(C.CMD_IDENTITY_EXPORT_PHRASE, async () => {
+  return { mnemonic: requireIdentity().getMnemonic() }
+})
+
+rpc.handle(C.CMD_IDENTITY_IMPORT_PHRASE, async ({ mnemonic } = {}) => {
+  if (typeof mnemonic !== 'string') throw new Error('mnemonic must be a string')
+  if (!validateMnemonic(mnemonic)) throw new Error('Invalid seed phrase — check each word and try again')
+  requireIdentity().restoreFromMnemonic(mnemonic)
+  // Caller MUST restart the worklet for the new identity to take effect
+  return { ok: true, restartRequired: true }
+})
+
+rpc.handle(C.CMD_IDENTITY_ROTATE, async () => {
+  requireIdentity().rotate()
+  return { ok: true, restartRequired: true }
+})
+
+rpc.handle(C.CMD_IDENTITY_VALIDATE_PHRASE, async ({ mnemonic } = {}) => {
+  return { valid: validateMnemonic(mnemonic || '') }
+})
+
+// Also enrich the existing CMD_GET_IDENTITY response with mnemonic hint
+// (without exposing the phrase itself) so the UI can show identity status.
+
 // --- Drive Management ---
 
 const MAX_BROWSE_DRIVES = 20
@@ -347,9 +452,19 @@ function persistState () {
 
 async function boot () {
   console.log('Boot starting, storagePath:', storagePath)
+  rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'identity-load', message: 'Loading identity...' })
+
+  // Phase 1 ticket 3 — load or generate the user's root identity
+  identity = new Identity(storagePath)
+  await identity.ready()
+  console.log('Identity ready')
+
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'corestore-start', message: 'Initializing storage...' })
-  
-  store = new Corestore(storagePath)
+
+  // Derive the Corestore from the user's identity seed so rotating the
+  // identity gives a clean store. The seed is 32 bytes — exactly what
+  // Corestore's primaryKey expects.
+  store = new Corestore(storagePath, { primaryKey: identity.getSeed() })
   console.log('Corestore created, waiting for ready...')
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'corestore-ready', message: 'Storage ready' })
   await store.ready()
@@ -380,6 +495,17 @@ async function boot () {
   appManager = new AppManager(store, swarm)
   siteManager = new SiteManager(store, swarm)
   pearBridge = new PearBridge(store, swarm)
+
+  // Phase 1 ticket 2 — Hyperbee-backed user data (bookmarks, history, etc.)
+  userData = new UserData(store, swarm)
+  try {
+    await userData.ready()
+    console.log('UserData ready')
+  } catch (err) {
+    console.error('UserData init failed:', err && err.message)
+    userData = null
+  }
+
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'managers-ready', message: 'Managers loaded' })
 
   // Restore persisted app/site state from disk

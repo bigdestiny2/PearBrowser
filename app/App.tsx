@@ -17,7 +17,7 @@ import { PearRPC } from './lib/rpc'
 import { networkMonitor, NetworkInfo } from './lib/network'
 import { StatusDot } from './components/StatusDot'
 import * as FileSystem from 'expo-file-system'
-import { getSession, saveSession } from './lib/storage'
+import { getSession, saveSession, bootstrapHyperbeeStorage } from './lib/storage'
 
 // @ts-ignore — bare-pack bundles, platform-specific
 import iosBundleImport from '../assets/backend.bundle.mjs'
@@ -41,6 +41,8 @@ import { BookmarksScreen } from './screens/BookmarksScreen'
 import { HistoryScreen } from './screens/HistoryScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { QRScannerScreen } from './screens/QRScannerScreen'
+import { BackupPhraseScreen } from './screens/BackupPhraseScreen'
+import { RestoreIdentityScreen } from './screens/RestoreIdentityScreen'
 import { MySitesScreen } from './screens/MySitesScreen'
 import { TemplatePickerScreen } from './screens/TemplatePickerScreen'
 import type { Template } from './screens/TemplatePickerScreen'
@@ -78,6 +80,8 @@ export default function App() {
   const [hasBrowseOpened, setHasBrowseOpened] = useState(false)
   const [bootProgress, setBootProgress] = useState<string>('Initializing...')
   const [showQRScanner, setShowQRScanner] = useState(false)
+  const [showBackupPhrase, setShowBackupPhrase] = useState(false)
+  const [showRestoreIdentity, setShowRestoreIdentity] = useState(false)
   
   // Connection status panel state
   const [showStatusPanel, setShowStatusPanel] = useState(false)
@@ -156,6 +160,13 @@ export default function App() {
           gotReady = true
           setProxyPort(port)
           setState('ready')
+          // Phase 1 ticket 2: migrate AsyncStorage → Hyperbee on first ready,
+          // then swap the active storage backend so bookmarks/history sync
+          // across devices going forward. Failure is non-fatal — we stay
+          // on AsyncStorage.
+          bootstrapHyperbeeStorage(rpc).catch((err) =>
+            console.warn('[App] Hyperbee bootstrap threw:', err)
+          )
         })
 
         rpc.onPeerCount((count) => {
@@ -522,8 +533,29 @@ export default function App() {
             onBack={() => setShowHistory(false)}
           />
         )}
-        {activeTab === 'more' && showSettings && (
-          <SettingsScreen onBack={() => setShowSettings(false)} />
+        {activeTab === 'more' && showSettings && !showBackupPhrase && !showRestoreIdentity && (
+          <SettingsScreen
+            onBack={() => setShowSettings(false)}
+            rpc={rpcRef.current}
+            onOpenBackupPhrase={() => setShowBackupPhrase(true)}
+            onOpenRestoreIdentity={() => setShowRestoreIdentity(true)}
+          />
+        )}
+        {activeTab === 'more' && showSettings && showBackupPhrase && (
+          <BackupPhraseScreen
+            rpc={rpcRef.current}
+            onBack={() => setShowBackupPhrase(false)}
+          />
+        )}
+        {activeTab === 'more' && showSettings && showRestoreIdentity && (
+          <RestoreIdentityScreen
+            rpc={rpcRef.current}
+            onBack={() => setShowRestoreIdentity(false)}
+            onRestored={() => {
+              setShowRestoreIdentity(false)
+              setShowSettings(false)
+            }}
+          />
         )}
         {activeTab === 'more' && showSites && !editingSiteId && !showTemplatePicker && (
           <MySitesScreen

@@ -11,6 +11,8 @@ import { PearRPC } from '../lib/rpc'
 type Props = {
   onBack: () => void
   rpc?: PearRPC | null
+  onOpenBackupPhrase?: () => void
+  onOpenRestoreIdentity?: () => void
 }
 
 type RelayConfig = {
@@ -19,7 +21,7 @@ type RelayConfig = {
   configured: boolean
 }
 
-export function SettingsScreen({ onBack, rpc }: Props) {
+export function SettingsScreen({ onBack, rpc, onOpenBackupPhrase, onOpenRestoreIdentity }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [catalogInput, setCatalogInput] = useState('')
   const [storageInfo, setStorageInfo] = useState({
@@ -233,9 +235,13 @@ export function SettingsScreen({ onBack, rpc }: Props) {
         <View style={styles.card}>
           <View style={styles.settingRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.settingLabel}>Hybrid Fetch</Text>
+              <Text style={styles.settingLabel}>
+                {relayConfig.enabled ? 'Hybrid Fetch (on)' : 'Pure P2P Mode'}
+              </Text>
               <Text style={styles.settingHint}>
-                Relay HTTP (fast) + P2P Hyperswarm (fallback). Turn off to go pure P2P.
+                {relayConfig.enabled
+                  ? 'Relay HTTP (fast, 1-2s) + P2P Hyperswarm (fallback). Turn off for pure P2P — slower first paint but no relay dependency.'
+                  : 'Content loads via Hyperswarm DHT only. Slower on first visit but fully decentralized — no relay is consulted.'}
               </Text>
             </View>
             <Switch
@@ -383,6 +389,37 @@ export function SettingsScreen({ onBack, rpc }: Props) {
               <Text style={styles.saveBtnText}>Add</Text>
             </TouchableOpacity>
           </View>
+        </View>
+
+        {/* Identity (Phase 1 ticket 3) */}
+        <Text style={styles.sectionTitle}>IDENTITY</Text>
+        <View style={styles.card}>
+          <TouchableOpacity
+            style={styles.settingRow}
+            onPress={onOpenBackupPhrase}
+            disabled={!onOpenBackupPhrase}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingLabel}>Backup Phrase</Text>
+              <Text style={styles.settingHint}>
+                View your 12-word seed phrase. Save it somewhere safe — without it you cannot recover your identity.
+              </Text>
+            </View>
+            <Text style={[styles.settingValue, { color: colors.accent, fontSize: 18 }]}>{'>'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.settingRow}
+            onPress={onOpenRestoreIdentity}
+            disabled={!onOpenRestoreIdentity}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingLabel}>Restore from Phrase</Text>
+              <Text style={styles.settingHint}>
+                Replace this device's identity with one restored from a saved backup phrase.
+              </Text>
+            </View>
+            <Text style={[styles.settingValue, { color: colors.accent, fontSize: 18 }]}>{'>'}</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Data */}

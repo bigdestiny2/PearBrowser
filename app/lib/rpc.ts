@@ -110,6 +110,10 @@ export class PearRPC {
     return this.request(CMD.LOAD_CATALOG, { keyHex }, 60000)
   }
 
+  loadCatalogBee(keyHex: string) {
+    return this.request(CMD.LOAD_CATALOG_BEE, { keyHex }, 60000)
+  }
+
   installApp(appInfo: any) {
     return this.request(CMD.INSTALL_APP, appInfo, 120000)
   }
@@ -173,6 +177,71 @@ export class PearRPC {
 
   setRelayEnabled(enabled: boolean) {
     return this.request(CMD.SET_RELAY_ENABLED, { enabled })
+  }
+
+  // --- User data (Phase 1 ticket 2) ---
+  // Hyperbee-backed bookmarks, history, settings, session, tabs.
+
+  userDataListBookmarks(): Promise<{ bookmarks: Array<{ url: string; title: string; addedAt: number }> }> {
+    return this.request(CMD.USERDATA_LIST_BOOKMARKS)
+  }
+
+  userDataAddBookmark(url: string, title: string) {
+    return this.request(CMD.USERDATA_ADD_BOOKMARK, { url, title })
+  }
+
+  userDataRemoveBookmark(url: string) {
+    return this.request(CMD.USERDATA_REMOVE_BOOKMARK, { url })
+  }
+
+  userDataListHistory(limit?: number): Promise<{ history: Array<{ url: string; title: string; visitedAt: number }> }> {
+    return this.request(CMD.USERDATA_LIST_HISTORY, { limit })
+  }
+
+  userDataAddHistory(url: string, title: string) {
+    return this.request(CMD.USERDATA_ADD_HISTORY, { url, title })
+  }
+
+  userDataClearHistory() {
+    return this.request(CMD.USERDATA_CLEAR_HISTORY)
+  }
+
+  userDataGetSettings(): Promise<{ settings: Record<string, unknown> }> {
+    return this.request(CMD.USERDATA_GET_SETTINGS)
+  }
+
+  userDataSetSettings(updates: Record<string, unknown>) {
+    return this.request(CMD.USERDATA_SET_SETTINGS, { updates })
+  }
+
+  userDataGetSession(): Promise<{ session: Record<string, unknown> | null }> {
+    return this.request(CMD.USERDATA_GET_SESSION)
+  }
+
+  userDataSaveSession(state: Record<string, unknown>) {
+    return this.request(CMD.USERDATA_SAVE_SESSION, { state })
+  }
+
+  userDataImport(dump: Record<string, unknown>) {
+    return this.request(CMD.USERDATA_IMPORT, { dump })
+  }
+
+  // --- Identity (Phase 1 ticket 3) ---
+
+  identityExportPhrase(): Promise<{ mnemonic: string }> {
+    return this.request(CMD.IDENTITY_EXPORT_PHRASE)
+  }
+
+  identityImportPhrase(mnemonic: string): Promise<{ ok: true; restartRequired: boolean }> {
+    return this.request(CMD.IDENTITY_IMPORT_PHRASE, { mnemonic })
+  }
+
+  identityRotate(): Promise<{ ok: true; restartRequired: boolean }> {
+    return this.request(CMD.IDENTITY_ROTATE)
+  }
+
+  identityValidatePhrase(mnemonic: string): Promise<{ valid: boolean }> {
+    return this.request(CMD.IDENTITY_VALIDATE_PHRASE, { mnemonic })
   }
 
   // --- Events ---

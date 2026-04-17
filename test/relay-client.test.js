@@ -11,38 +11,7 @@
 
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
-const Module = require('node:module')
-const path = require('node:path')
-
-// --- Stub Bare-only modules so backend/*.js can load under plain Node ---
-
-const stubDir = path.join(__dirname, '.stubs')
-const fs = require('node:fs')
-if (!fs.existsSync(stubDir)) fs.mkdirSync(stubDir)
-
-const STUBS = {
-  'bare-http1': 'module.exports = { request: () => ({ end: () => {} }) }',
-  'bare-crypto': 'module.exports = require("node:crypto")',
-  'b4a': `module.exports = {
-    from: (x) => typeof x === 'string' ? Buffer.from(x) : Buffer.from(x || []),
-    alloc: Buffer.alloc,
-    concat: Buffer.concat,
-    toString: (b, enc) => Buffer.from(b).toString(enc),
-  }`,
-}
-
-for (const [name, body] of Object.entries(STUBS)) {
-  const file = path.join(stubDir, `${name.replace(/[^a-z0-9]/gi, '_')}.js`)
-  fs.writeFileSync(file, body)
-  STUBS[name] = file
-}
-
-const origResolve = Module._resolveFilename
-Module._resolveFilename = function (request, ...rest) {
-  if (STUBS[request]) return STUBS[request]
-  return origResolve.call(this, request, ...rest)
-}
-
+require('./_stubs')
 const { RelayClient } = require('../backend/relay-client')
 
 test('constructor defaults to enabled=true and a single fallback relay', () => {

@@ -52,11 +52,17 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
         })))
         setLastLoadSource(url)
       } else if (rpc) {
+        // hyperbee://KEY — canonical Pear-native catalog (Phase 1 ticket 1)
+        // hyper://KEY — legacy Hyperdrive catalog (current default)
+        const isBee = url.startsWith('hyperbee://')
         let key = url
-        if (key.startsWith('hyper://')) key = key.replace('hyper://', '')
-        const catalog = await rpc.loadCatalog(key)
+        if (key.startsWith('hyperbee://')) key = key.replace('hyperbee://', '')
+        else if (key.startsWith('hyper://')) key = key.replace('hyper://', '')
+        const catalog = isBee
+          ? await rpc.loadCatalogBee(key)
+          : await rpc.loadCatalog(key)
         setSites(catalog.apps || [])
-        setLastLoadSource(`hyper://${key}`)
+        setLastLoadSource(`${isBee ? 'hyperbee' : 'hyper'}://${key}`)
       } else {
         throw new Error('P2P engine not available. Use an https:// relay URL instead.')
       }
