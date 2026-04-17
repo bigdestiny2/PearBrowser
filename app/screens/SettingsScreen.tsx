@@ -13,6 +13,12 @@ type Props = {
   rpc?: PearRPC | null
 }
 
+type RelayConfig = {
+  relays: string[]
+  enabled: boolean
+  configured: boolean
+}
+
 export function SettingsScreen({ onBack, rpc }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [catalogInput, setCatalogInput] = useState('')
@@ -21,6 +27,8 @@ export function SettingsScreen({ onBack, rpc }: Props) {
     limit: 1024 * 1024 * 1024, // 1GB default
     percent: 0
   })
+  const [relayConfig, setRelayConfig] = useState<RelayConfig>({ relays: [], enabled: true, configured: false })
+  const [relayInput, setRelayInput] = useState('')
 
   useEffect(() => {
     getSettings().then(s => {
@@ -28,6 +36,69 @@ export function SettingsScreen({ onBack, rpc }: Props) {
       setCatalogInput(s.catalogUrl)
     })
   }, [])
+
+  // Fetch relay config from worklet (authoritative source)
+  useEffect(() => {
+    if (!rpc) return
+    let cancelled = false
+    rpc.getRelays()
+      .then((cfg) => {
+        if (cancelled) return
+        setRelayConfig({
+          relays: cfg.relays || [],
+          enabled: !!cfg.enabled,
+          configured: !!cfg.configured,
+        })
+      })
+      .catch((err) => console.warn('[Settings] getRelays failed:', err))
+    return () => { cancelled = true }
+  }, [rpc])
+
+  const handleAddRelay = useCallback(async () => {
+    if (!rpc) {
+      Alert.alert('P2P engine not connected', 'Cannot update relays right now.')
+      return
+    }
+    const url = relayInput.trim()
+    if (!url) return
+    if (!/^https?:\/\//i.test(url)) {
+      Alert.alert('Invalid URL', 'Enter an http:// or https:// URL.')
+      return
+    }
+    const next = [...relayConfig.relays, url.replace(/\/+$/, '')]
+    try {
+      const result = await rpc.setRelays(next)
+      setRelayConfig((prev) => ({ ...prev, relays: result.relays }))
+      setRelayInput('')
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Could not add relay.')
+    }
+  }, [rpc, relayInput, relayConfig.relays])
+
+  const handleRemoveRelay = useCallback(async (url: string) => {
+    if (!rpc) return
+    const next = relayConfig.relays.filter((r) => r !== url)
+    if (next.length === 0) {
+      Alert.alert('Cannot remove', 'At least one relay must be configured. Disable the toggle instead to go relay-free.')
+      return
+    }
+    try {
+      const result = await rpc.setRelays(next)
+      setRelayConfig((prev) => ({ ...prev, relays: result.relays }))
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Could not remove relay.')
+    }
+  }, [rpc, relayConfig.relays])
+
+  const handleToggleRelay = useCallback(async (enabled: boolean) => {
+    if (!rpc) return
+    try {
+      const result = await rpc.setRelayEnabled(enabled)
+      setRelayConfig((prev) => ({ ...prev, enabled: result.enabled }))
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Could not update relay setting.')
+    }
+  }, [rpc])
 
   // Fetch storage status on mount and periodically
   useEffect(() => {
@@ -157,21 +228,75 @@ export function SettingsScreen({ onBack, rpc }: Props) {
           </View>
         </View>
 
-        {/* Relay */}
-        <Text style={styles.sectionTitle}>RELAY</Text>
+        {/* Relay (configurable via RPC — Phase 0 ticket 2) */}
+        <Text style={styles.sectionTitle}>RELAYS</Text>
         <View style={styles.card}>
           <View style={styles.settingRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.settingLabel}>Primary Relay</Text>
-              <Text style={styles.settingValue}>{settings.catalogUrl}</Text>
-            </View>
-          </View>
-          <View style={styles.settingRow}>
-            <View style={{ flex: 1 }}>
               <Text style={styles.settingLabel}>Hybrid Fetch</Text>
-              <Text style={styles.settingHint}>Relay HTTP (fast) + P2P Hyperswarm (fallback)</Text>
+              <Text style={styles.settingHint}>
+                Relay HTTP (fast) + P2P Hyperswarm (fallback). Turn off to go pure P2P.
+              </Text>
             </View>
-            <Switch value={true} disabled trackColor={{ true: colors.accent }} />
+            <Switch
+              value={relayConfig.enabled}
+              onValueChange={handleToggleRelay}
+              disabled={!rpc || !relayConfig.configured}
+              trackColor={{ true: colors.accent, false: colors.surfaceElevated }}
+            />
+          </View>
+
+          {!relayConfig.configured && (
+            <Text style={[styles.settingHint, { marginTop: 10 }]}>
+              P2P engine not connected — relay settings will be available once the worklet is ready.
+            </Text>
+          )}
+
+          {relayConfig.relays.length === 0 ? (
+            <Text style={[styles.settingHint, { marginTop: 10 }]}>
+              No relays configured. Add one below to speed up first paint.
+            </Text>
+          ) : (
+            relayConfig.relays.map((url, idx) => (
+              <View key={url} style={styles.settingRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.settingValue} numberOfLines={1} ellipsizeMode="middle">
+                    {url}
+                  </Text>
+                  {idx === 0 && (
+                    <Text style={[styles.settingHint, { color: colors.accent }]}>Primary</Text>
+                  )}
+                </View>
+                {relayConfig.relays.length > 1 && (
+                  <TouchableOpacity
+                    onPress={() => handleRemoveRelay(url)}
+                    style={{ paddingHorizontal: 8, paddingVertical: 4 }}
+                  >
+                    <Text style={{ color: colors.error, fontSize: 12 }}>Remove</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ))
+          )}
+
+          <View style={[styles.inputRow, { marginTop: 8 }]}>
+            <TextInput
+              style={styles.input}
+              value={relayInput}
+              onChangeText={setRelayInput}
+              placeholder="https://relay.example.com"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!!rpc}
+            />
+            <TouchableOpacity
+              onPress={handleAddRelay}
+              style={[styles.saveBtn, !rpc && { opacity: 0.5 }]}
+              disabled={!rpc}
+            >
+              <Text style={styles.saveBtnText}>Add</Text>
+            </TouchableOpacity>
           </View>
         </View>
 

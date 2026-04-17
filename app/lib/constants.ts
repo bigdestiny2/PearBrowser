@@ -19,6 +19,9 @@ export const CMD = {
   LOAD_TEMPLATE: 26,
   CLEAR_CACHE: 30,
   GET_IDENTITY: 31,
+  GET_RELAYS: 40,
+  SET_RELAYS: 41,
+  SET_RELAY_ENABLED: 42,
   BRIDGE: 200,
   STOP: 99,
 } as const

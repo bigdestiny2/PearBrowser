@@ -154,6 +154,27 @@ export class PearRPC {
     return this.request(CMD.GET_IDENTITY)
   }
 
+  // --- Relay configuration (Phase 0 ticket 2) ---
+
+  getRelays(): Promise<{
+    relays: string[]
+    enabled: boolean
+    timeout: number
+    stats?: { hits: number; misses: number; errors: number }
+    circuitBreakers?: Array<{ url: string; failures: number; open: boolean }>
+    configured: boolean
+  }> {
+    return this.request(CMD.GET_RELAYS)
+  }
+
+  setRelays(relays: string[]) {
+    return this.request(CMD.SET_RELAYS, { relays })
+  }
+
+  setRelayEnabled(enabled: boolean) {
+    return this.request(CMD.SET_RELAY_ENABLED, { enabled })
+  }
+
   // --- Events ---
 
   on(event: number, cb: EventCallback) {

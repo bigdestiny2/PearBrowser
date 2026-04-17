@@ -38,6 +38,7 @@ let catalogManager = null
 let appManager = null
 let siteManager = null
 let pearBridge = null
+let relayClient = null
 let peerCount = 0
 let browseDrives = new Map() // keyHex → Hyperdrive (for ad-hoc browsing)
 
@@ -212,20 +213,47 @@ rpc.handle(C.CMD_STOP, async () => {
 
 rpc.handle(C.CMD_CLEAR_CACHE, async () => {
   let cleared = 0
-  
+
   // Clear proxy cache
   if (proxy) {
     const cacheStats = proxy.getCacheStats?.()
     proxy.clearCache?.()
     cleared += cacheStats?.size || 0
   }
-  
+
   // Clear browse drives cache
   for (const [key, { drive }] of browseDrives) {
     try { await drive.clear?.() } catch {}
   }
-  
+
   return { cleared, message: 'Cache cleared successfully' }
+})
+
+// --- Relay configuration (Phase 0 ticket 2) ---
+// Replaces the previously hardcoded relay list in boot().
+// Settings UI writes through these handlers; state is persisted in
+// pearbrowser-state.json so the config survives restarts.
+
+rpc.handle(C.CMD_GET_RELAYS, async () => {
+  if (!relayClient) return { relays: [], enabled: false, configured: false }
+  return { ...relayClient.getConfig(), configured: true }
+})
+
+rpc.handle(C.CMD_SET_RELAYS, async ({ relays } = {}) => {
+  if (!relayClient) throw new Error('Relay client not initialised')
+  if (!Array.isArray(relays)) throw new Error('relays must be an array of URLs')
+  const ok = relayClient.setRelays(relays)
+  if (!ok) throw new Error('No valid http(s) relay URLs provided')
+  persistState()
+  return { ok: true, relays: relayClient.relays }
+})
+
+rpc.handle(C.CMD_SET_RELAY_ENABLED, async ({ enabled } = {}) => {
+  if (!relayClient) throw new Error('Relay client not initialised')
+  if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean')
+  relayClient.setEnabled(enabled)
+  persistState()
+  return { ok: true, enabled: relayClient.enabled }
 })
 
 // --- Drive Management ---
@@ -303,10 +331,16 @@ function persistState () {
     const state = {
       installedApps: appManager ? appManager.export() : {},
       sites: siteManager ? siteManager.export() : {},
+      relayConfig: relayClient ? {
+        relays: relayClient.relays,
+        enabled: relayClient.enabled,
+      } : undefined,
       savedAt: Date.now()
     }
     fs.writeFileSync(storagePath + '/pearbrowser-state.json', JSON.stringify(state))
-  } catch {}
+  } catch (err) {
+    console.warn('[persistState] write failed:', err && err.message)
+  }
 }
 
 // --- Boot ---
@@ -350,11 +384,12 @@ async function boot () {
 
   // Restore persisted app/site state from disk
   const stateFile = storagePath + '/pearbrowser-state.json'
+  let persistedState = {}
   try {
     const raw = fs.readFileSync(stateFile, 'utf-8')
-    const data = safeJSONParse(raw)
-    if (data.installedApps) appManager.import(data.installedApps)
-    if (data.sites) await siteManager.import(data.sites)
+    persistedState = safeJSONParse(raw) || {}
+    if (persistedState.installedApps) appManager.import(persistedState.installedApps)
+    if (persistedState.sites) await siteManager.import(persistedState.sites)
   } catch (err) {
     // No saved state yet — first run
     if (err.code !== 'ENOENT') {
@@ -362,10 +397,20 @@ async function boot () {
     }
   }
 
-  // Initialize relay client for hybrid fast-path
-  // TODO: make relay URLs configurable via RPC settings
-  const relayClient = new RelayClient({
-    relays: ['http://127.0.0.1:9100'], // Local relay for development
+  // Initialize relay client for hybrid fast-path.
+  // Config is user-controllable via CMD_SET_RELAYS / CMD_SET_RELAY_ENABLED
+  // and persisted in pearbrowser-state.json alongside apps and sites.
+  // Phase 0 ticket 2 completed.
+  const DEFAULT_RELAYS = [
+    'https://relay-us.p2phiverelay.xyz',
+    'https://relay-sg.p2phiverelay.xyz'
+  ]
+  const savedRelayConfig = persistedState.relayConfig || {}
+  relayClient = new RelayClient({
+    relays: Array.isArray(savedRelayConfig.relays) && savedRelayConfig.relays.length > 0
+      ? savedRelayConfig.relays
+      : DEFAULT_RELAYS,
+    enabled: savedRelayConfig.enabled !== false,
     timeout: 5000
   })
 

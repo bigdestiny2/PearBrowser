@@ -10,8 +10,11 @@
     "prebuild": "expo prebuild",
     "bundle-backend": "bare-pack --linked --host ios-arm64 backend/index.js -o assets/backend.bundle.mjs",
     "bundle-backend-android": "bare-pack --linked --host android-arm64 backend/index.js -o assets/backend.android.bundle.mjs",
+    "bundle-backend-native-ios": "bare-pack --linked --host ios-arm64 backend/index.js -o backend/dist/backend.ios.bundle",
+    "bundle-backend-native-android": "bare-pack --linked --host android-arm64 backend/index.js -o backend/dist/backend.android.bundle",
     "bundle-all": "npm run bundle-backend && npm run bundle-backend-android",
-    "test": "npx tsc --noEmit && node --check backend/index.js backend/hyper-proxy.js backend/http-bridge.js backend/site-manager.js backend/relay-client.js backend/catalog-manager.js backend/app-manager.js backend/pear-bridge.js backend/rpc.js"
+    "bundle-all-native": "npm run bundle-backend-native-ios && npm run bundle-backend-native-android",
+    "test": "npx tsc --noEmit && node --check backend/index.js backend/hyper-proxy.js backend/http-bridge.js backend/site-manager.js backend/relay-client.js backend/catalog-manager.js backend/app-manager.js backend/pear-bridge.js backend/rpc.js && node --test test/*.test.js"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.1.0",
