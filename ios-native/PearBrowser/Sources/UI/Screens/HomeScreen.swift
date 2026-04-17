@@ -7,6 +7,7 @@ import SwiftUI
 
 struct HomeScreen: View {
     let onNavigate: (String) -> Void
+    let onOpenQR: () -> Void
 
     @State private var input: String = ""
 
@@ -44,9 +45,7 @@ struct HomeScreen: View {
                 .onSubmit(go)
                 .padding(.vertical, 12)
 
-            Button {
-                // QR scanner — wired in the next pass with AVCaptureSession
-            } label: {
+            Button(action: onOpenQR) {
                 Text("QR")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(PearColors.textSecondary)
@@ -99,6 +98,6 @@ struct HomeScreen: View {
 }
 
 #Preview {
-    HomeScreen(onNavigate: { _ in })
+    HomeScreen(onNavigate: { _ in }, onOpenQR: {})
         .environmentObject(PearWorkletHost.shared)
 }
