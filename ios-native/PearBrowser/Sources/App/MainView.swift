@@ -41,13 +41,15 @@ private enum MoreRoute: Hashable {
     case restoreIdentity
     case profile
     case connectedApps
+    case trustedSites
 
     static func == (lhs: MoreRoute, rhs: MoreRoute) -> Bool {
         switch (lhs, rhs) {
         case (.hub, .hub), (.bookmarks, .bookmarks), (.history, .history),
              (.settings, .settings), (.sites, .sites), (.backupPhrase, .backupPhrase),
              (.restoreIdentity, .restoreIdentity),
-             (.profile, .profile), (.connectedApps, .connectedApps):
+             (.profile, .profile), (.connectedApps, .connectedApps),
+             (.trustedSites, .trustedSites):
             return true
         case (.sitesTemplatePicker(let a), .sitesTemplatePicker(let b)): return a == b
         case (.editor(let a, _, _), .editor(let b, _, _)): return a == b
@@ -67,6 +69,7 @@ private enum MoreRoute: Hashable {
         case .restoreIdentity: hasher.combine(8)
         case .profile: hasher.combine(9)
         case .connectedApps: hasher.combine(10)
+        case .trustedSites: hasher.combine(11)
         }
     }
 }
@@ -153,8 +156,11 @@ struct MainView: View {
                 onOpenBackupPhrase: { moreRoute = .backupPhrase },
                 onOpenRestoreIdentity: { moreRoute = .restoreIdentity },
                 onOpenProfile: { moreRoute = .profile },
-                onOpenConnectedApps: { moreRoute = .connectedApps }
+                onOpenConnectedApps: { moreRoute = .connectedApps },
+                onOpenTrustedSites: { moreRoute = .trustedSites }
             )
+        case .trustedSites:
+            TrustedSitesScreen(onBack: { moreRoute = .settings })
         case .backupPhrase:
             BackupPhraseScreen(onBack: { moreRoute = .settings })
         case .restoreIdentity:

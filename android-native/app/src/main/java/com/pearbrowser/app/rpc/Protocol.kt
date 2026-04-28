@@ -76,6 +76,12 @@ object Cmd {
     // Per-origin session tokens for HTTPS apps (Phase E follow-up)
     const val PEAR_SESSION = 95
 
+    // Trusted-origins allow-list (HTTPS parity privacy mode)
+    const val TRUSTED_ORIGINS_LIST = 96
+    const val TRUSTED_ORIGINS_ADD = 97
+    const val TRUSTED_ORIGINS_REMOVE = 98
+    const val TRUSTED_ORIGINS_SET_MODE = 110
+
     // Bridge
     const val BRIDGE = 200
 

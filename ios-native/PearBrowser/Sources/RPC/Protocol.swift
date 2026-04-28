@@ -77,6 +77,12 @@ enum Cmd {
     // HTTPS bridge sessions — issue per-origin token (Phase E follow-up)
     static let PEAR_SESSION = 95
 
+    // Trusted-origins allow-list (HTTPS parity privacy mode)
+    static let TRUSTED_ORIGINS_LIST = 96
+    static let TRUSTED_ORIGINS_ADD = 97
+    static let TRUSTED_ORIGINS_REMOVE = 98
+    static let TRUSTED_ORIGINS_SET_MODE = 110
+
     // Bridge
     static let BRIDGE = 200
 

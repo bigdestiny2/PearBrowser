@@ -23,6 +23,7 @@ const { UserData } = require('./user-data.js')
 const { Identity, validateMnemonic } = require('./identity.js')
 const { Profile } = require('./profile.js')
 const { Contacts } = require('./contacts.js')
+const { TrustedOrigins } = require('./trusted-origins.js')
 const C = require('./constants.js')
 
 const { IPC } = BareKit
@@ -47,6 +48,7 @@ let userData = null
 let identity = null
 let profile = null
 let contacts = null
+let trustedOrigins = null
 /** Map<requestId, { resolve, reject, timer }> for login() ceremonies. */
 const pendingLogins = new Map()
 let peerCount = 0
@@ -559,13 +561,57 @@ rpc.handle(C.CMD_PEAR_SESSION, async ({ origin } = {}) => {
   if (typeof origin !== 'string' || origin.length === 0) {
     throw new Error('origin (string) required')
   }
+
+  // Trust gate: if the user has flipped to 'allowlist' mode and this
+  // origin is not in the trust set, return a sentinel that tells the
+  // native shell "do not inject the bridge for this page". The shell
+  // is the actual injector; the worklet is the policy engine.
+  if (trustedOrigins) {
+    if (!trustedOrigins.isTrustedSync(origin)) {
+      return {
+        allowed: false,
+        reason: 'untrusted-origin',
+        mode: trustedOrigins.modeSync(),
+      }
+    }
+    // Lazy lastUsedAt update — fire-and-forget, swallow errors.
+    trustedOrigins.touch(origin).catch(() => {})
+  }
+
   const result = proxy.issueOriginToken(origin)
   return {
+    allowed: true,
     token: result.token,
     driveKey: result.driveKeyHex,
     origin: result.origin,
     port: proxy.port,
   }
+})
+
+// --- Trusted origins (privacy mode for window.pear injection) ---
+
+function requireTrustedOrigins () {
+  if (!trustedOrigins) throw new Error('TrustedOrigins not available — worklet still booting')
+  return trustedOrigins
+}
+
+rpc.handle(C.CMD_TRUSTED_ORIGINS_LIST, async () => {
+  return await requireTrustedOrigins().list()
+})
+
+rpc.handle(C.CMD_TRUSTED_ORIGINS_ADD, async ({ origin } = {}) => {
+  const value = await requireTrustedOrigins().add(origin)
+  return { ok: true, origin: value }
+})
+
+rpc.handle(C.CMD_TRUSTED_ORIGINS_REMOVE, async ({ origin } = {}) => {
+  const result = await requireTrustedOrigins().remove(origin)
+  return { ok: true, origin: result.origin }
+})
+
+rpc.handle(C.CMD_TRUSTED_ORIGINS_SET_MODE, async ({ mode } = {}) => {
+  const next = await requireTrustedOrigins().setMode(mode)
+  return { ok: true, mode: next }
 })
 
 
@@ -727,6 +773,14 @@ async function boot () {
   contacts = new Contacts(store)
   try { await contacts.ready(); console.log('Contacts ready') }
   catch (err) { console.error('Contacts init failed:', err && err.message); contacts = null }
+
+  // Trusted-origins allow-list — gates window.pear injection on HTTPS
+  // pages when the user has flipped to 'allowlist' mode. Default 'all'
+  // mode preserves the current "inject everywhere, unauthorised until
+  // login()" behaviour.
+  trustedOrigins = new TrustedOrigins(store, swarm)
+  try { await trustedOrigins.ready(); console.log('TrustedOrigins ready, mode=' + trustedOrigins.modeSync()) }
+  catch (err) { console.error('TrustedOrigins init failed:', err && err.message); trustedOrigins = null }
 
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'managers-ready', message: 'Managers loaded' })
 

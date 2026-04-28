@@ -20,6 +20,7 @@ struct SettingsScreen: View {
     let onOpenRestoreIdentity: () -> Void
     let onOpenProfile: () -> Void
     let onOpenConnectedApps: () -> Void
+    let onOpenTrustedSites: () -> Void
 
     @Environment(\.pearRPC) private var rpc
     @EnvironmentObject private var host: PearWorkletHost
@@ -131,8 +132,12 @@ struct SettingsScreen: View {
                 }
             }
             .tint(PearColors.accent)
+            .padding(14)
+            Divider().background(PearColors.border)
+            identityRow("Trusted Sites",
+                        subtitle: "Choose which sites can use the window.pear bridge.",
+                        onTap: onOpenTrustedSites)
         }
-        .padding(14)
         .background(PearColors.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 

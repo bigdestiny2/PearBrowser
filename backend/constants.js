@@ -79,6 +79,15 @@ const CMD_CONTACTS_REMOVE = 94
 // non-hyper:// pages so HTTPS apps can use window.pear.* uniformly).
 const CMD_PEAR_SESSION = 95
 
+// Trusted-origins allow-list — opt-in privacy mode that gates which
+// HTTPS origins get the window.pear bridge injected. Default mode
+// is 'all' (current behaviour); user can flip to 'allowlist' in
+// Settings → Privacy.
+const CMD_TRUSTED_ORIGINS_LIST = 96
+const CMD_TRUSTED_ORIGINS_ADD = 97
+const CMD_TRUSTED_ORIGINS_REMOVE = 98
+const CMD_TRUSTED_ORIGINS_SET_MODE = 110
+
 // Pear Bridge (WebView → worklet via RN relay)
 const CMD_BRIDGE = 200
 
@@ -114,6 +123,8 @@ module.exports = {
   CMD_LOGIN_LIST_GRANTS, CMD_LOGIN_REVOKE_GRANT, CMD_LOGIN_REVOKE_ALL, CMD_LOGIN_RESOLVE,
   CMD_CONTACTS_LIST, CMD_CONTACTS_LOOKUP, CMD_CONTACTS_ADD, CMD_CONTACTS_UPDATE, CMD_CONTACTS_REMOVE,
   CMD_PEAR_SESSION,
+  CMD_TRUSTED_ORIGINS_LIST, CMD_TRUSTED_ORIGINS_ADD,
+  CMD_TRUSTED_ORIGINS_REMOVE, CMD_TRUSTED_ORIGINS_SET_MODE,
   CMD_BRIDGE,
   CMD_STOP,
   EVT_READY, EVT_PEER_COUNT, EVT_ERROR, EVT_INSTALL_PROGRESS, EVT_SITE_PUBLISHED, EVT_BOOT_PROGRESS,

@@ -57,6 +57,11 @@ export const CMD = {
   CONTACTS_REMOVE: 94,
   // Per-origin session tokens for HTTPS apps
   PEAR_SESSION: 95,
+  // Trusted-origins allow-list (HTTPS parity privacy mode)
+  TRUSTED_ORIGINS_LIST: 96,
+  TRUSTED_ORIGINS_ADD: 97,
+  TRUSTED_ORIGINS_REMOVE: 98,
+  TRUSTED_ORIGINS_SET_MODE: 110,
   BRIDGE: 200,
   STOP: 99,
 } as const

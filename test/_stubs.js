@@ -19,13 +19,11 @@ const STUB_SOURCES = {
   'bare-crypto': 'module.exports = require("node:crypto")',
   'bare-fs': 'module.exports = require("node:fs")',
   'bare-path': 'module.exports = require("node:path")',
-  'b4a': `module.exports = {
-    from: (x, enc) => typeof x === 'string' ? Buffer.from(x, enc) : Buffer.from(x || []),
-    alloc: (n) => Buffer.alloc(n),
-    isBuffer: (b) => Buffer.isBuffer(b) || b instanceof Uint8Array,
-    concat: (list) => Buffer.concat(list),
-    toString: (b, enc) => Buffer.from(b).toString(enc || 'utf-8'),
-  }`,
+  // Real b4a works fine under plain Node — just forward to the real
+  // module so corestore/hypercore (which use allocUnsafe, byteLength,
+  // etc.) can pull it in. Earlier we shipped a hand-rolled subset; that
+  // covered relay-client.test.js but broke anyone touching Hyperbee.
+  'b4a': 'module.exports = require(require("path").join(__dirname, "..", "..", "node_modules", "b4a"))',
 }
 
 const STUBS = {}

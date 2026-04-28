@@ -242,14 +242,33 @@ actor PearRPC {
 
     // MARK: - Per-origin session token (HTTPS bridge, Phase E follow-up)
 
+    /// Result of a pearSession() call.
+    /// - `.allowed`: the worklet trusts this origin (or is in 'all' mode)
+    ///   and has minted a session token. The shell SHOULD inject the
+    ///   bridge with this token.
+    /// - `.denied`: the worklet is in 'allowlist' mode and the origin
+    ///   isn't trusted. The shell MUST NOT inject the bridge.
+    enum PearSession: Sendable {
+        case allowed(token: String, driveKey: String, origin: String, port: Int)
+        case denied(reason: String, mode: String)
+    }
+
     /// Mint a session token + pseudo-driveKey for an HTTPS origin so the
     /// shell can inject `window.pear.*` into pages on that origin and
     /// have the bridge accept their requests.
     ///
     /// `origin` should be `scheme://host[:port]` — anything else gets
     /// canonicalised by the worklet.
-    func pearSession(origin: String) async throws -> (token: String, driveKey: String, origin: String, port: Int) {
+    func pearSession(origin: String) async throws -> PearSession {
         let resp = try await request(Cmd.PEAR_SESSION, data: ["origin": origin]) as? [String: Any]
+        // Trust gate denial — the worklet returns `allowed: false` plus a
+        // reason and the current mode so the shell can decide whether to
+        // surface a "Trust this site" affordance.
+        if let allowed = resp?["allowed"] as? Bool, allowed == false {
+            let reason = (resp?["reason"] as? String) ?? "denied"
+            let mode = (resp?["mode"] as? String) ?? "allowlist"
+            return .denied(reason: reason, mode: mode)
+        }
         guard
             let token = resp?["token"] as? String,
             let driveKey = resp?["driveKey"] as? String,
@@ -258,7 +277,46 @@ actor PearRPC {
             throw RPCError(message: "pearSession: malformed response")
         }
         let port = (resp?["port"] as? Int) ?? 0
-        return (token, driveKey, canonical, port)
+        return .allowed(token: token, driveKey: driveKey, origin: canonical, port: port)
+    }
+
+    // MARK: - Trusted-origins management (Settings → Privacy)
+
+    struct TrustedOrigin: Sendable {
+        let origin: String
+        let trustedAt: Double
+        let lastUsedAt: Double
+    }
+
+    /// List the user's trusted origins plus the current injection mode.
+    func trustedOriginsList() async throws -> (origins: [TrustedOrigin], mode: String) {
+        let resp = try await request(Cmd.TRUSTED_ORIGINS_LIST) as? [String: Any]
+        let mode = (resp?["mode"] as? String) ?? "all"
+        let raw = (resp?["origins"] as? [[String: Any]]) ?? []
+        let origins = raw.compactMap { entry -> TrustedOrigin? in
+            guard let origin = entry["origin"] as? String else { return nil }
+            let trustedAt = (entry["trustedAt"] as? Double) ?? 0
+            let lastUsedAt = (entry["lastUsedAt"] as? Double) ?? 0
+            return TrustedOrigin(origin: origin, trustedAt: trustedAt, lastUsedAt: lastUsedAt)
+        }
+        return (origins, mode)
+    }
+
+    @discardableResult
+    func trustedOriginsAdd(_ origin: String) async throws -> String {
+        let resp = try await request(Cmd.TRUSTED_ORIGINS_ADD, data: ["origin": origin]) as? [String: Any]
+        let value = (resp?["origin"] as? [String: Any])?["origin"] as? String
+        return value ?? origin
+    }
+
+    func trustedOriginsRemove(_ origin: String) async throws {
+        _ = try await request(Cmd.TRUSTED_ORIGINS_REMOVE, data: ["origin": origin])
+    }
+
+    @discardableResult
+    func trustedOriginsSetMode(_ mode: String) async throws -> String {
+        let resp = try await request(Cmd.TRUSTED_ORIGINS_SET_MODE, data: ["mode": mode]) as? [String: Any]
+        return (resp?["mode"] as? String) ?? mode
     }
 
     // MARK: - Framing

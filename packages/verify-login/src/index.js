@@ -87,6 +87,47 @@ function extractDriveKey (tag) {
 }
 
 /**
+ * Canonicalise an origin string the same way PearBrowser's worklet does
+ * in `backend/hyper-proxy.js#normaliseOrigin()`. Returns the
+ * `scheme://host[:port]` form, with default ports stripped and the
+ * hostname lowercased — or null if the input is malformed.
+ *
+ * Same input contract: takes a URL-ish string (with or without path),
+ * returns just the canonical origin.
+ */
+function canonicaliseOrigin (origin) {
+  if (typeof origin !== 'string') return null
+  try {
+    const u = new URL(origin)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    if (!u.hostname) return null
+    const defaultPort = u.protocol === 'https:' ? '443' : '80'
+    const port = u.port && u.port !== defaultPort ? ':' + u.port : ''
+    return `${u.protocol}//${u.hostname.toLowerCase()}${port}`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Derive the pseudo-driveKey PearBrowser issues for a given HTTPS
+ * origin: `sha256("pear.origin.v1:" || canonical_origin).hex()`.
+ *
+ * Mirrors `HyperProxy.issueOriginToken()` in the worklet, so a server
+ * verifying an attestation can compute the EXPECTED driveKey from its
+ * own origin string and pass it to `verifyLoginAttestation` via
+ * `expectedOrigin` (or `expectedDriveKey` directly).
+ */
+function originToDriveKey (origin) {
+  const canonical = canonicaliseOrigin(origin)
+  if (!canonical) return null
+  const h = require('crypto').createHash('sha256')
+  h.update('pear.origin.v1:')
+  h.update(canonical)
+  return h.digest('hex')
+}
+
+/**
  * Verify a PearBrowser login attestation.
  *
  * @param {object} attestation  from window.pear.login()
@@ -128,8 +169,18 @@ async function verifyLoginAttestation (attestation, opts = {}) {
   if (!driveKey || !HEX_64.test(driveKey)) {
     return { ok: false, error: 'tag driveKey malformed' }
   }
-  if (opts.expectedDriveKey && driveKey.toLowerCase() !== String(opts.expectedDriveKey).toLowerCase()) {
-    return { ok: false, error: `driveKey mismatch: got ${driveKey}, expected ${opts.expectedDriveKey}` }
+  // Resolve expectedDriveKey — either passed directly OR derived from
+  // expectedOrigin (your server's origin string). Both forms collapse
+  // to the same lowercase hex driveKey.
+  let expected = opts.expectedDriveKey
+  if (!expected && opts.expectedOrigin) {
+    expected = originToDriveKey(opts.expectedOrigin)
+    if (!expected) {
+      return { ok: false, error: `expectedOrigin "${opts.expectedOrigin}" is not a valid http(s) origin` }
+    }
+  }
+  if (expected && driveKey.toLowerCase() !== String(expected).toLowerCase()) {
+    return { ok: false, error: `driveKey mismatch: got ${driveKey}, expected ${expected}` }
   }
 
   // 3. Expiry
@@ -198,4 +249,6 @@ module.exports = {
   verifyLoginAttestation,
   verifyLoginMiddleware,
   extractDriveKey,
+  canonicaliseOrigin,
+  originToDriveKey,
 }
