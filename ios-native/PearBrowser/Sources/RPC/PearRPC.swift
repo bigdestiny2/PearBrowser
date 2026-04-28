@@ -240,6 +240,27 @@ actor PearRPC {
         _ = try await request(Cmd.LOGIN_RESOLVE, data: data)
     }
 
+    // MARK: - Per-origin session token (HTTPS bridge, Phase E follow-up)
+
+    /// Mint a session token + pseudo-driveKey for an HTTPS origin so the
+    /// shell can inject `window.pear.*` into pages on that origin and
+    /// have the bridge accept their requests.
+    ///
+    /// `origin` should be `scheme://host[:port]` — anything else gets
+    /// canonicalised by the worklet.
+    func pearSession(origin: String) async throws -> (token: String, driveKey: String, origin: String, port: Int) {
+        let resp = try await request(Cmd.PEAR_SESSION, data: ["origin": origin]) as? [String: Any]
+        guard
+            let token = resp?["token"] as? String,
+            let driveKey = resp?["driveKey"] as? String,
+            let canonical = resp?["origin"] as? String
+        else {
+            throw RPCError(message: "pearSession: malformed response")
+        }
+        let port = (resp?["port"] as? Int) ?? 0
+        return (token, driveKey, canonical, port)
+    }
+
     // MARK: - Framing
     //
     // Wire format matches backend/rpc.js _send():

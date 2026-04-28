@@ -47,6 +47,39 @@ function isLoopbackOrigin (origin) {
   }
 }
 
+/**
+ * Canonicalise an origin string to `scheme://host[:port]`. Strips path,
+ * query, fragment, default ports. Returns null if it's not a parseable
+ * http(s):// URL with a non-empty host.
+ *
+ * Same input → same output, deterministically. Used to derive a stable
+ * pseudo-drive-key per origin.
+ */
+function normaliseOrigin (origin) {
+  if (typeof origin !== 'string') return null
+  try {
+    const u = new URL(origin)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    if (!u.hostname) return null
+    const defaultPort = u.protocol === 'https:' ? '443' : '80'
+    const port = u.port && u.port !== defaultPort ? ':' + u.port : ''
+    return `${u.protocol}//${u.hostname.toLowerCase()}${port}`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Is this Origin header well-formed enough to be considered a real
+ * web origin (so the bridge layer can then check it against an issued
+ * token)? Rejects loopback (those go via isLoopbackOrigin) and
+ * malformed strings.
+ */
+function isCanonicalHttpOrigin (origin) {
+  const norm = normaliseOrigin(origin)
+  return norm !== null && norm === origin
+}
+
 const CONTENT_TYPES = {
   html: 'text/html; charset=utf-8',
   htm: 'text/html; charset=utf-8',
@@ -142,26 +175,33 @@ class HyperProxy {
   }
 
   async _handle (req, res) {
-    // Validate origin - only allow strict loopback origins
+    // Origin policy:
+    //   - Loopback origins (http://127.0.0.1, http://localhost) — always allowed.
+    //     hyper:// pages served via this proxy come from loopback, so they
+    //     always pass.
+    //   - http(s) origins — allowed IF the request carries an X-Pear-Token
+    //     issued for that exact origin via issueOriginToken(). The
+    //     http-bridge layer cross-checks the Origin header against the
+    //     token's recorded origin on each call. Here we allow the
+    //     request through so the bridge can do that check.
+    //   - Anything else — rejected outright.
     const origin = req.headers.origin
-    if (origin && !isLoopbackOrigin(origin)) {
+    const acceptableOrigin = origin && (isLoopbackOrigin(origin) || isCanonicalHttpOrigin(origin))
+    if (origin && !acceptableOrigin) {
       res.statusCode = 403
       res.setHeader('Content-Type', 'text/plain')
-      return res.end('Invalid origin: only localhost is allowed')
+      return res.end('Invalid origin')
     }
 
-    // Set CORS headers for valid origins
+    // Set CORS headers — echo the request origin (which we just validated
+    // is loopback or a well-formed http(s) origin) or fall back to
+    // loopback for browsers that don't send Origin.
     res.setHeader('Access-Control-Allow-Origin', origin || 'http://127.0.0.1')
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Pear-Token')
 
     // CORS preflight handler
     if (req.method === 'OPTIONS') {
-      if (origin && !isLoopbackOrigin(origin)) {
-        res.statusCode = 403
-        return res.end('Invalid origin')
-      }
-      res.setHeader('Access-Control-Allow-Origin', origin || 'http://127.0.0.1')
       res.statusCode = 204
       return res.end()
     }
@@ -525,16 +565,63 @@ class HyperProxy {
     }
     this._cleanupExpiredApiTokens()
     const token = crypto.randomBytes(32).toString('hex')
-    this._apiTokens.set(token, { driveKeyHex, issuedAt: Date.now() })
+    this._apiTokens.set(token, { driveKeyHex, origin: null, kind: 'drive', issuedAt: Date.now() })
     return token
   }
 
+  /**
+   * Issue a session token scoped to an HTTPS (or http) Origin string.
+   *
+   * The origin acts as a pseudo-drive-key: we hash it with a v1 domain
+   * separator to get a stable 64-hex pseudo-key. That feeds the same
+   * identity sub-keypair derivation used for hyper:// drives, so the
+   * `pear.login()` ceremony, profile grants, and verify-login pipeline
+   * all work uniformly across hyper:// and HTTPS apps.
+   *
+   * Same origin (same scheme + host + port) → same pseudo-driveKey
+   * forever → stable per-user-per-site sub-pubkey.
+   * Different origins → different pseudo-driveKeys → different sub-pubkeys.
+   *
+   * Phase E follow-up — the per-origin token security model. See
+   * docs/HOLEPUNCH_ALIGNMENT_PLAN.md and packages/verify-login/README.md.
+   */
+  issueOriginToken (originString) {
+    const origin = normaliseOrigin(originString)
+    if (!origin) throw new Error('Invalid origin')
+
+    // Reject literal loopback — those don't need origin scoping; they
+    // get the unscoped browser-context flow.
+    if (isLoopbackOrigin(origin)) {
+      throw new Error('Origin tokens are for non-loopback HTTPS origins only')
+    }
+
+    const driveKeyHex = crypto.createHash('sha256')
+      .update('pear.origin.v1:').update(origin)
+      .digest('hex')
+
+    this._cleanupExpiredApiTokens()
+    const token = crypto.randomBytes(32).toString('hex')
+    this._apiTokens.set(token, {
+      driveKeyHex,
+      origin,
+      kind: 'origin',
+      issuedAt: Date.now(),
+    })
+    return { token, driveKeyHex, origin }
+  }
+
+  /**
+   * Validate a token and return the FULL entry (driveKey + origin + kind).
+   * Callers (http-bridge) cross-check the request's `Origin` header
+   * against `entry.origin` for origin-scoped tokens to prevent token
+   * theft / replay across origins.
+   */
   validateApiToken (token) {
     if (typeof token !== 'string' || token.length < 32) return null
     this._cleanupExpiredApiTokens()
     const entry = this._apiTokens.get(token)
     if (!entry) return null
-    return entry.driveKeyHex
+    return entry
   }
 
   _cleanupExpiredApiTokens () {

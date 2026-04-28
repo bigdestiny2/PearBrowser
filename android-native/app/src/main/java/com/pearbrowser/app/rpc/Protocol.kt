@@ -50,11 +50,31 @@ object Cmd {
     const val USERDATA_SAVE_SESSION = 59
     const val USERDATA_IMPORT = 60
 
-    // Identity (Phase 1 ticket 3)
+    // Identity (Phase 1 ticket 3 + identity plan)
     const val IDENTITY_EXPORT_PHRASE = 70
     const val IDENTITY_IMPORT_PHRASE = 71
     const val IDENTITY_ROTATE = 72
     const val IDENTITY_VALIDATE_PHRASE = 73
+    const val IDENTITY_SIGN = 74
+
+    // Profile + login grants (Identity Plan Phases B + C + F)
+    const val PROFILE_GET = 80
+    const val PROFILE_UPDATE = 81
+    const val PROFILE_CLEAR = 82
+    const val LOGIN_LIST_GRANTS = 83
+    const val LOGIN_REVOKE_GRANT = 84
+    const val LOGIN_REVOKE_ALL = 85
+    const val LOGIN_RESOLVE = 86
+
+    // Contacts (Identity Plan Phase D)
+    const val CONTACTS_LIST = 90
+    const val CONTACTS_LOOKUP = 91
+    const val CONTACTS_ADD = 92
+    const val CONTACTS_UPDATE = 93
+    const val CONTACTS_REMOVE = 94
+
+    // Per-origin session tokens for HTTPS apps (Phase E follow-up)
+    const val PEAR_SESSION = 95
 
     // Bridge
     const val BRIDGE = 200
@@ -70,4 +90,6 @@ object Evt {
     const val INSTALL_PROGRESS = 103
     const val SITE_PUBLISHED = 104
     const val BOOT_PROGRESS = 105
+    /** A page called window.pear.login() — show the consent sheet. */
+    const val LOGIN_REQUEST = 106
 }

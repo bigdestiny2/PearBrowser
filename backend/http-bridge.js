@@ -69,12 +69,35 @@ class HttpBridge {
   _requireToken (req, res) {
     const rawToken = req.headers['x-pear-token']
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken
-    const driveKeyHex = this._validateToken(token)
-    if (!driveKeyHex) {
+    const entry = this._validateToken(token)
+    if (!entry) {
       this._jsonError(res, 'Unauthorized', 401)
       return null
     }
-    return { driveKeyHex, token }
+    // Backward compat: validateToken used to return just the driveKeyHex
+    // string. Newer hyper-proxy returns the full entry. Support both.
+    if (typeof entry === 'string') {
+      return { driveKeyHex: entry, token, origin: null, kind: 'drive' }
+    }
+
+    // For origin-scoped tokens (HTTPS apps that called pear.session()),
+    // require the request's Origin header to match the token's recorded
+    // origin. This prevents a malicious page from stealing another site's
+    // token and replaying it under its own origin.
+    if (entry.kind === 'origin' && entry.origin) {
+      const reqOrigin = req.headers.origin
+      // WKWebView always supplies Origin on cross-origin localhost
+      // fetches. Same-origin same-scheme fetches MAY omit it (a regular
+      // <https> page fetching localhost is by definition cross-origin
+      // so Origin will be set).
+      if (typeof reqOrigin !== 'string' || reqOrigin !== entry.origin) {
+        this._jsonError(res,
+          `Origin mismatch — token issued for ${entry.origin}, request from ${reqOrigin || '(none)'}`,
+          403)
+        return null
+      }
+    }
+    return { driveKeyHex: entry.driveKeyHex, token, origin: entry.origin, kind: entry.kind }
   }
 
   /**

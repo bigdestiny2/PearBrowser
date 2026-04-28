@@ -544,6 +544,30 @@ rpc.handle(C.CMD_CONTACTS_REMOVE, async ({ pubkey } = {}) => {
   return { ok: true }
 })
 
+// --- Per-origin session tokens (HTTPS apps, Phase E follow-up) ---
+//
+// Native shell calls this when navigating to a non-loopback URL. We
+// derive a deterministic pseudo-driveKey from the origin string and
+// hand back a token + the proxy port so the shell can inject the
+// bridge with that token. Same origin + same user = same per-app
+// sub-pubkey forever.
+//
+// The shell does NOT call this for hyper:// URLs — those go through
+// the existing flow which calls proxy.issueApiToken(actualDriveKey).
+rpc.handle(C.CMD_PEAR_SESSION, async ({ origin } = {}) => {
+  if (!proxy) throw new Error('Proxy not running')
+  if (typeof origin !== 'string' || origin.length === 0) {
+    throw new Error('origin (string) required')
+  }
+  const result = proxy.issueOriginToken(origin)
+  return {
+    token: result.token,
+    driveKey: result.driveKeyHex,
+    origin: result.origin,
+    port: proxy.port,
+  }
+})
+
 
 // Also enrich the existing CMD_GET_IDENTITY response with mnemonic hint
 // (without exposing the phrase itself) so the UI can show identity status.

@@ -74,6 +74,9 @@ enum Cmd {
     static let CONTACTS_UPDATE = 93
     static let CONTACTS_REMOVE = 94
 
+    // HTTPS bridge sessions — issue per-origin token (Phase E follow-up)
+    static let PEAR_SESSION = 95
+
     // Bridge
     static let BRIDGE = 200
 

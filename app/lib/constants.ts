@@ -35,11 +35,28 @@ export const CMD = {
   USERDATA_GET_SESSION: 58,
   USERDATA_SAVE_SESSION: 59,
   USERDATA_IMPORT: 60,
-  // Identity (Phase 1 ticket 3)
+  // Identity (Phase 1 ticket 3 + identity plan)
   IDENTITY_EXPORT_PHRASE: 70,
   IDENTITY_IMPORT_PHRASE: 71,
   IDENTITY_ROTATE: 72,
   IDENTITY_VALIDATE_PHRASE: 73,
+  IDENTITY_SIGN: 74,
+  // Profile + grants
+  PROFILE_GET: 80,
+  PROFILE_UPDATE: 81,
+  PROFILE_CLEAR: 82,
+  LOGIN_LIST_GRANTS: 83,
+  LOGIN_REVOKE_GRANT: 84,
+  LOGIN_REVOKE_ALL: 85,
+  LOGIN_RESOLVE: 86,
+  // Contacts
+  CONTACTS_LIST: 90,
+  CONTACTS_LOOKUP: 91,
+  CONTACTS_ADD: 92,
+  CONTACTS_UPDATE: 93,
+  CONTACTS_REMOVE: 94,
+  // Per-origin session tokens for HTTPS apps
+  PEAR_SESSION: 95,
   BRIDGE: 200,
   STOP: 99,
 } as const
@@ -52,4 +69,6 @@ export const EVT = {
   INSTALL_PROGRESS: 103,
   SITE_PUBLISHED: 104,
   BOOT_PROGRESS: 105,
+  /** A page called window.pear.login() — show the consent sheet. */
+  LOGIN_REQUEST: 106,
 } as const
