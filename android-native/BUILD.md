@@ -9,15 +9,17 @@ reusing the `backend/` worklet from the RN project verbatim.
 | Area | Status |
 |---|---|
 | Gradle project | ✅ scaffolded (AGP 8.7, Kotlin 2.1, Compose BOM 2025.01) |
-| Kotlin IPC client (`PearRpc.kt`) | ✅ full API, mirrors `app/lib/rpc.ts` |
-| Worklet host (`PearWorkletService.kt`) | ✅ reflectively loads `bare-kit.jar` |
+| Kotlin IPC client (`PearRpc.kt`) | ✅ full worklet API, mirrors `app/lib/rpc.ts` |
+| Binder RPC bridge (`IPearRpcService.aidl`, `PearRpcClient.kt`) | ✅ UI process can call worklet RPC through `PearWorkletService` |
+| Worklet host (`PearWorkletService.kt`) | ✅ reflectively loads `bare-kit` and exposes Binder RPC |
 | Compose theme | ✅ matches `app/lib/theme.ts` exactly |
-| HomeScreen | ✅ search bar + welcome state (bookmarks wiring TODO) |
-| ExploreScreen | ✅ HTTP catalog fetch + Visit flow |
+| HomeScreen | ✅ search bar + synced bookmark quick access |
+| ExploreScreen | ✅ HTTP catalog fetch + Visit flow, seeded by synced settings |
 | BrowseScreen | ✅ native WebView + Pear bridge injection |
-| MoreScreen, BookmarksScreen, HistoryScreen, SettingsScreen, MySitesScreen, SiteEditorScreen, QRScannerScreen, TemplatePickerScreen | ⏳ stubs / pending port |
+| MoreScreen | ✅ connected-apps route + live status/settings summary |
+| BookmarksScreen, HistoryScreen, SettingsScreen, MySitesScreen, SiteEditorScreen, QRScannerScreen, TemplatePickerScreen | ⏳ stubs / pending port |
 | QR scanner (CameraX + ML Kit) | ⏳ dependencies added, screen TODO |
-| APK build + sign | ⏳ needs `bare-kit.jar` + bundle |
+| APK build + sign | ⏳ needs `bare-kit` artifact + bundle |
 | TestFlight-equivalent distribution | ⏳ Firebase App Distribution config TODO |
 
 ## Prerequisites
@@ -28,11 +30,12 @@ reusing the `backend/` worklet from the RN project verbatim.
    - `cmdline-tools/latest`
 2. **JDK 17** on your `JAVA_HOME`.
 3. **Node.js 20+** (for bundling the backend).
-4. **`bare-kit.jar`** — download the latest release from
+4. **`bare-kit.aar` or `bare-kit.jar`** — download the latest release from
    <https://github.com/holepunchto/bare-kit/releases> and drop it in
+   `android-native/app/libs/bare-kit.aar` (preferred) or
    `android-native/app/libs/bare-kit.jar`.
 
-The jar is **not checked in** (see `.gitignore`). You must fetch it fresh.
+The artifact is **not checked in** (see `.gitignore`). You must fetch it fresh.
 
 ## Building the bundled backend
 
@@ -51,6 +54,13 @@ so the bundle is automatically bundled into the APK's `assets/` folder
 at build time.
 
 ## Building the APK
+
+If this checkout does not include `android-native/gradlew`, substitute the
+sibling wrapper with `-p`:
+
+```bash
+/Users/localllm/Desktop/PearBrowser/android/gradlew -p /Users/localllm/Desktop/PearBrowser/android-native <task>
+```
 
 ```bash
 cd /Users/localllm/Desktop/PearBrowser/android-native
@@ -110,7 +120,7 @@ Drivers:
 **Adding a new screen:**
 1. Drop a `@Composable` into `ui/screens/`
 2. Wire it into `MainActivity.PearBrowserRoot`'s `when (activeTab)` block (or route from MoreScreen)
-3. If the screen needs RPC, inject `PearRpc` via the DI path (TBD — likely a `LocalPearRpc` CompositionLocal in the next pass).
+3. If the screen needs RPC, read `LocalPearRpc.current` and call the typed wrappers on `PearRpcClient` (or add a wrapper there for a new command).
 
 **Adding a new RPC command:**
 1. Add it to the three mirrors: `backend/constants.js`, `app/lib/constants.ts`, **AND** `android-native/app/src/main/java/com/pearbrowser/app/rpc/Protocol.kt`.
@@ -118,6 +128,21 @@ Drivers:
 3. Add the RN method in `app/lib/rpc.ts`.
 4. Add the Kotlin method in `android-native/app/src/main/java/com/pearbrowser/app/rpc/PearRpc.kt`.
 5. Run `npm test` at the repo root to typecheck both JS/TS sides.
+
+**Android Binder RPC smoke check:**
+
+```bash
+cd /Users/localllm/Desktop/PearBrowser/android-native
+./gradlew :app:compileDebugKotlin
+# If ./gradlew is absent:
+/Users/localllm/Desktop/PearBrowser/android/gradlew -p /Users/localllm/Desktop/PearBrowser/android-native :app:compileDebugKotlin
+```
+
+Runtime smoke on a device/emulator:
+1. Install/launch the debug app with `backend.android.bundle` and `bare-kit` present.
+2. Confirm the top-right header changes from `Starting...` to `Engine ready`, `Connected`, or a peer count.
+3. Open **More** and confirm `Worklet Service` is `Bound`, then check live DHT/proxy/storage/settings rows.
+4. Add a bookmark through the worklet-backed user data path and confirm it appears on Home under **Quick Access**.
 
 **Bridge JS changes:**
 The Pear bridge script lives in **two** places:
@@ -129,15 +154,11 @@ mirror from the TS source at build time.
 
 ## Known TODOs before v0.2 ship
 
-- [ ] Connect PearRpc to PearWorkletService via a Binder — currently the RPC handle is instantiated inside the service and not exposed to the UI process
-- [ ] `LocalPearRpc` CompositionLocal for screens to access
-- [ ] Wire HomeScreen bookmarks to `rpc.listBookmarks()`
 - [ ] Finish screen ports (Bookmarks, History, Settings, MySites, SiteEditor, QRScanner, TemplatePicker)
 - [ ] QR scanner (CameraX + ML Kit Vision barcode)
 - [ ] Backup phrase / Restore identity screens
 - [ ] Firebase App Distribution for beta delivery
 - [ ] Verify bare-kit.jar reflection calls against the actual published API
-- [ ] IPC Binder pattern so UI and worklet processes share a `PearRpc` over an AIDL interface
 
 ## References
 

@@ -23,6 +23,7 @@ class HttpBridge {
     this._profile = opts.profile || null
     this._contacts = opts.contacts || null
     this._requestLogin = opts.requestLogin || null  // async (args) => attestation
+    this._swarmBridge = opts.swarmBridge || null
     this._rateLimiter = new Map() // Simple rate limiting per IP
   }
 
@@ -62,13 +63,30 @@ class HttpBridge {
     }
   }
 
+  _isCanonicalHttpOrigin (origin) {
+    if (typeof origin !== 'string') return false
+    try {
+      const parsed = new URL(origin)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+      if (!parsed.hostname) return false
+      return origin === parsed.origin
+    } catch {
+      return false
+    }
+  }
+
   _scopeAppId (driveKeyHex, appId) {
     return `${driveKeyHex}:${appId}`
   }
 
-  _requireToken (req, res) {
+  _requireToken (req, res, urlObj) {
     const rawToken = req.headers['x-pear-token']
-    const token = Array.isArray(rawToken) ? rawToken[0] : rawToken
+    let token = Array.isArray(rawToken) ? rawToken[0] : rawToken
+    // EventSource cannot set custom headers, so the SSE endpoint accepts
+    // the same in-memory capability token as a query parameter.
+    if (!token && urlObj && urlObj.searchParams) {
+      token = urlObj.searchParams.get('token') || null
+    }
     const entry = this._validateToken(token)
     if (!entry) {
       this._jsonError(res, 'Unauthorized', 401)
@@ -121,8 +139,10 @@ class HttpBridge {
     // Origin validation
     const origin = req.headers.origin
     if (origin) {
-      const isAllowed = this._isLoopbackOrigin(origin) &&
+      const isAllowed = (
+        this._isLoopbackOrigin(origin) &&
         this._allowedOrigins.some(allowed => origin === allowed || origin.startsWith(allowed + ':'))
+      ) || this._isCanonicalHttpOrigin(origin)
       if (!isAllowed) {
         res.statusCode = 403
         res.setHeader('Content-Type', 'application/json')
@@ -321,8 +341,6 @@ class HttpBridge {
         const auth = this._requireToken(req, res)
         if (!auth) return true
         if (!this._requestLogin) return this._jsonError(res, 'login not available', 503)
-        let body
-        try { body = await this._readBody(req) } catch { return this._jsonError(res, 'Invalid JSON body', 400) }
         const scopes = Array.isArray(body.scopes) ? body.scopes.map(String) : []
         const appName = typeof body.appName === 'string' ? body.appName.slice(0, 128) : null
         const reason = typeof body.reason === 'string' ? body.reason.slice(0, 512) : null
@@ -439,6 +457,88 @@ class HttpBridge {
           }
         } catch {}
         return this._json(res, { key, path: dirPath, entries })
+      }
+
+      // --- swarm.v1 (direct Hyperswarm access for pages) ---
+
+      if (path.startsWith('/api/swarm/')) {
+        if (!this._swarmBridge) {
+          return this._jsonError(res, 'swarm bridge not available', 503)
+        }
+        const auth = this._requireToken(req, res, url)
+        if (!auth) return true
+
+        if (req.method === 'POST' && path === '/api/swarm/join') {
+          try {
+            const result = await this._swarmBridge.join({
+              driveKeyHex: auth.driveKeyHex,
+              appName: body?.appName || null,
+              reason: body?.reason || null,
+              topicHex: body?.topicHex || null,
+              subtopic: body?.subtopic === undefined ? null : body.subtopic,
+              protocol: body?.protocol || 'pear.swarm.v1',
+              version: body?.version || 1,
+              server: !!body?.server,
+              client: body?.client !== false
+            })
+            return this._json(res, result)
+          } catch (err) {
+            return this._jsonError(res, err.message, 400)
+          }
+        }
+
+        if (req.method === 'POST' && path === '/api/swarm/send') {
+          try {
+            this._swarmBridge.send(body?.channelId, body?.peerId, body?.data)
+            return this._json(res, { ok: true })
+          } catch (err) {
+            return this._jsonError(res, err.message, 400)
+          }
+        }
+
+        if (req.method === 'POST' && path === '/api/swarm/leave') {
+          try {
+            await this._swarmBridge.leave(body?.channelId)
+            return this._json(res, { ok: true })
+          } catch (err) {
+            return this._jsonError(res, err.message, 400)
+          }
+        }
+
+        if (req.method === 'GET' && path === '/api/swarm/events') {
+          const channelId = url.searchParams.get('channelId')
+          if (!channelId) return this._jsonError(res, 'channelId required', 400)
+          res.statusCode = 200
+          res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+          res.setHeader('Cache-Control', 'no-cache, no-transform')
+          res.setHeader('Connection', 'keep-alive')
+          res.setHeader('X-Accel-Buffering', 'no')
+          res.write(': pear.swarm.v1 stream\n\n')
+
+          const closeHandlers = []
+          const stream = {
+            send (eventObj) {
+              try {
+                res.write('data: ' + JSON.stringify(eventObj) + '\n\n')
+              } catch {}
+            },
+            close () {
+              try { res.end() } catch {}
+            },
+            onClose (fn) {
+              closeHandlers.push(fn)
+            }
+          }
+          const cleanup = () => closeHandlers.forEach((fn) => { try { fn() } catch {} })
+          req.on('close', cleanup)
+          req.on('error', cleanup)
+          res.on('close', cleanup)
+
+          this._swarmBridge.attachStream(channelId, stream)
+          return true
+        }
+
+        return this._jsonError(res, 'Unknown swarm endpoint', 404)
       }
 
       // --- Status ---

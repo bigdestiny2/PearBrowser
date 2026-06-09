@@ -1,0 +1,249 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Echo Peer</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #101318;
+      color: #edf2f7;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      width: min(720px, 100%);
+      margin: 0 auto;
+      padding: 24px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .status {
+      min-width: 116px;
+      padding: 6px 10px;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #cbd5e1;
+      font-size: 13px;
+      text-align: center;
+    }
+    .status.ready { border-color: #2dd4bf; color: #99f6e4; }
+    .status.error { border-color: #fb7185; color: #fecdd3; }
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      gap: 10px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      color: #94a3b8;
+      font-size: 13px;
+    }
+    input {
+      min-width: 0;
+      width: 100%;
+      height: 40px;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 0 12px;
+      font: inherit;
+    }
+    button {
+      height: 40px;
+      border: 0;
+      border-radius: 6px;
+      background: #2dd4bf;
+      color: #042f2e;
+      font: inherit;
+      font-weight: 700;
+      padding: 0 14px;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #334155;
+      color: #e2e8f0;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+    pre {
+      min-height: 280px;
+      margin: 0;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      background: #070a0f;
+      color: #dbeafe;
+      padding: 14px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    @media (max-width: 620px) {
+      main { padding: 18px; }
+      header { align-items: flex-start; flex-direction: column; }
+      .controls { grid-template-columns: 1fr; }
+      button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Echo Peer</h1>
+      <div id="status" class="status">idle</div>
+    </header>
+    <section class="controls">
+      <label>
+        Room
+        <input id="subtopic" value="examples/echo-peer/default" autocomplete="off">
+      </label>
+      <button id="join" type="button">Join</button>
+      <button id="send" class="secondary" type="button" disabled>Send</button>
+      <button id="leave" class="secondary" type="button" disabled>Leave</button>
+    </section>
+    <pre id="log"></pre>
+  </main>
+
+  <script>
+  (function () {
+    var channel = null
+    var peers = new Map()
+    var encoder = new TextEncoder()
+    var decoder = new TextDecoder()
+
+    var statusEl = document.getElementById('status')
+    var logEl = document.getElementById('log')
+    var roomEl = document.getElementById('subtopic')
+    var joinEl = document.getElementById('join')
+    var sendEl = document.getElementById('send')
+    var leaveEl = document.getElementById('leave')
+
+    function setStatus (text, state) {
+      statusEl.textContent = text
+      statusEl.className = 'status' + (state ? ' ' + state : '')
+    }
+
+    function log (line) {
+      var stamp = new Date().toISOString().slice(11, 19)
+      logEl.textContent += '[' + stamp + '] ' + line + '\n'
+      logEl.scrollTop = logEl.scrollHeight
+    }
+
+    function setJoined (joined) {
+      joinEl.disabled = joined
+      sendEl.disabled = !joined
+      leaveEl.disabled = !joined
+      roomEl.disabled = joined
+    }
+
+    function requireSwarm () {
+      if (!window.pear || !window.pear.swarm || !window.pear.swarm.v1) {
+        throw new Error('window.pear.swarm.v1 unavailable')
+      }
+      return window.pear.swarm.v1
+    }
+
+    async function join () {
+      if (channel) return channel
+      var subtopic = roomEl.value.trim() || 'examples/echo-peer/default'
+      setStatus('joining')
+      log('join(null, { subtopic: "' + subtopic + '" })')
+      channel = await requireSwarm().join(null, {
+        subtopic: subtopic,
+        protocol: 'pear.echo-peer.v1',
+        version: 1,
+        server: true,
+        client: true,
+        appName: 'Echo Peer',
+        reason: 'Find peers in this drive-scoped echo room.'
+      })
+      peers.clear()
+      setJoined(true)
+      setStatus('joined', 'ready')
+      log('joined ' + channel.topicHex + ' tier ' + channel.tier)
+
+      channel.on('peer', function (peer) {
+        peers.set(peer.id, peer)
+        log('peer ' + peer.id)
+        peer.send(encoder.encode('hello from echo-peer'))
+      })
+      channel.on('message', function (peer, data) {
+        var text = decoder.decode(data)
+        log('message ' + peer.id + ': ' + text)
+        if (text.indexOf('echo:') !== 0) {
+          peer.send(encoder.encode('echo:' + text))
+        }
+      })
+      channel.on('peer-leave', function (peer) {
+        peers.delete(peer.id)
+        log('peer-left ' + peer.id)
+      })
+      channel.on('error', function (err) {
+        setStatus('error', 'error')
+        log('error ' + (err && err.message ? err.message : err))
+      })
+      channel.on('closed', function () {
+        channel = null
+        peers.clear()
+        setJoined(false)
+        setStatus('closed')
+        log('closed')
+      })
+      return channel
+    }
+
+    function send (text) {
+      if (!channel) throw new Error('join first')
+      var payload = encoder.encode(text || 'ping from echo-peer')
+      peers.forEach(function (peer) {
+        peer.send(payload)
+        log('sent ' + peer.id + ': ' + decoder.decode(payload))
+      })
+      return peers.size
+    }
+
+    function leave () {
+      if (!channel) return
+      log('leave ' + channel.channelId)
+      channel.destroy()
+    }
+
+    joinEl.addEventListener('click', function () { join().catch(function (err) {
+      setStatus('error', 'error')
+      log('error ' + err.message)
+    }) })
+    sendEl.addEventListener('click', function () { send() })
+    leaveEl.addEventListener('click', leave)
+
+    window.__echoPeer = {
+      join: join,
+      send: send,
+      leave: leave,
+      peers: function () { return Array.from(peers.keys()) },
+      channel: function () { return channel }
+    }
+
+    setStatus(window.pear && window.pear.swarm && window.pear.swarm.v1 ? 'ready' : 'standalone')
+  })()
+  </script>
+</body>
+</html>

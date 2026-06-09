@@ -44,8 +44,105 @@ enum PearBridgeScript {
       body: JSON.stringify(body)
     }).then(function(r) {
       if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || 'API error') });
-      return r.json();
+        return r.json();
     });
+  }
+
+  function b64encode(u8) {
+    var s = '';
+    for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+    return btoa(s);
+  }
+
+  function b64decode(s) {
+    var bin = atob(s);
+    var u8 = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  }
+
+  function makeSwarmChannel(info) {
+    var listeners = { peer: [], message: [], 'peer-leave': [], error: [], closed: [] };
+    var peers = new Map();
+    var destroyed = false;
+    var es = null;
+    function emit(event) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      var fns = listeners[event] || [];
+      for (var i = 0; i < fns.length; i++) {
+        try { fns[i].apply(null, args); } catch (e) { console.error('[pear.swarm] listener threw:', e); }
+      }
+    }
+    function makePeer(peerId, pubkey) {
+      return {
+        id: peerId,
+        pubkey: pubkey || null,
+        send: function(data) {
+          if (destroyed) throw new Error('channel destroyed');
+          var u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
+          apiPost('/api/swarm/send', {
+            channelId: info.channelId,
+            peerId: peerId,
+            data: b64encode(u8)
+          }).catch(function(err) { emit('error', err); });
+        }
+      };
+    }
+    function attachStream() {
+      var url = BASE + '/api/swarm/events?channelId=' + encodeURIComponent(info.channelId)
+        + '&token=' + encodeURIComponent(TOKEN);
+      es = new EventSource(url);
+      es.onmessage = function(ev) {
+        var msg;
+        try { msg = JSON.parse(ev.data); } catch (_) { return; }
+        switch (msg.type) {
+          case 'peer': {
+            var peer = makePeer(msg.peerId, msg.pubkey);
+            peers.set(msg.peerId, peer);
+            emit('peer', peer); break;
+          }
+          case 'peer-leave': {
+            var p = peers.get(msg.peerId); peers.delete(msg.peerId);
+            if (p) emit('peer-leave', p); break;
+          }
+          case 'message': {
+            var peerObj = peers.get(msg.peerId);
+            if (peerObj) emit('message', peerObj, b64decode(msg.data)); break;
+          }
+          case 'error': emit('error', new Error(msg.message || 'swarm error')); break;
+          case 'closed': channel.destroy(); break;
+        }
+      };
+      es.onerror = function() {
+        if (!destroyed) { try { es.close(); } catch (_) {} channel.destroy(); }
+      };
+    }
+    var channel = {
+      channelId: info.channelId,
+      topic: info.topicHex,
+      topicHex: info.topicHex,
+      protocol: info.protocol,
+      version: info.version,
+      tier: info.tier,
+      get peers() { return Array.from(peers.values()); },
+      on: function(event, fn) {
+        if (!listeners[event]) listeners[event] = [];
+        listeners[event].push(fn);
+      },
+      off: function(event, fn) {
+        var arr = listeners[event] || [];
+        var i = arr.indexOf(fn); if (i >= 0) arr.splice(i, 1);
+      },
+      destroy: function() {
+        if (destroyed) return;
+        destroyed = true;
+        try { if (es) es.close(); } catch (_) {}
+        apiPost('/api/swarm/leave', { channelId: info.channelId }).catch(function() {});
+        emit('closed');
+      }
+    };
+    attachStream();
+    return channel;
   }
 
   window.pear = {
@@ -83,6 +180,23 @@ enum PearBridgeScript {
       getPublicKey: function() { return apiGet('/api/identity'); },
       sign: function(payload, namespace) {
         return apiPost('/api/identity/sign', { payload: String(payload), namespace: namespace || '' });
+      }
+    },
+    swarm: {
+      v1: {
+        join: function(topicHex, opts) {
+          opts = opts || {};
+          return apiPost('/api/swarm/join', {
+            topicHex: topicHex || null,
+            subtopic: opts.subtopic === undefined ? null : opts.subtopic,
+            protocol: opts.protocol || 'pear.swarm.v1',
+            version: opts.version === undefined ? 1 : opts.version,
+            server: !!opts.server,
+            client: opts.client !== false,
+            appName: opts.appName || (document.title || null),
+            reason: opts.reason || null
+          }).then(makeSwarmChannel);
+        }
       }
     },
     login: (function() {

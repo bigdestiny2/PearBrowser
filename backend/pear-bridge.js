@@ -496,4 +496,160 @@ class PearBridge {
   }
 }
 
-module.exports = { PearBridge }
+/**
+ * Page-side shim injected into every `text/html` response served by the
+ * HyperProxy. Adds `window.pear.swarm.v1` (and reserves `window.pear`
+ * for future companion APIs).
+ *
+ * Talks to `/api/swarm/{join,send,leave,events}` over same-origin fetch
+ * + EventSource. Token is read from a `<meta name="pear-api-token">`
+ * tag the proxy injects alongside this script.
+ *
+ * Page authors should always feature-detect:
+ *
+ *   if (window.pear?.swarm?.v1) {
+ *     const ch = await window.pear.swarm.v1.join(null, { subtopic: 'rooms/lobby' })
+ *     ch.on('peer', (p) => p.send(new TextEncoder().encode('hi')))
+ *     ch.on('message', (peer, data) => { ... })
+ *   }
+ *
+ * On the wire `data` is base64. The shim decodes to Uint8Array on the
+ * way in and base64-encodes Uint8Array on the way out.
+ */
+const PEAR_SWARM_V1_SHIM = `<script>(function () {
+  if (window.pear && window.pear.swarm && window.pear.swarm.v1) return
+  function readToken () {
+    var m = document.querySelector('meta[name="pear-api-token"]')
+    return m ? m.content : ''
+  }
+  function b64encode (u8) {
+    var s = ''
+    for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i])
+    return btoa(s)
+  }
+  function b64decode (s) {
+    var bin = atob(s)
+    var u8 = new Uint8Array(bin.length)
+    for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i)
+    return u8
+  }
+  async function rpc (method, path, body) {
+    var headers = { 'X-Pear-Token': readToken() }
+    if (body !== undefined) headers['Content-Type'] = 'application/json'
+    var res = await fetch(path, {
+      method: method,
+      headers: headers,
+      body: body === undefined ? undefined : JSON.stringify(body)
+    })
+    if (!res.ok) {
+      var err = ''
+      try { var j = await res.json(); err = (j && j.error) || res.statusText } catch (_) { err = res.statusText }
+      throw new Error('pear.swarm: ' + err)
+    }
+    return res.json()
+  }
+  function makeChannel (info) {
+    var listeners = { peer: [], message: [], 'peer-leave': [], error: [], closed: [] }
+    var peers = new Map()
+    var destroyed = false
+    var es = null
+    function emit (event) {
+      var args = Array.prototype.slice.call(arguments, 1)
+      var fns = listeners[event] || []
+      for (var i = 0; i < fns.length; i++) {
+        try { fns[i].apply(null, args) } catch (e) { console.error('[pear.swarm] listener threw:', e) }
+      }
+    }
+    function makePeer (peerId, pubkey) {
+      return {
+        id: peerId,
+        pubkey: pubkey || null,
+        send: function (data) {
+          if (destroyed) throw new Error('channel destroyed')
+          var u8 = data instanceof Uint8Array ? data : new Uint8Array(data)
+          rpc('POST', '/api/swarm/send', {
+            channelId: info.channelId,
+            peerId: peerId,
+            data: b64encode(u8)
+          }).catch(function (err) { emit('error', err) })
+        }
+      }
+    }
+    function attachStream () {
+      var url = '/api/swarm/events?channelId=' + encodeURIComponent(info.channelId)
+        + '&token=' + encodeURIComponent(readToken())
+      es = new EventSource(url)
+      es.onmessage = function (ev) {
+        var msg
+        try { msg = JSON.parse(ev.data) } catch (_) { return }
+        switch (msg.type) {
+          case 'peer': {
+            var peer = makePeer(msg.peerId, msg.pubkey)
+            peers.set(msg.peerId, peer)
+            emit('peer', peer); break
+          }
+          case 'peer-leave': {
+            var p = peers.get(msg.peerId); peers.delete(msg.peerId)
+            if (p) emit('peer-leave', p); break
+          }
+          case 'message': {
+            var peerObj = peers.get(msg.peerId)
+            if (peerObj) emit('message', peerObj, b64decode(msg.data)); break
+          }
+          case 'error': emit('error', new Error(msg.message || 'swarm error')); break
+          case 'closed': channel.destroy(); break
+        }
+      }
+      es.onerror = function () {
+        if (!destroyed) { try { es.close() } catch (_) {} channel.destroy() }
+      }
+    }
+    var channel = {
+      channelId: info.channelId,
+      topic: info.topicHex,
+      topicHex: info.topicHex,
+      protocol: info.protocol,
+      version: info.version,
+      tier: info.tier,
+      get peers () { return Array.from(peers.values()) },
+      on: function (event, fn) {
+        if (!listeners[event]) listeners[event] = []
+        listeners[event].push(fn)
+      },
+      off: function (event, fn) {
+        var arr = listeners[event] || []
+        var i = arr.indexOf(fn); if (i >= 0) arr.splice(i, 1)
+      },
+      destroy: function () {
+        if (destroyed) return
+        destroyed = true
+        try { if (es) es.close() } catch (_) {}
+        rpc('POST', '/api/swarm/leave', { channelId: info.channelId }).catch(function () {})
+        emit('closed')
+      }
+    }
+    attachStream()
+    return channel
+  }
+  var swarmV1 = {
+    join: async function (topicHex, opts) {
+      opts = opts || {}
+      var info = await rpc('POST', '/api/swarm/join', {
+        topicHex: topicHex || null,
+        subtopic: opts.subtopic === undefined ? null : opts.subtopic,
+        protocol: opts.protocol || 'pear.swarm.v1',
+        version: opts.version === undefined ? 1 : opts.version,
+        server: !!opts.server,
+        client: opts.client !== false,
+        appName: opts.appName || (document.title || null),
+        reason: opts.reason || null
+      })
+      return makeChannel(info)
+    }
+  }
+  if (!window.pear) window.pear = {}
+  if (!window.pear.swarm) window.pear.swarm = {}
+  window.pear.swarm.v1 = swarmV1
+})();</script>`
+
+module.exports = { PearBridge, PEAR_SWARM_V1_SHIM }

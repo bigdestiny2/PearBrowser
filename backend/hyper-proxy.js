@@ -149,10 +149,15 @@ class HyperProxy {
     this._cacheStats = { hits: 0, misses: 0 }
     this._apiTokens = new Map() // token -> { driveKeyHex, issuedAt }
     this._apiTokenTtlMs = 10 * 60 * 1000 // 10 minutes
+    this._pearSwarmShim = ''
   }
 
   setHttpBridge (bridge) {
     this._httpBridge = bridge
+  }
+
+  setPearSwarmShim (shimHtml) {
+    this._pearSwarmShim = String(shimHtml || '')
   }
 
   get port () { return this._port }
@@ -276,6 +281,9 @@ class HyperProxy {
       if (cached) {
         res.setHeader('Content-Type', cached.contentType)
         res.setHeader('X-Cache', 'HIT')
+        if (cached.contentType.includes('text/html')) {
+          return this._serveHtmlWithBridge(res, path, driveKeyHex, cached.content)
+        }
         res.statusCode = 200
         return res.end(cached.content)
       }
@@ -299,16 +307,11 @@ class HyperProxy {
       res.setHeader('Content-Type', contentType)
       res.setHeader('X-Source', result.source)
 
-      // Inject <base> tag for HTML
+      // Inject <base> tag + per-page api-token meta + window.pear.swarm.v1
+      // shim for HTML responses. Pages get the shim "for free" — no
+      // <script src> required from the author.
       if (contentType.includes('text/html')) {
-        const html = content.toString('utf-8')
-        const prefix = path.startsWith('/app/') ? '/app/' : '/hyper/'
-        const baseHref = `http://localhost:${this._port}${prefix}${driveKeyHex}/`
-        const injected = html.includes('<head>')
-          ? html.replace('<head>', `<head><base href="${baseHref}">`)
-          : html.replace(/<html>/i, `<html><head><base href="${baseHref}"></head>`)
-        res.statusCode = 200
-        return res.end(Buffer.from(injected))
+        return this._serveHtmlWithBridge(res, path, driveKeyHex, content)
       }
 
       // Range request support for streaming (video, audio, large files)
@@ -383,6 +386,22 @@ class HyperProxy {
 </body>
 </html>`)
     }
+  }
+
+  _serveHtmlWithBridge (res, path, driveKeyHex, content) {
+    const html = content.toString('utf-8')
+    const prefix = path.startsWith('/app/') ? '/app/' : '/hyper/'
+    const baseHref = `http://localhost:${this._port}${prefix}${driveKeyHex}/`
+    const apiToken = this.issueApiToken(driveKeyHex)
+    const headInjection =
+      `<base href="${baseHref}">` +
+      `<meta name="pear-api-token" content="${apiToken}">` +
+      (this._pearSwarmShim || '')
+    const injected = html.includes('<head>')
+      ? html.replace('<head>', `<head>${headInjection}`)
+      : html.replace(/<html>/i, `<html><head>${headInjection}</head>`)
+    res.statusCode = 200
+    return res.end(Buffer.from(injected))
   }
 
   /**

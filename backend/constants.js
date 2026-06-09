@@ -88,6 +88,12 @@ const CMD_TRUSTED_ORIGINS_ADD = 97
 const CMD_TRUSTED_ORIGINS_REMOVE = 98
 const CMD_TRUSTED_ORIGINS_SET_MODE = 110
 
+// Direct page-scoped Hyperswarm access (`window.pear.swarm.v1`).
+const CMD_SWARM_RESOLVE = 120
+const CMD_SWARM_LIST_GRANTS = 121
+const CMD_SWARM_REVOKE_GRANT = 122
+const CMD_SWARM_REVOKE_ALL_FOR_APP = 123
+
 // Pear Bridge (WebView → worklet via RN relay)
 const CMD_BRIDGE = 200
 
@@ -104,6 +110,9 @@ const EVT_BOOT_PROGRESS = 105
 /** A WebView called window.pear.login() — show the consent sheet.
  *  Payload: { requestId, driveKey, appName, reason, scopes, currentGrant } */
 const EVT_LOGIN_REQUEST = 106
+/** A WebView called window.pear.swarm.v1.join() for an arbitrary topic.
+ *  Payload: { requestId, driveKey, appName, reason, topicHex, protocol } */
+const EVT_SWARM_REQUEST = 107
 
 module.exports = {
   CMD_NAVIGATE, CMD_GET_STATUS,
@@ -125,8 +134,10 @@ module.exports = {
   CMD_PEAR_SESSION,
   CMD_TRUSTED_ORIGINS_LIST, CMD_TRUSTED_ORIGINS_ADD,
   CMD_TRUSTED_ORIGINS_REMOVE, CMD_TRUSTED_ORIGINS_SET_MODE,
+  CMD_SWARM_RESOLVE, CMD_SWARM_LIST_GRANTS,
+  CMD_SWARM_REVOKE_GRANT, CMD_SWARM_REVOKE_ALL_FOR_APP,
   CMD_BRIDGE,
   CMD_STOP,
   EVT_READY, EVT_PEER_COUNT, EVT_ERROR, EVT_INSTALL_PROGRESS, EVT_SITE_PUBLISHED, EVT_BOOT_PROGRESS,
-  EVT_LOGIN_REQUEST,
+  EVT_LOGIN_REQUEST, EVT_SWARM_REQUEST,
 }

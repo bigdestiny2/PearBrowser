@@ -121,6 +121,14 @@ struct MainView: View {
                 }
             )
         }
+        .sheet(item: $host.pendingSwarm) { request in
+            SwarmConsentSheet(
+                request: request,
+                onDecision: { approved in
+                    Task { await host.resolveSwarm(request, approved: approved) }
+                }
+            )
+        }
     }
 
     // MARK: - Navigation

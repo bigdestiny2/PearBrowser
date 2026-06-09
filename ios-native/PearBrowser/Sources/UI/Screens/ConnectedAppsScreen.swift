@@ -5,7 +5,8 @@
 //  shows what scopes it has + when it expires, and lets the user
 //  revoke any or all grants.
 //
-//  RPC: CMD_LOGIN_LIST_GRANTS / REVOKE_GRANT / REVOKE_ALL.
+//  RPC: CMD_LOGIN_LIST_GRANTS / REVOKE_GRANT / REVOKE_ALL and
+//  CMD_SWARM_LIST_GRANTS / REVOKE_GRANT.
 
 import SwiftUI
 
@@ -17,11 +18,22 @@ struct AppGrant: Identifiable, Hashable {
     let expiresAt: Double
 }
 
+struct SwarmTopicGrant: Identifiable, Hashable {
+    var id: String { driveKey + ":" + topicHex }
+    let driveKey: String
+    let topicHex: String
+    let appName: String
+    let protocolName: String
+    let grantedAt: Double
+    let lastUsedAt: Double
+}
+
 struct ConnectedAppsScreen: View {
     let onBack: () -> Void
 
     @Environment(\.pearRPC) private var rpc
     @State private var grants: [AppGrant] = []
+    @State private var swarmGrants: [SwarmTopicGrant] = []
     @State private var loading = true
     @State private var errorMessage: String? = nil
     @State private var showRevokeAllConfirm = false
@@ -46,11 +58,21 @@ struct ConnectedAppsScreen: View {
                             .padding(.top, 40)
                     } else if let errorMessage {
                         errorBox(errorMessage)
-                    } else if grants.isEmpty {
+                    } else if grants.isEmpty && swarmGrants.isEmpty {
                         emptyState
                     } else {
-                        ForEach(grants) { grant in
-                            grantCard(grant)
+                        if !grants.isEmpty {
+                            sectionLabel("Sign-in grants")
+                            ForEach(grants) { grant in
+                                grantCard(grant)
+                            }
+                        }
+                        if !swarmGrants.isEmpty {
+                            sectionLabel("Swarm topic grants")
+                                .padding(.top, grants.isEmpty ? 0 : 12)
+                            ForEach(swarmGrants) { grant in
+                                swarmGrantCard(grant)
+                            }
                         }
                     }
                 }
@@ -83,7 +105,19 @@ struct ConnectedAppsScreen: View {
                 .font(.system(size: 13))
                 .foregroundStyle(PearColors.textSecondary)
                 .lineSpacing(2)
+            Text("Apps that ask for arbitrary peer-network topics are listed separately so you can revoke that network access too.")
+                .font(.system(size: 13))
+                .foregroundStyle(PearColors.textSecondary)
+                .lineSpacing(2)
         }
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(PearColors.textSecondary)
+            .tracking(1)
+            .textCase(.uppercase)
     }
 
     private var emptyState: some View {
@@ -164,6 +198,47 @@ struct ConnectedAppsScreen: View {
         .background(PearColors.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    private func swarmGrantCard(_ grant: SwarmTopicGrant) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10).fill(PearColors.surfaceElevated).frame(width: 44, height: 44)
+                    Text("P2P")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(PearColors.accent)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(grant.appName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(PearColors.textPrimary)
+                    Text("Allowed \(relative(grant.grantedAt)) · used \(relative(grant.lastUsedAt))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(PearColors.textMuted)
+                }
+                Spacer()
+            }
+
+            Text(grant.protocolName)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(PearColors.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(PearColors.surfaceElevated, in: Capsule())
+
+            HStack {
+                Text(String(grant.topicHex.prefix(12)) + "...")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(PearColors.textMuted)
+                Spacer()
+                Button("Revoke") { revokeSwarm(grant) }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(PearColors.error)
+            }
+        }
+        .padding(14)
+        .background(PearColors.surface, in: RoundedRectangle(cornerRadius: 12))
+    }
+
     private func scopeLabel(_ scope: String) -> String {
         switch scope {
         case "profile:read": return "Full profile"
@@ -188,9 +263,10 @@ struct ConnectedAppsScreen: View {
         loading = true
         errorMessage = nil
         defer { loading = false }
-        guard let rpc else { grants = []; return }
+        guard let rpc else { grants = []; swarmGrants = []; return }
         do {
             let raw = try await rpc.loginListGrants()
+            let rawSwarm = try await rpc.swarmListGrants()
             grants = raw.compactMap {
                 guard let dk = $0["driveKeyHex"] as? String else { return nil }
                 return AppGrant(
@@ -199,6 +275,20 @@ struct ConnectedAppsScreen: View {
                     scopes: ($0["scopes"] as? [String]) ?? [],
                     grantedAt: ($0["grantedAt"] as? Double) ?? 0,
                     expiresAt: ($0["expiresAt"] as? Double) ?? 0
+                )
+            }
+            swarmGrants = rawSwarm.compactMap {
+                guard
+                    let driveKey = $0["driveKey"] as? String,
+                    let topicHex = $0["topicHex"] as? String
+                else { return nil }
+                return SwarmTopicGrant(
+                    driveKey: driveKey,
+                    topicHex: topicHex,
+                    appName: ($0["appName"] as? String) ?? "Unknown app",
+                    protocolName: ($0["protocol"] as? String) ?? "pear.swarm.v1",
+                    grantedAt: ($0["grantedAt"] as? Double) ?? 0,
+                    lastUsedAt: ($0["lastUsedAt"] as? Double) ?? 0
                 )
             }
         } catch {
@@ -218,6 +308,14 @@ struct ConnectedAppsScreen: View {
         guard let rpc else { return }
         Task {
             _ = try? await rpc.loginRevokeAll()
+            await load()
+        }
+    }
+
+    private func revokeSwarm(_ grant: SwarmTopicGrant) {
+        guard let rpc else { return }
+        Task {
+            try? await rpc.swarmRevokeGrant(driveKey: grant.driveKey, topicHex: grant.topicHex)
             await load()
         }
     }

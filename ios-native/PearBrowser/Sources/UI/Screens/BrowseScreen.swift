@@ -22,7 +22,9 @@ struct BrowseScreen: View {
     let initialUrl: String?
 
     @EnvironmentObject private var host: PearWorkletHost
+    @State private var webViewUrl: URL?
     @State private var session: BridgeSession?
+    @State private var loadError: String?
     /// Set when the worklet's trusted-origins gate refused the page.
     /// The bridge is NOT injected; we surface a "Trust this site"
     /// affordance so the user can opt in.
@@ -30,17 +32,27 @@ struct BrowseScreen: View {
     @State private var trustErrorMessage: String?
 
     var body: some View {
-        if let urlString = initialUrl, let url = URL(string: urlString) {
+        if let urlString = initialUrl {
             ZStack(alignment: .bottom) {
-                WebViewContainer(
-                    url: url,
-                    session: session
-                )
+                if let webViewUrl {
+                    WebViewContainer(
+                        url: webViewUrl,
+                        session: session
+                    )
+                } else {
+                    loadingState
+                }
                 if let pending = untrustedOrigin {
                     TrustOriginBanner(
                         origin: pending,
                         errorMessage: trustErrorMessage,
-                        onTrust: { Task { await trust(origin: pending, then: url) } }
+                        onTrust: {
+                            Task {
+                                if let original = URL(string: urlString) {
+                                    await trust(origin: pending, then: original)
+                                }
+                            }
+                        }
                     )
                     .padding(.horizontal, 16)
                     .padding(.bottom, 24)
@@ -48,7 +60,7 @@ struct BrowseScreen: View {
                 }
             }
             .ignoresSafeArea(edges: .bottom)
-            .task(id: urlString) { await refreshSession(for: url) }
+            .task(id: urlString) { await prepareNavigation(urlString: urlString) }
         } else {
             VStack(spacing: 12) {
                 Text("Browse")
@@ -63,6 +75,52 @@ struct BrowseScreen: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(PearColors.bg)
         }
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: 12) {
+            ProgressView().tint(PearColors.accent)
+            Text(loadError ?? "Connecting to peers...")
+                .font(.system(size: 14))
+                .foregroundStyle(loadError == nil ? PearColors.textSecondary : PearColors.error)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(PearColors.bg)
+    }
+
+    private func prepareNavigation(urlString: String?) async {
+        guard let urlString, let original = URL(string: urlString) else {
+            webViewUrl = nil
+            session = nil
+            return
+        }
+
+        loadError = nil
+        let scheme = original.scheme?.lowercased()
+
+        if scheme == "hyper" {
+            do {
+                let result = try await host.rpc.navigate(url: urlString)
+                guard let localUrl = result["localUrl"] as? String,
+                      let local = URL(string: localUrl) else {
+                    throw RPCError(message: "navigate returned no localUrl")
+                }
+                let token = (result["apiToken"] as? String) ?? ""
+                session = BridgeSession(port: local.port ?? host.proxyPort, token: token)
+                webViewUrl = local
+                return
+            } catch {
+                session = nil
+                webViewUrl = nil
+                loadError = "Could not open hyper:// URL: \(error.localizedDescription)"
+                return
+            }
+        }
+
+        webViewUrl = original
+        await refreshSession(for: original)
     }
 
     /// Pick a token for this URL. For loopback hyper:// proxy URLs we

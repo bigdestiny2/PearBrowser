@@ -27,6 +27,8 @@ final class PearWorkletHost: ObservableObject {
     /// The currently pending login-consent request. MainView observes
     /// this to pop a native sheet. `nil` when no request is pending.
     @Published var pendingLogin: LoginRequest? = nil
+    /// The currently pending arbitrary swarm-topic consent request.
+    @Published var pendingSwarm: SwarmConsentRequest? = nil
 
     let rpc: PearRPC
 
@@ -50,7 +52,7 @@ final class PearWorkletHost: ObservableObject {
         await rpc.on(Evt.READY) { payload in
             Task { @MainActor in
                 if let dict = payload as? [String: Any] {
-                    weakSelf.value?.proxyPort = (dict["proxyPort"] as? Int) ?? 0
+                    weakSelf.value?.proxyPort = (dict["proxyPort"] as? Int) ?? (dict["port"] as? Int) ?? 0
                     weakSelf.value?.apiToken = (dict["apiToken"] as? String) ?? ""
                 }
                 weakSelf.value?.isReady = true
@@ -97,6 +99,21 @@ final class PearWorkletHost: ObservableObject {
                 scopes: (dict["scopes"] as? [String]) ?? []
             )
             Task { @MainActor in weakSelf.value?.pendingLogin = request }
+        }
+        await rpc.on(Evt.SWARM_REQUEST) { payload in
+            guard let dict = payload as? [String: Any],
+                  let requestId = dict["requestId"] as? String,
+                  let driveKey = dict["driveKey"] as? String,
+                  let topicHex = dict["topicHex"] as? String else { return }
+            let request = SwarmConsentRequest(
+                requestId: requestId,
+                driveKey: driveKey,
+                topicHex: topicHex,
+                protocolName: (dict["protocol"] as? String) ?? "pear.swarm.v1",
+                appName: (dict["appName"] as? String) ?? "A PearBrowser app",
+                reason: (dict["reason"] as? String) ?? ""
+            )
+            Task { @MainActor in weakSelf.value?.pendingSwarm = request }
         }
 
         // Resolve the bundle path out of the app's main bundle. The
@@ -209,6 +226,16 @@ struct LoginRequest: Identifiable, Equatable {
     let scopes: [String]
 }
 
+struct SwarmConsentRequest: Identifiable, Equatable {
+    var id: String { requestId }
+    let requestId: String
+    let driveKey: String
+    let topicHex: String
+    let protocolName: String
+    let appName: String
+    let reason: String
+}
+
 extension PearWorkletHost {
     /// Send the user's decision back to the worklet. `scopes` can
     /// narrow or match what the app asked for.
@@ -224,6 +251,17 @@ extension PearWorkletHost {
         }
         if pendingLogin?.requestId == request.requestId {
             pendingLogin = nil
+        }
+    }
+
+    func resolveSwarm(_ request: SwarmConsentRequest, approved: Bool) async {
+        do {
+            try await rpc.swarmResolve(requestId: request.requestId, approved: approved)
+        } catch {
+            NSLog("[PearWorkletHost] swarmResolve failed: \(error)")
+        }
+        if pendingSwarm?.requestId == request.requestId {
+            pendingSwarm = nil
         }
     }
 }

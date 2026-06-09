@@ -274,6 +274,8 @@ if (window.pear) {
 }
 ```
 
+For direct swarm channels, use `examples/echo-peer` as the fixture: it joins a drive-scoped subtopic with `window.pear.swarm.v1.join(null, { subtopic })`, listens to the event stream, sends messages to peers, and leaves with `channel.destroy()`.
+
 For a quick local server:
 
 ```bash

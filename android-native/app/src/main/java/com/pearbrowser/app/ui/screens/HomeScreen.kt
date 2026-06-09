@@ -1,6 +1,7 @@
 package com.pearbrowser.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,10 +20,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,20 +40,38 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pearbrowser.app.rpc.LocalPearRpc
+import com.pearbrowser.app.rpc.PearBookmark
 import com.pearbrowser.app.ui.theme.PearColors
 
 /**
  * HomeScreen — mirror of `app/screens/HomeScreen.tsx`.
  *
  * Phase 2 ticket — first screen ported to Jetpack Compose. Kept deliberately
- * simple for now: search bar + welcome state + placeholder for bookmarks.
- * Wiring to [com.pearbrowser.app.rpc.PearRpc] for live bookmark sync
- * happens in the follow-up pass.
+ * simple for now: search bar + synced bookmark quick access.
  */
 @Composable
 fun HomeScreen(onNavigate: (String) -> Unit) {
     var input by remember { mutableStateOf("") }
+    var bookmarks by remember { mutableStateOf<List<PearBookmark>>(emptyList()) }
+    var bookmarksLoading by remember { mutableStateOf(false) }
+    var bookmarksError by remember { mutableStateOf<String?>(null) }
     val scroll = rememberScrollState()
+    val rpc = LocalPearRpc.current
+
+    LaunchedEffect(rpc) {
+        val client = rpc ?: return@LaunchedEffect
+        bookmarksLoading = true
+        bookmarksError = null
+        try {
+            bookmarks = client.listBookmarks()
+        } catch (e: Throwable) {
+            bookmarks = emptyList()
+            bookmarksError = e.message ?: "Bookmarks unavailable"
+        } finally {
+            bookmarksLoading = false
+        }
+    }
 
     fun go() {
         var url = input.trim()
@@ -121,32 +142,98 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
             }
         }
 
-        Spacer(Modifier.height(40.dp))
+        Spacer(Modifier.height(32.dp))
 
-        // Welcome state (empty bookmarks)
-        Column(
-            Modifier.fillMaxWidth().padding(vertical = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
+        when {
+            bookmarksLoading -> {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(color = PearColors.Accent)
+                }
+            }
+
+            bookmarks.isNotEmpty() -> {
+                Text(
+                    "Quick Access",
+                    color = PearColors.TextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(10.dp))
+                bookmarks.take(8).forEach { bookmark ->
+                    BookmarkRow(bookmark = bookmark, onNavigate = onNavigate)
+                }
+            }
+
+            else -> {
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        "{ }",
+                        color = PearColors.Accent,
+                        fontSize = 40.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Welcome to PearBrowser",
+                        color = PearColors.TextPrimary,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (bookmarksError == null) {
+                            "Browse the decentralized web, discover P2P sites, and build your own websites."
+                        } else {
+                            "Bookmarks will appear here once the P2P engine is ready."
+                        },
+                        color = PearColors.TextSecondary,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookmarkRow(bookmark: PearBookmark, onNavigate: (String) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .background(PearColors.Surface, RoundedCornerShape(10.dp))
+            .clickable { onNavigate(bookmark.url) }
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
             Text(
-                "{ }",
-                color = PearColors.Accent,
-                fontSize = 40.sp,
-                fontFamily = FontFamily.Monospace,
-            )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Welcome to PearBrowser",
+                bookmark.title.ifBlank { "Site" },
                 color = PearColors.TextPrimary,
-                fontSize = 20.sp,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
             )
-            Spacer(Modifier.height(8.dp))
             Text(
-                "Browse the decentralized web, discover P2P sites, and build your own websites.",
-                color = PearColors.TextSecondary,
-                fontSize = 14.sp,
+                bookmark.url,
+                color = PearColors.TextMuted,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
             )
         }
+        Text(
+            "Open",
+            color = PearColors.Accent,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 12.dp),
+        )
     }
 }

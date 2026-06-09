@@ -16,7 +16,7 @@
     "bundle-all-native": "npm run bundle-backend-native-ios && npm run bundle-backend-native-android",
     "barekit:fetch": "node scripts/fetch-barekit.js",
     "barekit:fetch:addons": "node scripts/fetch-barekit-addons.js",
-    "test": "npx tsc --noEmit && node --check backend/index.js backend/hyper-proxy.js backend/http-bridge.js backend/site-manager.js backend/relay-client.js backend/catalog-manager.js backend/app-manager.js backend/pear-bridge.js backend/rpc.js && node --test test/*.test.js"
+    "test": "npx tsc --noEmit && node --check backend/index.js backend/hyper-proxy.js backend/http-bridge.js backend/swarm-bridge.js backend/swarm-grants.js backend/site-manager.js backend/relay-client.js backend/catalog-manager.js backend/app-manager.js backend/pear-bridge.js backend/rpc.js && node --test --test-concurrency=1 test/*.test.js"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.1.0",
@@ -35,6 +35,7 @@
     "framed-stream": "^1.0.0",
     "hyperbee": "^2.27.3",
     "hypercore": "^11.28.1",
+    "hypercore-crypto": "^3.5.0",
     "hyperdrive": "^13.3.2",
     "hyperswarm": "^4.17.0",
     "react": "19.0.0",
@@ -42,7 +43,8 @@
     "react-native-b4a": "^0.0.4",
     "react-native-bare-kit": "^0.13.0",
     "react-native-safe-area-context": "^5.4.0",
-    "react-native-webview": "^13.12.5"
+    "react-native-webview": "^13.12.5",
+    "z32": "^1.1.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.0",

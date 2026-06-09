@@ -27,10 +27,20 @@ test('pear-bridge-spec.ts exports createBridgeScript and the script template', (
   assert.match(source, /export const PEAR_BRIDGE_SCRIPT_TEMPLATE/, 'template constant not exported')
 })
 
+test('pear-bridge-spec.ts injected template parses as JavaScript', () => {
+  const source = fs.readFileSync(specPath, 'utf-8')
+  const match = source.match(/export const PEAR_BRIDGE_SCRIPT_TEMPLATE: string = `([\s\S]*?)`/)
+  assert.ok(match, 'template string not found')
+  const script = match[1]
+    .replaceAll('__PEAR_BRIDGE_PORT__', '1234')
+    .replaceAll('__PEAR_BRIDGE_TOKEN__', '"test-token"')
+  assert.doesNotThrow(() => new Function(script))
+})
+
 test('pear-bridge-spec.ts declares the window.pear API shape', () => {
   const source = fs.readFileSync(specPath, 'utf-8')
   // The core TS surfaces
-  for (const sym of ['PearAPI', 'PearSyncAPI', 'PearIdentityAPI', 'PearBridgeStatusAPI']) {
+  for (const sym of ['PearAPI', 'PearSyncAPI', 'PearIdentityAPI', 'PearBridgeStatusAPI', 'PearSwarmAPI']) {
     assert.match(source, new RegExp(`export interface ${sym}\\b`), `${sym} interface missing`)
   }
 })

@@ -62,6 +62,11 @@ export const CMD = {
   TRUSTED_ORIGINS_ADD: 97,
   TRUSTED_ORIGINS_REMOVE: 98,
   TRUSTED_ORIGINS_SET_MODE: 110,
+  // Direct page-scoped Hyperswarm access (`window.pear.swarm.v1`)
+  SWARM_RESOLVE: 120,
+  SWARM_LIST_GRANTS: 121,
+  SWARM_REVOKE_GRANT: 122,
+  SWARM_REVOKE_ALL_FOR_APP: 123,
   BRIDGE: 200,
   STOP: 99,
 } as const
@@ -76,4 +81,6 @@ export const EVT = {
   BOOT_PROGRESS: 105,
   /** A page called window.pear.login() — show the consent sheet. */
   LOGIN_REQUEST: 106,
+  /** A page called window.pear.swarm.v1.join() for an arbitrary topic. */
+  SWARM_REQUEST: 107,
 } as const

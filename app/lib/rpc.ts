@@ -244,6 +244,21 @@ export class PearRPC {
     return this.request(CMD.IDENTITY_VALIDATE_PHRASE, { mnemonic })
   }
 
+  // --- Login + swarm consent resolution ---
+
+  loginResolve(requestId: string, approved: boolean, scopes?: string[], ttlMs?: number) {
+    return this.request(CMD.LOGIN_RESOLVE, {
+      requestId,
+      approved,
+      ...(scopes ? { scopes } : {}),
+      ...(ttlMs ? { ttlMs } : {}),
+    })
+  }
+
+  swarmResolve(requestId: string, approved: boolean) {
+    return this.request(CMD.SWARM_RESOLVE, { requestId, approved })
+  }
+
   // --- Events ---
 
   on(event: number, cb: EventCallback) {
@@ -257,7 +272,7 @@ export class PearRPC {
   }
 
   onReady(cb: (port: number) => void) {
-    return this.on(EVT.READY, (data) => cb(data.port))
+    return this.on(EVT.READY, (data) => cb(data.port || data.proxyPort || 0))
   }
 
   onPeerCount(cb: (count: number) => void) {

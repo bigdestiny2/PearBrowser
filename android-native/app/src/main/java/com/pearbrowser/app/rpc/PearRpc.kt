@@ -179,6 +179,50 @@ class PearRpc(
         request(Cmd.IDENTITY_VALIDATE_PHRASE, buildJsonObject { put("mnemonic", mnemonic) })
             .jsonObject["valid"]!!.jsonPrimitive.boolean
 
+    suspend fun loginResolve(
+        requestId: String,
+        approved: Boolean,
+        scopes: List<String>? = null,
+        ttlMs: Int? = null,
+    ): JsonElement =
+        request(Cmd.LOGIN_RESOLVE, buildJsonObject {
+            put("requestId", requestId)
+            put("approved", approved)
+            scopes?.let {
+                putJsonArray("scopes") { it.forEach { scope -> add(scope) } }
+            }
+            ttlMs?.let { put("ttlMs", it) }
+        })
+
+    suspend fun swarmResolve(requestId: String, approved: Boolean): JsonElement =
+        request(Cmd.SWARM_RESOLVE, buildJsonObject {
+            put("requestId", requestId)
+            put("approved", approved)
+        })
+
+    suspend fun loginListGrants(): JsonArray =
+        request(Cmd.LOGIN_LIST_GRANTS).jsonObject["grants"]?.jsonArray ?: JsonArray(emptyList())
+
+    suspend fun loginRevokeGrant(driveKeyHex: String): JsonElement =
+        request(Cmd.LOGIN_REVOKE_GRANT, buildJsonObject { put("driveKeyHex", driveKeyHex) })
+
+    suspend fun loginRevokeAll(): JsonElement =
+        request(Cmd.LOGIN_REVOKE_ALL)
+
+    suspend fun swarmListGrants(driveKey: String? = null): JsonArray =
+        request(Cmd.SWARM_LIST_GRANTS, buildJsonObject {
+            driveKey?.let { put("driveKey", it) }
+        }).jsonObject["grants"]?.jsonArray ?: JsonArray(emptyList())
+
+    suspend fun swarmRevokeGrant(driveKey: String, topicHex: String): JsonElement =
+        request(Cmd.SWARM_REVOKE_GRANT, buildJsonObject {
+            put("driveKey", driveKey)
+            put("topicHex", topicHex)
+        })
+
+    suspend fun swarmRevokeAllForApp(driveKey: String): JsonElement =
+        request(Cmd.SWARM_REVOKE_ALL_FOR_APP, buildJsonObject { put("driveKey", driveKey) })
+
     // ---------- Internal framing ----------
     //
     // Wire format matches backend/rpc.js _send():

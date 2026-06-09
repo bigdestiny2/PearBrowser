@@ -240,6 +240,28 @@ actor PearRPC {
         _ = try await request(Cmd.LOGIN_RESOLVE, data: data)
     }
 
+    // MARK: - swarm.v1 grants + consent
+
+    func swarmResolve(requestId: String, approved: Bool) async throws {
+        _ = try await request(Cmd.SWARM_RESOLVE, data: ["requestId": requestId, "approved": approved])
+    }
+
+    func swarmListGrants(driveKey: String? = nil) async throws -> [[String: Any]] {
+        var data: [String: Any] = [:]
+        if let driveKey { data["driveKey"] = driveKey }
+        let resp = try await request(Cmd.SWARM_LIST_GRANTS, data: data) as? [String: Any]
+        return (resp?["grants"] as? [[String: Any]]) ?? []
+    }
+
+    func swarmRevokeGrant(driveKey: String, topicHex: String) async throws {
+        _ = try await request(Cmd.SWARM_REVOKE_GRANT, data: ["driveKey": driveKey, "topicHex": topicHex])
+    }
+
+    func swarmRevokeAllForApp(driveKey: String) async throws -> Int {
+        let resp = try await request(Cmd.SWARM_REVOKE_ALL_FOR_APP, data: ["driveKey": driveKey]) as? [String: Any]
+        return (resp?["revoked"] as? Int) ?? 0
+    }
+
     // MARK: - Per-origin session token (HTTPS bridge, Phase E follow-up)
 
     /// Result of a pearSession() call.

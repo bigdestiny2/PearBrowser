@@ -82,6 +82,12 @@ object Cmd {
     const val TRUSTED_ORIGINS_REMOVE = 98
     const val TRUSTED_ORIGINS_SET_MODE = 110
 
+    // Direct page-scoped Hyperswarm access (`window.pear.swarm.v1`)
+    const val SWARM_RESOLVE = 120
+    const val SWARM_LIST_GRANTS = 121
+    const val SWARM_REVOKE_GRANT = 122
+    const val SWARM_REVOKE_ALL_FOR_APP = 123
+
     // Bridge
     const val BRIDGE = 200
 
@@ -98,4 +104,6 @@ object Evt {
     const val BOOT_PROGRESS = 105
     /** A page called window.pear.login() — show the consent sheet. */
     const val LOGIN_REQUEST = 106
+    /** A page called window.pear.swarm.v1.join() for an arbitrary topic. */
+    const val SWARM_REQUEST = 107
 }

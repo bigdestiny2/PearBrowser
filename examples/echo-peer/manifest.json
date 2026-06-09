@@ -1,0 +1,10 @@
+{
+  "name": "Echo Peer",
+  "version": "1.0.0",
+  "description": "Drive-scoped swarm.v1 echo fixture for PearBrowser runtime smoke tests",
+  "author": "PearBrowser",
+  "icon": null,
+  "entry": "/index.html",
+  "categories": ["developer", "networking"],
+  "permissions": ["swarm.v1"]
+}

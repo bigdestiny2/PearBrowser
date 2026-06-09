@@ -83,6 +83,12 @@ enum Cmd {
     static let TRUSTED_ORIGINS_REMOVE = 98
     static let TRUSTED_ORIGINS_SET_MODE = 110
 
+    // Direct page-scoped Hyperswarm access (`window.pear.swarm.v1`)
+    static let SWARM_RESOLVE = 120
+    static let SWARM_LIST_GRANTS = 121
+    static let SWARM_REVOKE_GRANT = 122
+    static let SWARM_REVOKE_ALL_FOR_APP = 123
+
     // Bridge
     static let BRIDGE = 200
 
@@ -100,4 +106,7 @@ enum Evt {
     /// A page called window.pear.login() — show the consent sheet.
     /// Payload: { requestId, driveKey, appName, reason, scopes, currentGrant? }
     static let LOGIN_REQUEST = 106
+    /// A page called window.pear.swarm.v1.join() for an arbitrary topic.
+    /// Payload: { requestId, driveKey, appName, reason, topicHex, protocol }
+    static let SWARM_REQUEST = 107
 }

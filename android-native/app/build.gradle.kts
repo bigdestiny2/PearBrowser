@@ -8,19 +8,25 @@ plugins {
 android {
     namespace = "com.pearbrowser.app"
     compileSdk = 35
-    ndkVersion = "27.2.12479018" // Required by bare-kit
+    // Used only to source libc++_shared.so for the prebuilt bare-kit AAR.
+    // Keep this aligned with the installed SDK on CI/dev machines.
+    ndkVersion = "27.1.12297006"
 
     defaultConfig {
         applicationId = "com.pearbrowser.app"
-        minSdk = 26   // Android 8.0 — same floor as Keet
+        // bare-kit.aar declares minSdk 29. Keep the app floor aligned
+        // instead of forcing a manifest override that may crash at runtime.
+        minSdk = 29
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
 
         ndk {
-            // Phase 2 ticket 7: ABI split for small APK size.
-            // arm64-v8a covers ~95% of modern Android devices in 2025.
-            abiFilters += listOf("arm64-v8a")
+            // Include 32-bit ARM for inexpensive Android devices that still
+            // ship armeabi-v7a-only CPUs. Release/App Bundle distribution can
+            // still split by ABI, but the debug APK should install on the
+            // hardware we actually have on the bench.
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
 
         manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -52,6 +58,7 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        aidl = true
     }
 
     packaging {
@@ -73,7 +80,40 @@ android {
     sourceSets {
         getByName("main") {
             assets.srcDirs("src/main/assets", "../../backend/dist")
+            jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs/libcxx"))
         }
+    }
+}
+
+val copyLibcxxShared by tasks.registering(Copy::class) {
+    val hostTag = when {
+        System.getProperty("os.name").startsWith("Mac", ignoreCase = true) -> "darwin-x86_64"
+        System.getProperty("os.name").startsWith("Windows", ignoreCase = true) -> "windows-x86_64"
+        else -> "linux-x86_64"
+    }
+    val libcxxRoot = File(
+        android.ndkDirectory,
+        "toolchains/llvm/prebuilt/$hostTag/sysroot/usr/lib"
+    )
+    val abiTriples = mapOf(
+        "arm64-v8a" to "aarch64-linux-android",
+        "armeabi-v7a" to "arm-linux-androideabi",
+    )
+
+    into(layout.buildDirectory.dir("generated/jniLibs/libcxx"))
+    abiTriples.forEach { (abi, triple) ->
+        val libcxx = File(libcxxRoot, "$triple/libc++_shared.so")
+        if (libcxx.exists()) {
+            from(libcxx) { into(abi) }
+        } else {
+            logger.warn("libc++_shared.so not found for $abi at ${libcxx.absolutePath}")
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name.startsWith("merge") && name.endsWith("JniLibFolders")) {
+        dependsOn(copyLibcxxShared)
     }
 }
 
@@ -98,9 +138,15 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.mlkit.barcode.scanning)
 
-    // Bare Kit — provides the Worklet API.
-    // Phase 2 setup step: download bare-kit.jar from:
-    //   https://github.com/holepunchto/bare-kit/releases/latest
-    // and place it in app/libs/. See BUILD.md.
-    implementation(files("libs/bare-kit.jar"))
+    // Bare Kit — provides the Worklet API + native addon .so files.
+    // Prefer the local AAR mirrored from react-native-bare-kit because it
+    // packages libbare-kit.so and the addon shared libraries together.
+    // If neither artifact exists the app still compiles; PearWorkletService
+    // falls back to demo mode at runtime via reflection.
+    val bareKitAar = file("libs/bare-kit.aar")
+    val bareKitJar = file("libs/bare-kit.jar")
+    when {
+        bareKitAar.exists() -> implementation(files(bareKitAar))
+        bareKitJar.exists() -> implementation(files(bareKitJar))
+    }
 }

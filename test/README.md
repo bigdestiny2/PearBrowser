@@ -13,6 +13,8 @@ a React Native test runner (not configured yet — Phase 2 will add it).
 - `pear-bridge-spec.test.js` — the injected bridge script factory is deterministic and validates inputs
 - `relay-client.test.js` — `RelayClient` config methods (setRelays, setEnabled, getConfig)
 - `backend-syntax.test.js` — every backend/*.js parses cleanly
+- `swarm-v1-parity.test.js` — bridge/native constants, templates, and the `examples/echo-peer` fixture stay in sync
+- `swarm-v1-runtime-smoke.test.js` — runs the mobile/native bridge template against a local `HttpBridge` backend and fake swarm to cover join, SSE events, send, and leave
 
 ## Running
 
@@ -20,4 +22,5 @@ a React Native test runner (not configured yet — Phase 2 will add it).
 npm test                          # typecheck + backend syntax + these tests
 node --test test/                 # just these tests
 node --test test/storage-backend.test.js
+node --test test/swarm-v1-runtime-smoke.test.js
 ```

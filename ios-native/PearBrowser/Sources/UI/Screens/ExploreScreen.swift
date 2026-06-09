@@ -60,9 +60,7 @@ struct ExploreScreen: View {
     }
 
     private func visit(_ site: SiteInfo) {
-        let base = sourceUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let url = "\(base)/v1/hyper/\(site.driveKey)/index.html"
-        onVisit(url)
+        onVisit("hyper://\(site.driveKey)/index.html")
     }
 
     private func load() async {

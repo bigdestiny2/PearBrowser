@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Paths } from 'expo-file-system'
 import { PearRPC } from './lib/rpc'
+import { EVT } from './lib/constants'
 import { networkMonitor, NetworkInfo } from './lib/network'
 import { StatusDot } from './components/StatusDot'
 import * as FileSystem from 'expo-file-system'
@@ -60,6 +61,23 @@ interface ConnectionStatusDetails {
   publishedSites: number
 }
 
+interface LoginConsentRequest {
+  requestId: string
+  driveKey: string
+  appName: string
+  reason: string
+  scopes: string[]
+}
+
+interface SwarmConsentRequest {
+  requestId: string
+  driveKey: string
+  topicHex: string
+  protocol: string
+  appName: string
+  reason: string
+}
+
 export default function App() {
   const [state, setState] = useState<AppState>('booting')
   const [proxyPort, setProxyPort] = useState(0)
@@ -82,6 +100,8 @@ export default function App() {
   const [showQRScanner, setShowQRScanner] = useState(false)
   const [showBackupPhrase, setShowBackupPhrase] = useState(false)
   const [showRestoreIdentity, setShowRestoreIdentity] = useState(false)
+  const [pendingLogin, setPendingLogin] = useState<LoginConsentRequest | null>(null)
+  const [pendingSwarm, setPendingSwarm] = useState<SwarmConsentRequest | null>(null)
   
   // Connection status panel state
   const [showStatusPanel, setShowStatusPanel] = useState(false)
@@ -177,6 +197,29 @@ export default function App() {
           if (mounted && data?.message) {
             setBootProgress(data.message)
           }
+        })
+
+        rpc.on(EVT.LOGIN_REQUEST, (data) => {
+          if (!mounted || !data?.requestId || !data?.driveKey) return
+          setPendingLogin({
+            requestId: String(data.requestId),
+            driveKey: String(data.driveKey),
+            appName: data.appName ? String(data.appName) : 'A PearBrowser app',
+            reason: data.reason ? String(data.reason) : '',
+            scopes: Array.isArray(data.scopes) ? data.scopes.map(String) : [],
+          })
+        })
+
+        rpc.on(EVT.SWARM_REQUEST, (data) => {
+          if (!mounted || !data?.requestId || !data?.driveKey || !data?.topicHex) return
+          setPendingSwarm({
+            requestId: String(data.requestId),
+            driveKey: String(data.driveKey),
+            topicHex: String(data.topicHex),
+            protocol: data.protocol ? String(data.protocol) : 'pear.swarm.v1',
+            appName: data.appName ? String(data.appName) : 'A PearBrowser app',
+            reason: data.reason ? String(data.reason) : '',
+          })
         })
 
         rpc.onError((err) => {
@@ -345,6 +388,34 @@ export default function App() {
     setActiveTab('browse')
   }, [setBrowseUrl, setActiveTab])
 
+  const resolveLoginConsent = useCallback(async (approved: boolean) => {
+    const request = pendingLogin
+    if (!request) return
+    setPendingLogin(null)
+    try {
+      await rpcRef.current?.loginResolve(
+        request.requestId,
+        approved,
+        approved ? request.scopes : []
+      )
+    } catch (err: any) {
+      console.warn('[App] loginResolve failed:', err)
+      if (approved) Alert.alert('Sign-in failed', err?.message || 'Could not complete sign-in.')
+    }
+  }, [pendingLogin])
+
+  const resolveSwarmConsent = useCallback(async (approved: boolean) => {
+    const request = pendingSwarm
+    if (!request) return
+    setPendingSwarm(null)
+    try {
+      await rpcRef.current?.swarmResolve(request.requestId, approved)
+    } catch (err: any) {
+      console.warn('[App] swarmResolve failed:', err)
+      if (approved) Alert.alert('Swarm join failed', err?.message || 'Could not complete swarm join.')
+    }
+  }, [pendingSwarm])
+
   // --- Render ---
 
   if (state !== 'ready') {
@@ -445,6 +516,84 @@ export default function App() {
               </View>
             </ScrollView>
           </View>
+        </View>
+      </Modal>
+
+      {/* pear.login() consent */}
+      <Modal
+        visible={!!pendingLogin}
+        transparent
+        animationType="fade"
+        onRequestClose={() => resolveLoginConsent(false)}
+      >
+        <View style={styles.modalOverlay}>
+          {pendingLogin && (
+            <View style={styles.consentPanel}>
+              <Text style={styles.consentEyebrow}>Pear sign-in</Text>
+              <Text style={styles.consentTitle}>{pendingLogin.appName}</Text>
+              <Text style={styles.consentBody}>
+                This app wants to sign in with your per-app Pear identity.
+                {pendingLogin.reason ? ` ${pendingLogin.reason}` : ''}
+              </Text>
+              <Text style={styles.consentLabel}>Requested access</Text>
+              {pendingLogin.scopes.length > 0 ? pendingLogin.scopes.map(scope => (
+                <Text key={scope} style={styles.consentScope}>• {scope}</Text>
+              )) : (
+                <Text style={styles.consentScope}>• app public key only</Text>
+              )}
+              <Text style={styles.consentFootnote}>
+                The app gets a stable key scoped to this drive, not your root device key.
+              </Text>
+              <View style={styles.consentActions}>
+                <TouchableOpacity style={styles.consentSecondaryBtn} onPress={() => resolveLoginConsent(false)}>
+                  <Text style={styles.consentSecondaryText}>Deny</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.consentPrimaryBtn} onPress={() => resolveLoginConsent(true)}>
+                  <Text style={styles.consentPrimaryText}>Allow</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      {/* window.pear.swarm.v1 arbitrary topic consent */}
+      <Modal
+        visible={!!pendingSwarm}
+        transparent
+        animationType="fade"
+        onRequestClose={() => resolveSwarmConsent(false)}
+      >
+        <View style={styles.modalOverlay}>
+          {pendingSwarm && (
+            <View style={styles.consentPanel}>
+              <Text style={styles.consentEyebrow}>Direct swarm access</Text>
+              <Text style={styles.consentTitle}>{pendingSwarm.appName}</Text>
+              <Text style={styles.consentBody}>
+                This app wants to join a raw Hyperswarm topic. That can expose your network metadata
+                to peers outside the app drive namespace.
+              </Text>
+              {pendingSwarm.reason ? (
+                <>
+                  <Text style={styles.consentLabel}>Reason</Text>
+                  <Text style={styles.consentBody}>{pendingSwarm.reason}</Text>
+                </>
+              ) : null}
+              <Text style={styles.consentLabel}>Topic</Text>
+              <Text style={styles.consentMono}>{pendingSwarm.topicHex}</Text>
+              <Text style={styles.consentFootnote}>
+                Protocol: {pendingSwarm.protocol}. This grant is saved for this app and topic until revoked.
+              </Text>
+              <View style={styles.consentActions}>
+                <TouchableOpacity style={styles.consentSecondaryBtn} onPress={() => resolveSwarmConsent(false)}>
+                  <Text style={styles.consentSecondaryText}>Deny</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.consentPrimaryBtn} onPress={() => resolveSwarmConsent(true)}>
+                  <Text style={styles.consentPrimaryText}>Allow</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </View>
       </Modal>
 
@@ -768,6 +917,93 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     textAlign: 'center',
+  },
+  consentPanel: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 28,
+    borderTopWidth: 1,
+    borderColor: colors.border,
+  },
+  consentEyebrow: {
+    color: colors.accent,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  consentTitle: {
+    color: colors.textPrimary,
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+  consentBody: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  consentLabel: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  consentScope: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    marginBottom: 4,
+  },
+  consentMono: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontFamily: 'monospace',
+    backgroundColor: colors.bg,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 12,
+  },
+  consentFootnote: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 6,
+  },
+  consentActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 20,
+  },
+  consentSecondaryBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 10,
+    backgroundColor: colors.surfaceElevated,
+  },
+  consentSecondaryText: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  consentPrimaryBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 10,
+    backgroundColor: colors.accent,
+  },
+  consentPrimaryText: {
+    color: colors.bg,
+    fontSize: 14,
+    fontWeight: '800',
   },
   tabBar: {
     flexDirection: 'row', backgroundColor: colors.surface,

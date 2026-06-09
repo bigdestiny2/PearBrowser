@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pearbrowser.app.rpc.PearSettings
 import com.pearbrowser.app.ui.theme.PearColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -48,11 +49,15 @@ import java.net.URL
  * Phase 2 ticket — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
  */
 @Composable
-fun ExploreScreen(onVisit: (String) -> Unit) {
+fun ExploreScreen(onVisit: (String) -> Unit, settings: PearSettings? = null) {
     var sites by remember { mutableStateOf<List<Site>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-    var sourceUrl by remember { mutableStateOf("https://relay-us.p2phiverelay.xyz") }
+    var sourceUrl by remember { mutableStateOf(settings?.catalogUrl ?: "https://relay-us.p2phiverelay.xyz") }
+
+    LaunchedEffect(settings?.catalogUrl) {
+        settings?.catalogUrl?.takeIf { it.isNotBlank() }?.let { sourceUrl = it }
+    }
 
     LaunchedEffect(sourceUrl) {
         loading = true

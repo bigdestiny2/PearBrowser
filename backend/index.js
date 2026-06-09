@@ -6,10 +6,14 @@
  * site publishing, and the HTTP proxy for WebView content.
  */
 
+installAndroidFileLockFallback()
+
 const Hyperswarm = require('hyperswarm')
 const Corestore = require('corestore')
 const Hyperdrive = require('hyperdrive')
 const b4a = require('b4a')
+const crypto = require('hypercore-crypto')
+const z32 = require('z32')
 const fs = require('bare-fs')
 const { WorkletRPC } = require('./rpc.js')
 const { HyperProxy } = require('./hyper-proxy.js')
@@ -17,17 +21,95 @@ const { RelayClient } = require('./relay-client.js')
 const { CatalogManager } = require('./catalog-manager.js')
 const { AppManager } = require('./app-manager.js')
 const { SiteManager } = require('./site-manager.js')
-const { PearBridge } = require('./pear-bridge.js')
+const { PearBridge, PEAR_SWARM_V1_SHIM } = require('./pear-bridge.js')
 const { HttpBridge } = require('./http-bridge.js')
 const { UserData } = require('./user-data.js')
 const { Identity, validateMnemonic } = require('./identity.js')
 const { Profile } = require('./profile.js')
 const { Contacts } = require('./contacts.js')
 const { TrustedOrigins } = require('./trusted-origins.js')
+const { SwarmBridge } = require('./swarm-bridge.js')
+const { SwarmGrants } = require('./swarm-grants.js')
 const C = require('./constants.js')
 
 const { IPC } = BareKit
 const storagePath = Bare.argv[0] || './pearbrowser-storage'
+installAndroidFileLockFallback()
+
+function installAndroidFileLockFallback () {
+  if (!isAndroidStorageCompatRuntime()) return
+
+  let fsx
+  try {
+    fsx = require('fs-native-extensions')
+  } catch {
+    return
+  }
+  if (fsx.__pearbrowserAndroidLockFallback) return
+  fsx.__pearbrowserAndroidLockFallback = true
+
+  const originalTryLock = fsx.tryLock
+  const originalWaitForLock = fsx.waitForLock
+  const originalUnlock = fsx.unlock
+  const fallbackLocks = new Set()
+  let warned = false
+
+  const unsupportedLockError = (err) => {
+    if (!err) return false
+    return err.code === 'EINVAL' ||
+      err.code === 'ENOSYS' ||
+      err.code === 'ENOTSUP' ||
+      /invalid argument|not implemented|not supported/i.test(err.message || '')
+  }
+
+  const markFallback = (fd, err) => {
+    fallbackLocks.add(fd)
+    if (!warned) {
+      warned = true
+      console.warn('[android-lock-fallback] Native advisory file locks are unavailable; continuing with a single-worklet lock fallback:', err && err.message)
+    }
+  }
+
+  fsx.tryLock = function tryLockAndroidFallback (fd, offset = 0, length = 0, opts = {}) {
+    try {
+      return originalTryLock.call(this, fd, offset, length, opts)
+    } catch (err) {
+      if (!unsupportedLockError(err)) throw err
+      markFallback(fd, err)
+      return true
+    }
+  }
+
+  fsx.waitForLock = async function waitForLockAndroidFallback (fd, offset = 0, length = 0, opts = {}) {
+    try {
+      return await originalWaitForLock.call(this, fd, offset, length, opts)
+    } catch (err) {
+      if (!unsupportedLockError(err)) throw err
+      markFallback(fd, err)
+    }
+  }
+
+  fsx.unlock = function unlockAndroidFallback (fd, offset = 0, length = 0) {
+    if (fallbackLocks.delete(fd)) return
+    return originalUnlock.call(this, fd, offset, length)
+  }
+}
+
+function isAndroidStorageCompatRuntime () {
+  const platform = global.Bare ? global.Bare.platform : global.process?.platform
+  const isNativeAppWorklet = typeof BareKit !== 'undefined'
+  if (platform === 'ios' || platform === 'ios-simulator') return false
+  return isNativeAppWorklet || platform === 'android'
+}
+
+function normalizeDriveKey (raw) {
+  if (!raw) return raw
+  if (/^[0-9a-f]{64}$/i.test(raw)) return raw.toLowerCase()
+  if (/^[13-9a-km-uw-z]{52}$/i.test(raw)) {
+    try { return Buffer.from(z32.decode(raw.toLowerCase())).toString('hex') } catch {}
+  }
+  return raw
+}
 
 // --- Storage Limits ---
 const STORAGE_LIMIT = 1024 * 1024 * 1024 // 1GB max
@@ -49,8 +131,13 @@ let identity = null
 let profile = null
 let contacts = null
 let trustedOrigins = null
+let swarmBridge = null
+let swarmGrants = null
 /** Map<requestId, { resolve, reject, timer }> for login() ceremonies. */
 const pendingLogins = new Map()
+/** Map<requestId, { resolve, reject, timer }> for swarm.join() consent ceremonies. */
+const pendingSwarmConsents = new Map()
+const SWARM_CONSENT_TIMEOUT_MS = 2 * 60 * 1000
 let peerCount = 0
 let browseDrives = new Map() // keyHex → Hyperdrive (for ad-hoc browsing)
 
@@ -62,7 +149,7 @@ const rpc = new WorkletRPC(IPC)
 rpc.handle(C.CMD_NAVIGATE, async (data) => {
   const { url } = data
   const parsed = new URL(url)
-  const key = parsed.hostname
+  const key = normalizeDriveKey(parsed.hostname)
   const path = parsed.pathname || '/'
   const apiToken = /^[0-9a-f]{64}$/i.test(key) && proxy?.issueApiToken
     ? proxy.issueApiToken(key)
@@ -546,6 +633,63 @@ rpc.handle(C.CMD_CONTACTS_REMOVE, async ({ pubkey } = {}) => {
   return { ok: true }
 })
 
+// --- swarm.v1 — consent ceremony + grants management ---
+//
+// Arbitrary topic joins reveal network metadata and may expose the user to
+// peers outside the current drive's namespace. Tier A drive-derived topics
+// are automatic; Tier C topics pause here for native consent.
+
+async function openSwarmConsent ({ driveKeyHex, appName, reason, topicHex, protocol }) {
+  return await new Promise((resolve, reject) => {
+    const requestId = crypto.randomBytes(16).toString('hex')
+    const timer = setTimeout(() => {
+      if (pendingSwarmConsents.has(requestId)) {
+        pendingSwarmConsents.delete(requestId)
+        reject(new Error('Swarm consent timed out (no response within 2 minutes)'))
+      }
+    }, SWARM_CONSENT_TIMEOUT_MS)
+
+    pendingSwarmConsents.set(requestId, { resolve, reject, timer })
+    rpc.event(C.EVT_SWARM_REQUEST, {
+      requestId,
+      driveKey: driveKeyHex,
+      topicHex,
+      protocol,
+      appName,
+      reason,
+    })
+  })
+}
+
+rpc.handle(C.CMD_SWARM_RESOLVE, async ({ requestId, approved } = {}) => {
+  const pending = pendingSwarmConsents.get(requestId)
+  if (!pending) throw new Error('No pending swarm consent with that id (timed out?)')
+  pendingSwarmConsents.delete(requestId)
+  clearTimeout(pending.timer)
+  pending.resolve(!!approved)
+  return { ok: true, approved: !!approved }
+})
+
+rpc.handle(C.CMD_SWARM_LIST_GRANTS, async ({ driveKey } = {}) => {
+  if (!swarmGrants) return { grants: [] }
+  const grants = driveKey
+    ? await swarmGrants.listForApp(driveKey)
+    : await swarmGrants.list()
+  return { grants }
+})
+
+rpc.handle(C.CMD_SWARM_REVOKE_GRANT, async ({ driveKey, topicHex } = {}) => {
+  if (!swarmGrants) throw new Error('SwarmGrants not available')
+  const result = await swarmGrants.remove(driveKey, topicHex)
+  return { ok: true, ...result }
+})
+
+rpc.handle(C.CMD_SWARM_REVOKE_ALL_FOR_APP, async ({ driveKey } = {}) => {
+  if (!swarmGrants) throw new Error('SwarmGrants not available')
+  const n = await swarmGrants.removeAllForApp(driveKey)
+  return { ok: true, revoked: n }
+})
+
 // --- Per-origin session tokens (HTTPS apps, Phase E follow-up) ---
 //
 // Native shell calls this when navigating to a non-loopback URL. We
@@ -723,7 +867,14 @@ async function boot () {
   // Corestore's primaryKey expects. `unsafe: true` acknowledges that we
   // know what we're doing (corestore >= 7.x guards the primaryKey path
   // because a wrong value destroys existing hypercore data).
-  store = new Corestore(storagePath, { primaryKey: identity.getSeed(), unsafe: true })
+  const corestoreOptions = { primaryKey: identity.getSeed(), unsafe: true }
+  if (isAndroidStorageCompatRuntime()) {
+    // Android app backups are disabled in the manifest. This avoids
+    // device-file's Linux inode/birthtime/xattr checks, which are unstable
+    // on some Android/BareKit devices and can reject valid app-private data.
+    corestoreOptions.allowBackup = true
+  }
+  store = new Corestore(storagePath, corestoreOptions)
   console.log('Corestore created, waiting for ready...')
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'corestore-ready', message: 'Storage ready' })
   await store.ready()
@@ -782,6 +933,18 @@ async function boot () {
   try { await trustedOrigins.ready(); console.log('TrustedOrigins ready, mode=' + trustedOrigins.modeSync()) }
   catch (err) { console.error('TrustedOrigins init failed:', err && err.message); trustedOrigins = null }
 
+  // swarm.v1 — direct Hyperswarm access for pages. Grants persist
+  // per app/topic so arbitrary topics only prompt once until revoked.
+  swarmGrants = new SwarmGrants(store, swarm)
+  try { await swarmGrants.ready(); console.log('SwarmGrants ready') }
+  catch (err) { console.error('SwarmGrants init failed:', err && err.message); swarmGrants = null }
+
+  swarmBridge = new SwarmBridge(swarm, {
+    identity,
+    swarmGrants,
+    requestConsent: (args) => openSwarmConsent(args),
+  })
+
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'managers-ready', message: 'Managers loaded' })
 
   // Restore persisted app/site state from disk
@@ -820,6 +983,7 @@ async function boot () {
   proxy = new HyperProxy(getDriveForProxy, (path, err) => {
     rpc.event(C.EVT_ERROR, { type: 'proxy-error', path, message: err })
   }, relayClient)
+  proxy.setPearSwarmShim(PEAR_SWARM_V1_SHIM)
 
   // Mount direct HTTP bridge (WebView → localhost → Bare, bypasses RN relay)
   const httpBridge = new HttpBridge(pearBridge, swarm, getDriveForProxy, {
@@ -827,6 +991,7 @@ async function boot () {
     identity,
     profile,
     contacts,
+    swarmBridge,
     // Login ceremony plumbing — http-bridge calls requestLogin() when a
     // page invokes pear.login(). We fire EVT_LOGIN_REQUEST up to the
     // UI, which calls CMD_LOGIN_RESOLVE after the user decides. See
@@ -846,11 +1011,12 @@ async function boot () {
 
   // Notify React Native
   console.log('Sending READY event')
-  rpc.event(C.EVT_READY, { port })
+  rpc.event(C.EVT_READY, { port, proxyPort: port })
 }
 
 async function shutdown () {
   if (proxy) { try { await proxy.stop() } catch {} proxy = null }
+  if (swarmBridge) { try { await swarmBridge.destroy() } catch {} swarmBridge = null }
   if (pearBridge) { try { await pearBridge.close() } catch {} pearBridge = null }
   if (siteManager) { try { await siteManager.close() } catch {} siteManager = null }
   if (appManager) { try { await appManager.close() } catch {} appManager = null }
