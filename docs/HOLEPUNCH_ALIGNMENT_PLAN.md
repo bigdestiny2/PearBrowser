@@ -285,7 +285,7 @@ runner and server-as-a-peer apps. Full credit to **Dominic Cassidy** ([@Drache93
 
 ---
 
-## Review hardening pass — self-review at the bar of "would Mathias wince?"
+## Review hardening pass — self-review at a canonical-Holepunch standard
 
 Before submission the whole change set was put through an adversarial multi-agent
 code review at canonical-Holepunch standard; every confirmed finding was fixed or

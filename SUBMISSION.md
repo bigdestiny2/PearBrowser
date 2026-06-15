@@ -42,7 +42,7 @@ This repo is the submission for the **Node Engineer** and **P2P Architect** role
 ## Engineering discipline
 
 Before submitting, the change set was put through an adversarial multi-agent code
-review held to "would the author of streamx wince?" Every confirmed finding was
+review held to a canonical-Holepunch standard (idiomatic streamx + b4a, no shortcuts). Every confirmed finding was
 fixed or **honestly documented as a known gap** (per-app origin isolation) rather
 than half-built. The standout follow-up — **full Protomux multiplexing for
 `swarm.v1`** (many logical channels muxed over one connection per peer, framed by
