@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Headless htmx · over streamx</title>
+  <!-- In a real P2P app htmx is served from the drive, not a CDN; this tag is
+       illustrative. The headless runner (run.js) drives the XHRs directly. -->
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+  <h1>P2P htmx app</h1>
+  <p>This page hits a "server" with <code>hx-get</code> / <code>hx-post</code>.
+     In PearBrowser the server is a <strong>streamx stream</strong> into the
+     worklet — same htmx, no HTTP. Idea: Dominic.</p>
+
+  <button hx-get="/items" hx-target="#list" hx-swap="innerHTML">Load items</button>
+  <ul id="list"></ul>
+
+  <form hx-post="/items" hx-target="#list" hx-swap="innerHTML">
+    <input name="text" placeholder="new item" autocomplete="off">
+    <button type="submit">Add</button>
+  </form>
+</body>
+</html>

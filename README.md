@@ -258,6 +258,9 @@ npm run bundle-all
 # Bundle native shells
 npm run bundle-all-native
 
+# Focused pre-push smoke for native swarm.v1 bridge templates
+npm run smoke:swarm-v1:native
+
 # Generate the native iOS project
 cd ios-native && xcodegen generate && cd ..
 
@@ -305,6 +308,7 @@ PearBrowser/
 - **[Developer Guide](docs/DEVELOPER-GUIDE.md)** — Build and publish your first P2P app
 - **[Desktop Parity Audit](docs/DESKTOP_PARITY_AUDIT_2026-05-19.md)** — Current feature gap analysis against pearbrowser-desktop
 - **[Swarm v1 API](docs/SWARM-V1.md)** — Direct page-scoped Hyperswarm bridge design
+- **[Headless htmx over streamx](examples/htmx-headless/)** — run htmx apps with no HTTP server; `XMLHttpRequest` rides a streamx stream
 - **[Design Document](DESIGN.md)** — UX research, information architecture, color system
 - **[Hybrid Architecture](HYBRID-ARCHITECTURE.md)** — Relay + P2P technical design
 - **[App Catalog Design](APP-CATALOG-DESIGN.md)** — How the decentralized catalog works
@@ -314,6 +318,16 @@ PearBrowser/
 - **[HiveRelay](https://github.com/bigdestiny2/P2P-Hiveswarm)** — The relay backbone powering the App Store
 - **[Pear POS](https://github.com/bigdestiny2/pear-pos)** — P2P point-of-sale system (first app in the catalog)
 - **[Holepunch](https://holepunch.to)** — The P2P stack (Hyperswarm, Hypercore, Bare)
+
+## Acknowledgments
+
+- **Dominic Cassidy** ([@Drache93](https://github.com/Drache93)) — the **XHR-over-streamx** pattern: hook `XMLHttpRequest` so htmx
+  (and any XHR-based app) thinks it's talking to a server, when it's actually a
+  streamx stream into the worklet / a peer / a Hyperdrive. It removes the HTTP
+  "head" entirely — the server-less, streamx-everywhere shape our Holepunch
+  alignment is built around — and lets PearBrowser apps run **headless**. See
+  [`backend/xhr-streamx.js`](backend/xhr-streamx.js) and the
+  [example](examples/htmx-headless/).
 
 ## License
 

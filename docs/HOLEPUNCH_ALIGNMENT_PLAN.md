@@ -264,6 +264,27 @@ After Phase 3, the remaining items from the architecture review checklist:
 
 ---
 
+## Headless transport — XHR over streamx (idea: Dominic Cassidy · @Drache93)
+
+A purist-alignment win that lands now, not at the finish line. Today every page
+request goes `page → localhost HTTP proxy → worklet → P2P` — that localhost
+server is an HTTP **head** the canonical Pear shape doesn't want.
+
+**Dominic's pattern removes it:** hook `XMLHttpRequest` so htmx (and any
+XHR-based app) thinks it's hitting a server, when each request is actually a
+**streamx** stream into the worklet / a peer / a Hyperdrive. No HTTP, no TCP, no
+head — apps can even run **headless** (no browser).
+
+- Shim: `backend/xhr-streamx.js` — `createXHR` / `installXHR` + streamx-native handlers (`serveRoutes`, `serveHyperdrive`, `echoHandler`).
+- Proof: `test/xhr-streamx.test.js` — GET / POST / streaming / json / error (7/7).
+- Demo: `examples/htmx-headless/` — a real htmx app served over streamx, run headless.
+
+This advances review items **2 & 5** (streamx-everywhere, no servers; the bridge
+matching the canonical Pear surface) and opens a clean path to a headless app
+runner and server-as-a-peer apps. Full credit to **Dominic Cassidy** ([@Drache93](https://github.com/Drache93)) for the approach.
+
+---
+
 ## Phase Summary
 
 | Phase | Duration | Deliverable | User-Visible Change |
