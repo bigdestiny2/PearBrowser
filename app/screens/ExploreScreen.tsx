@@ -44,12 +44,20 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
           throw new Error(`Relay returned ${res.status} ${res.statusText || ''}`.trim())
         }
         const catalog = await res.json()
-        setSites((catalog.apps || []).map((a: any) => ({
-          ...a,
-          // Normalize field names
-          name: a.name || a.title || 'Untitled',
-          description: a.description || '',
-        })))
+        // Live relay catalog returns `apps`; the paginated variant returns `items`.
+        // Entries use `appKey` (immutable primary key) and/or `driveKey`; `icon` may be missing.
+        const entries: any[] = catalog.apps || catalog.items || []
+        setSites(entries.map((a: any) => {
+          const driveKey = a.driveKey || a.appKey || a.key || ''
+          return {
+            ...a,
+            driveKey,
+            // Normalize field names
+            id: a.id || driveKey,
+            name: a.name || a.title || 'Untitled',
+            description: a.description || '',
+          }
+        }))
         setLastLoadSource(url)
       } else if (rpc) {
         // hyperbee://KEY — canonical Pear-native catalog (Phase 1 ticket 1)
@@ -61,7 +69,7 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
         const catalog = isBee
           ? await rpc.loadCatalogBee(key)
           : await rpc.loadCatalog(key)
-        setSites(catalog.apps || [])
+        setSites(catalog.apps || catalog.items || [])
         setLastLoadSource(`${isBee ? 'hyperbee' : 'hyper'}://${key}`)
       } else {
         throw new Error('P2P engine not available. Use an https:// relay URL instead.')

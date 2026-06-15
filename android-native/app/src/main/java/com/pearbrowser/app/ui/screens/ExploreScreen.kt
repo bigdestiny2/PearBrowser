@@ -163,10 +163,15 @@ private fun fetchCatalog(base: String): List<Site> {
     conn.inputStream.use { stream ->
         val body = stream.bufferedReader().readText()
         val root = Json.parseToJsonElement(body).jsonObject
-        val apps: JsonElement = root["apps"] ?: return emptyList()
+        // Live relay catalog returns `apps`; the paginated variant returns `items`.
+        // Entries use `appKey` (immutable primary key) and/or `driveKey`; `icon` may be missing.
+        val apps: JsonElement = root["apps"] ?: root["items"] ?: return emptyList()
         return apps.jsonArray.mapNotNull { el ->
             val obj = el.jsonObject
-            val driveKey = obj["driveKey"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            val driveKey = obj["driveKey"]?.jsonPrimitive?.content
+                ?: obj["appKey"]?.jsonPrimitive?.content
+                ?: obj["key"]?.jsonPrimitive?.content
+                ?: return@mapNotNull null
             Site(
                 id = obj["id"]?.jsonPrimitive?.content ?: driveKey,
                 name = obj["name"]?.jsonPrimitive?.content ?: "Untitled",

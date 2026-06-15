@@ -92,12 +92,16 @@ struct ExploreScreen: View {
     }
 
     private func decodeCatalog(data: Data) throws -> [SiteInfo] {
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let apps = root["apps"] as? [[String: Any]] else {
+        // Live relay catalog returns `apps`; the paginated variant returns `items`.
+        // Entries use `appKey` (immutable primary key) and/or `driveKey`; `icon` may be missing.
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return []
         }
+        let apps = (root["apps"] as? [[String: Any]]) ?? (root["items"] as? [[String: Any]]) ?? []
         return apps.compactMap { app in
-            guard let driveKey = app["driveKey"] as? String else { return nil }
+            guard let driveKey = (app["driveKey"] as? String)
+                ?? (app["appKey"] as? String)
+                ?? (app["key"] as? String) else { return nil }
             return SiteInfo(
                 id: (app["id"] as? String) ?? driveKey,
                 name: (app["name"] as? String) ?? "Untitled",

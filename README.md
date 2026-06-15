@@ -13,7 +13,7 @@ cd ios-native && xcodegen generate && cd ..
 npx expo run:ios
 ```
 
-The `examples/echo-peer/` fixture exercises the `window.pear.swarm.v1` bridge end to end. The default relays the app talks to are `relay-us.p2phiverelay.xyz` and `relay-sg.p2phiverelay.xyz`.
+**Try the App Store flow:** the `examples/echo-peer/` fixture is a complete app — `index.html` plus a `manifest.json` (name "Echo Peer", `swarm.v1` permission) that exercises the `window.pear.swarm.v1` bridge end to end. To see it in the App Store, have a relay operator **seed `examples/echo-peer` into a relay catalog** (relay dashboard → Seeding Registry / wizard, or `POST /seed` with its drive key). Because it ships a manifest, it appears as **"Echo Peer"** in PearBrowser's App Store — not "Unknown App." The default relays the app talks to are `relay-us.p2phiverelay.xyz` and `relay-sg.p2phiverelay.xyz`.
 
 ## Why PearBrowser?
 
@@ -27,37 +27,35 @@ PearBrowser flips this model. Apps run on your device and connect directly to ot
 
 PearBrowser has a built-in App Store, but it's not controlled by any single company. Here's how it works:
 
-**Catalogs are hosted on HiveRelay nodes.** Each relay serves a `/catalog.json` endpoint that lists all the P2P apps it knows about. When a developer publishes an app, they seed it on one or more relays, and it automatically appears in the catalog.
+**Catalogs are hosted on HiveRelay nodes.** Each relay serves a `/catalog.json` endpoint that lists all the P2P apps it knows about. When a relay operator seeds an app's drive, the relay reads its manifest and the app appears in that relay's catalog.
 
 **Anyone can run a catalog.** Relays are open source. You can run your own relay with your own curated selection of apps — for your company, your community, or the public. PearBrowser users add relay URLs in Settings to browse different catalogs.
 
-**Apps load instantly.** When you tap "Open" on an app, PearBrowser loads it from the relay's HTTP gateway — not over slow P2P. The relay caches the app's files and serves them like a CDN. First load is under 2 seconds.
+**Apps load instantly.** When you tap "Get/Open" on an app, PearBrowser loads it from the relay's HTTP gateway (`/v1/hyper/<driveKey>/…`) — not over slow P2P — with a direct P2P fallback. The relay caches the app's files and serves them like a CDN. First load is under 2 seconds.
 
-**No gatekeepers.** There's no review process, no 30% fee, no approval queue. Developers publish apps by creating a Hyperdrive and seeding it on a relay. Users discover apps by browsing catalogs from relays they trust.
+**No app-store gatekeepers.** There's no platform review process, no 30% fee, no approval queue. A relay operator decides what their catalog seeds; users choose which relays they trust and browse those catalogs.
 
 **How apps get into the catalog:**
-```
-Developer                          HiveRelay                    PearBrowser
-─────────                          ─────────                    ───────────
-1. Build app (HTML/JS/CSS)
-   + manifest.json
 
-2. Publish as Hyperdrive +
-   announce on the DHT
-   node tools/publish-app.js ./dist
-   (joins topic
-    'pearbrowser-apps-v1',
-    keeps serving the drive)
-                                 → Relay watches that topic,
-                                   discovers the publisher,
-                                   replicates the drive
-                                 → Reads manifest.json
-                                 → Adds to /catalog.json         → User opens
-                                                                    Apps tab
-                                                                 → Sees the app
-                                                                 → Taps "Get"
-                                                                 → App loads
-                                                                    instantly
+1. **Build the app** (HTML/JS/CSS) and ship a `manifest.json` at the drive root (`name`, `description`, `author`, `version`, `categories`, optional `icon`). Publish it as a Hyperdrive so it has a drive key.
+
+2. **A relay operator seeds it.** From the relay dashboard (Seeding Registry / `wizard.html`) or with an authenticated `POST /seed` (Bearer token), the operator hands the relay the app's drive key plus any optional metadata.
+
+3. **The relay eager-replicates the drive and reads its `/manifest.json`** to build the catalog entry (name, description, author, version, categories, icon). An app seeded **without a manifest shows up as "Unknown App"** — so always include one.
+
+4. **The relay serves the aggregated catalog at `GET /catalog.json`.** PearBrowser's App Store fetches it over HTTP and lists the apps. Tapping "Get/Open" loads the app's drive through the relay gateway (`/v1/hyper/<driveKey>/…`) with a P2P fallback.
+
+```
+Developer            Relay operator          HiveRelay                 PearBrowser
+─────────            ──────────────          ─────────                 ───────────
+Build app + drive →  Seed driveKey via   →   Eager-replicates drive,
+manifest.json        dashboard wizard or     reads /manifest.json,
+                     POST /seed (Bearer)     adds entry to catalog  →  App Store fetches
+                                                                       GET /catalog.json
+                                                                    →  Taps "Get/Open"
+                                                                    →  Loads via
+                                                                       /v1/hyper/<driveKey>/…
+                                                                       (P2P fallback)
 ```
 
 ### 2. P2P Browser Runtime
@@ -217,18 +215,23 @@ Any web app works — HTML, CSS, JavaScript. Add a `manifest.json`:
 
 ```bash
 node tools/publish-app.js ./my-app --name "My App"
-# Output: Key: abc123... — keep this process running
+# Output: Key: abc123... — your drive key
 ```
 
-### 3. Let relays discover it
+This writes your app (including `manifest.json`) into a Hyperdrive and prints its drive key. Keep a copy of the app available (the publish process, another peer, or a relay seed) so the drive can replicate.
 
-`publish-app.js` announces your app on the `pearbrowser-apps-v1` DHT topic and keeps serving the drive while it runs. Catalog relays (`tools/catalog-relay.js`) watch that same topic as clients, discover the announcement, replicate your drive, read its `manifest.json`, and add it to their `/catalog.json`. There is no relay endpoint to call — just keep the publish process running long enough for a relay to pick it up (and ideally have a relay seed the drive for 24/7 availability).
+### 3. Get it seeded into a relay catalog
 
-Your app then appears in the catalog of any relay watching the topic. PearBrowser users who browse that relay's App Store will see it.
+A relay operator adds your app to a catalog by **seeding its drive key**:
+
+- From the **relay dashboard** — Seeding Registry / the seeding wizard (`wizard.html`), or
+- Via an authenticated **`POST /seed`** (Bearer token) with the drive key (plus optional metadata).
+
+The relay then **eager-replicates the drive and reads its `/manifest.json`** to build the catalog entry. If the drive has no manifest, it shows up as **"Unknown App"** — so always ship one. Once indexed, your app appears in that relay's `GET /catalog.json`.
 
 ### 4. Users install and run
 
-No configuration needed. Users open PearBrowser → Apps tab → see your app → tap Get → it works.
+No configuration needed. Users open PearBrowser → Apps tab (pointed at a relay that seeded your app) → see your app → tap Get → it loads via the relay gateway (`/v1/hyper/<driveKey>/…`) with a P2P fallback.
 
 ## Tech Stack
 

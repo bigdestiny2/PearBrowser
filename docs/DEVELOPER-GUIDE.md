@@ -520,6 +520,20 @@ The `window.posAPI` is a higher-level API that wraps `window.pear.sync` with a p
 
 ## 3. Publishing Your App
 
+### Publish your app to a relay catalog
+
+This is the path that makes your app installable in PearBrowser's App Store:
+
+1. **Build your app + `manifest.json`.** Ship a `manifest.json` at the drive root with `name`, `description`, `author`, `version`, `categories`, and an optional `icon`. The relay reads these to build the catalog entry — an app seeded **without a manifest shows up as "Unknown App."**
+
+2. **Publish it as a Hyperdrive** (see `tools/publish-app.js` below) so it has a drive key, and keep it reachable (publish process, another peer, or a relay seed) so the relay can replicate it.
+
+3. **Have a relay operator seed the drive key.** From the relay dashboard — the Seeding Registry / seeding wizard (`wizard.html`) — or with an authenticated `POST /seed` (Bearer token) carrying the drive key (plus any optional metadata). The relay **eager-replicates the drive, reads its `/manifest.json`**, and adds the entry to its catalog.
+
+4. **It appears in `GET /catalog.json`.** PearBrowser's App Store fetches that catalog over HTTP; users pointed at that relay see your app and can install it (the app loads via the relay gateway `/v1/hyper/<driveKey>/…` with a P2P fallback).
+
+> The `tools/catalog-relay.js` flow below (`/v1/register`, DHT discovery) is the local self-hosted catalog used for development. Production HiveRelay deployments use the dashboard / `POST /seed` seeding path described above.
+
 ### Using tools/publish-app.js
 
 The publish tool creates a Hyperdrive from your app directory, writes all files into it, and announces it on the DHT.
