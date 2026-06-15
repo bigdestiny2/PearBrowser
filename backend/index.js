@@ -106,7 +106,7 @@ function normalizeDriveKey (raw) {
   if (!raw) return raw
   if (/^[0-9a-f]{64}$/i.test(raw)) return raw.toLowerCase()
   if (/^[13-9a-km-uw-z]{52}$/i.test(raw)) {
-    try { return Buffer.from(z32.decode(raw.toLowerCase())).toString('hex') } catch {}
+    try { return b4a.toString(z32.decode(raw.toLowerCase()), 'hex') } catch {}
   }
   return raw
 }
@@ -140,6 +140,7 @@ const pendingSwarmConsents = new Map()
 const SWARM_CONSENT_TIMEOUT_MS = 2 * 60 * 1000
 let peerCount = 0
 let browseDrives = new Map() // keyHex → Hyperdrive (for ad-hoc browsing)
+let storageTimer = null
 
 // --- RPC ---
 
@@ -462,7 +463,7 @@ rpc.handle(C.CMD_IDENTITY_SIGN, async ({ payload, driveKey } = {}) => {
   if (typeof driveKey === 'string' && driveKey.length > 0) {
     return id.signForApp(driveKey, payload)
   }
-  return id.sign(typeof payload === 'string' ? payload : Buffer.from(payload))
+  return id.sign(typeof payload === 'string' ? payload : b4a.from(payload))
 })
 
 // --- Profile (Identity Plan Phase B) ---
@@ -800,7 +801,7 @@ async function ensureBrowseDrive (keyHex) {
     }
   }
 
-  const drive = new Hyperdrive(store, Buffer.from(keyHex, 'hex'))
+  const drive = new Hyperdrive(store, b4a.from(keyHex, 'hex'))
   await drive.ready()
   swarm.join(drive.discoveryKey, { server: false, client: true })
   browseDrives.set(keyHex, {
@@ -1007,7 +1008,8 @@ async function boot () {
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'proxy-ready', message: 'HTTP proxy ready on port ' + port })
 
   // Start storage monitoring
-  setInterval(() => checkStorageQuota(), STORAGE_CHECK_INTERVAL)
+  storageTimer = setInterval(() => checkStorageQuota(), STORAGE_CHECK_INTERVAL)
+  storageTimer.unref?.()
 
   // Notify React Native
   console.log('Sending READY event')
@@ -1015,6 +1017,7 @@ async function boot () {
 }
 
 async function shutdown () {
+  if (storageTimer) { clearInterval(storageTimer); storageTimer = null }
   if (proxy) { try { await proxy.stop() } catch {} proxy = null }
   if (swarmBridge) { try { await swarmBridge.destroy() } catch {} swarmBridge = null }
   if (pearBridge) { try { await pearBridge.close() } catch {} pearBridge = null }

@@ -57,7 +57,7 @@ function toBuf (x) {
  * get(All)ResponseHeader(s), readyState, abort, timeout, responseType,
  * and the load/error/abort/timeout/progress/readystatechange/loadend events.
  */
-function createXHR ({ handler } = {}) {
+function createXHR ({ handler, maxResponseBytes = 64 * 1024 * 1024 } = {}) {
   if (typeof handler !== 'function') throw new Error('createXHR requires a handler(req) -> res')
 
   class StreamXHR {
@@ -85,6 +85,10 @@ function createXHR ({ handler } = {}) {
       this._aborted = false
       this._done = false
       this._timer = null
+      this._source = null        // active response stream — so abort()/timeout can destroy() it
+      this._cleanupSource = null // detaches this stream's listeners on terminate
+      this._loaded = 0           // bytes received so far (progress; NOT via re-stringify)
+      this._maxResponseBytes = maxResponseBytes
     }
 
     open (method, url) {
@@ -114,8 +118,10 @@ function createXHR ({ handler } = {}) {
 
     abort () {
       if (this._done) return
+      this._done = true
       this._aborted = true
       this._clearTimer()
+      this._destroySource() // propagate cancellation up the stream — frees the hypercore reads
       this.readyState = READY.DONE
       this._emit('readystatechange'); this._emit('abort'); this._emit('loadend')
     }
@@ -124,8 +130,10 @@ function createXHR ({ handler } = {}) {
       const self = this
       if (this.timeout > 0) {
         this._timer = setTimeout(() => {
-          if (self._done || self._aborted) return
+          if (self._done) return
+          self._done = true
           self._aborted = true
+          self._destroySource()
           self.readyState = READY.DONE
           self._emit('readystatechange'); self._emit('timeout'); self._emit('loadend')
         }, this.timeout)
@@ -139,7 +147,7 @@ function createXHR ({ handler } = {}) {
       const req = { method: this._method, url: this._url, headers: { ...this._reqHeaders }, body: reqBody }
 
       Promise.resolve().then(() => handler(req)).then((res) => {
-        if (self._aborted) return
+        if (self._done) return
         res = res || {}
         self.status = Number.isFinite(res.status) ? res.status : 200
         self.statusText = res.statusText || ''
@@ -149,44 +157,72 @@ function createXHR ({ handler } = {}) {
         const out = res.body
         if (out == null) return self._finish(b4a.alloc(0))
         if (typeof out === 'string' || b4a.isBuffer(out)) {
+          const buf = toBuf(out)
+          self._loaded = buf.length
           self._setReadyState(READY.LOADING); self._emit('progress')
-          return self._finish(toBuf(out))
+          return self._finish(buf)
         }
-        // streaming body (streamx Readable / Node stream / async iterable)
+        // Streaming body (streamx Readable / Node stream / async iterable).
+        // Accumulate raw chunks and decode ONCE at the end — never re-concat +
+        // re-stringify per chunk (that's O(n^2)). Cap total bytes so a hostile
+        // or huge peer stream can't OOM the worklet. Hold the source so
+        // abort()/timeout can destroy() it, propagating cancellation up the
+        // hypercore pipeline instead of waiting for a chunk that may never come.
         const chunks = []
+        self._source = out
         const onData = (c) => {
-          if (self._aborted) { try { out.destroy && out.destroy() } catch (_) {} ; return }
-          chunks.push(toBuf(c))
-          self.responseText = b4a.toString(b4a.concat(chunks))
-          self._setReadyState(READY.LOADING); self._emit('progress')
+          if (self._done) return
+          const b = toBuf(c)
+          self._loaded += b.length
+          if (self._loaded > self._maxResponseBytes) {
+            self._destroySource()
+            return self._error(new Error('response body exceeded maxResponseBytes (' + self._maxResponseBytes + ')'))
+          }
+          chunks.push(b)
+          if (self.readyState < READY.LOADING) self._setReadyState(READY.LOADING)
+          self._emit('progress')
         }
         if (typeof out.on === 'function') {
-          out.on('data', onData)
-          out.on('end', () => { if (!self._aborted) self._finish(b4a.concat(chunks)) })
-          out.on('error', (err) => { if (!self._aborted) self._error(err) })
+          const onEnd = () => { if (!self._done) self._finish(b4a.concat(chunks)) }
+          const onErr = (err) => { if (!self._done) self._error(err) }
+          self._cleanupSource = () => { try { out.removeListener('data', onData); out.removeListener('end', onEnd); out.removeListener('error', onErr) } catch (_) {} }
+          out.on('data', onData); out.on('end', onEnd); out.on('error', onErr)
         } else if (out[Symbol.asyncIterator]) {
           ;(async () => {
-            try { for await (const c of out) onData(c); if (!self._aborted) self._finish(b4a.concat(chunks)) } catch (err) { if (!self._aborted) self._error(err) }
+            try {
+              for await (const c of out) { if (self._aborted) break; onData(c) } // break → for-await calls iterator return()
+              if (!self._done) self._finish(b4a.concat(chunks))
+            } catch (err) { if (!self._done) self._error(err) }
           })()
         } else {
           self._error(new Error('handler returned an unsupported body'))
         }
-      }).catch((err) => { if (!self._aborted) self._error(err) })
+      }).catch((err) => { if (!self._done) self._error(err) })
     }
 
     _setReadyState (s) { this.readyState = s; this._emit('readystatechange') }
 
     _finish (buf) {
       this._clearTimer()
+      this._cleanupSourceListeners()
+      this._source = null
       this._done = true
-      this.responseText = b4a.toString(buf)
-      this.response = this.responseType === 'json' ? safeJson(this.responseText) : this.responseText
+      this._loaded = buf.length
+      if (this.responseType === 'arraybuffer') {
+        this.response = buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length) : buf
+        this.responseText = '' // not meaningful for a binary body — don't UTF-8 decode it
+      } else {
+        this.responseText = b4a.toString(buf)
+        this.response = this.responseType === 'json' ? safeJson(this.responseText) : this.responseText
+      }
       this.readyState = READY.DONE
       this._emit('readystatechange'); this._emit('load'); this._emit('loadend')
     }
 
     _error (err) {
       this._clearTimer()
+      this._cleanupSourceListeners()
+      this._source = null
       this._done = true
       this.status = 0
       this.statusText = ''
@@ -197,8 +233,15 @@ function createXHR ({ handler } = {}) {
 
     _clearTimer () { if (this._timer) { clearTimeout(this._timer); this._timer = null } }
 
+    _cleanupSourceListeners () { if (this._cleanupSource) { try { this._cleanupSource() } catch (_) {} ; this._cleanupSource = null } }
+
+    _destroySource () {
+      this._cleanupSourceListeners()
+      if (this._source) { try { this._source.destroy && this._source.destroy() } catch (_) {} ; this._source = null }
+    }
+
     _emit (type) {
-      const ev = { type, target: this, currentTarget: this, lengthComputable: false, loaded: this.responseText.length, total: 0 }
+      const ev = { type, target: this, currentTarget: this, lengthComputable: false, loaded: this._loaded, total: 0 }
       const h = this['on' + type]
       if (typeof h === 'function') { try { h.call(this, ev) } catch (_) {} }
       for (const fn of (this._listeners[type] || []).slice()) { try { fn.call(this, ev) } catch (_) {} }

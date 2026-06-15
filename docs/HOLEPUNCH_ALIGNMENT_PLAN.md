@@ -285,6 +285,53 @@ runner and server-as-a-peer apps. Full credit to **Dominic Cassidy** ([@Drache93
 
 ---
 
+## Review hardening pass — self-review at the bar of "would Mathias wince?"
+
+Before submission the whole change set was put through an adversarial multi-agent
+code review at canonical-Holepunch standard; every confirmed finding was fixed or
+honestly documented.
+
+**streamx correctness (the headline `xhr-streamx` transport):**
+- `abort()`/timeout now `destroy()` the in-flight source stream so cancellation
+  propagates up the hypercore pipeline — was cancel-by-boolean that leaked an idle
+  drive read forever (the *common* case on P2P).
+- Response body decoded once with a size cap — was O(n²) per-chunk
+  concat+re-stringify plus unbounded buffering of a drive into the worklet heap.
+- async-iterator path honors abort; a single `_done` guard makes
+  abort/timeout/error/load terminal-once. Regression tests cover each.
+
+**swarm.v1 bugs:** channel-count slot leak on denied consent (8 denials locked the
+app out of swarm) fixed; server-role channels now receive inbound peers (was
+filtered on `PeerInfo.topics`, which is empty for inbound connections);
+shared-topic cross-delivery removed via a single bridge-level connection handler +
+single-attribution routing.
+
+**security:** strict CSP on every proxied HTML response (an injected/third-party
+script can no longer exfiltrate the page-readable bridge token); localhost CORS is
+default-deny; Tier-A "scoping" claims softened to the truth (drive keys are public).
+
+**runtime hygiene:** `b4a` instead of Node `Buffer` in worklet code (rpc framing,
+proxy, base64); Hyperdrive large/range responses streamed via `createReadStream`
+instead of full-buffer; storage-monitor interval cleared on shutdown; SSE honors
+backpressure; a cross-process test race fixed so the suite is green concurrently
+(no `--test-concurrency=1` crutch).
+
+**honesty:** README/docs overclaims removed — the dead live-demo URL, and a publish
+flow that now describes the real DHT-announce mechanism instead of a `POST /seed`
+it never makes.
+
+**Documented known-gaps (deliberately not half-built):**
+- *Per-app origin isolation* — every `hyper://` page shares one
+  `http://127.0.0.1:PORT` origin, so the browser does not partition them. Canonical
+  fix: a per-app origin (custom scheme handler / per-key subdomain). CSP +
+  token-scoping mitigate in the meantime.
+- *Full Protomux multiplexing for swarm.v1* — cross-delivery is fixed today by
+  single-attribution routing; the canonical next step is one Protomux per
+  connection with a `pear.swarm.v1/<protocol>` sub-channel per logical channel
+  (the primitive hypercore replication itself muxes over).
+
+---
+
 ## Phase Summary
 
 | Phase | Duration | Deliverable | User-Visible Change |

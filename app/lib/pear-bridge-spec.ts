@@ -153,6 +153,16 @@ export interface PearLoginAPI {
   logout(): Promise<void>
 }
 
+/**
+ * NOTE (Holepunch alignment doc item 5): this `window.pear` surface
+ * INTENTIONALLY diverges from Pear Runtime's documented `Pear` global
+ * (Pear.config / Pear.updates / Pear.teardown / Pear.versions, etc.).
+ * PearBrowser is a WebView host, not the Pear Runtime, so the shape here is
+ * a host-specific bridge (sync / identity / swarm / login / contacts) rather
+ * than a re-implementation of the runtime API. The divergence is deliberate
+ * and tracked in docs/HOLEPUNCH_ALIGNMENT_PLAN.md (item 5); do NOT rename
+ * these members to match the runtime — pages already depend on this surface.
+ */
 export interface PearAPI {
   sync: PearSyncAPI
   identity: PearIdentityAPI

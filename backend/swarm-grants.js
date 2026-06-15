@@ -47,7 +47,19 @@ class SwarmGrants {
     if (this.swarm && typeof this.swarm.join === 'function') {
       try {
         const topic = this._bee.core.discoveryKey
-        if (topic) this.swarm.join(topic, { server: true, client: true })
+        // PRIVACY CONCERN (alignment): we join with server:false so this
+        // bee's discovery key is NOT announced on the DHT. The grants bee
+        // is meant to replicate only between the user's OWN devices (same
+        // property as profile / contacts / user-data, per the module
+        // docstring), and those devices already find each other via the
+        // shared Corestore swarm join. Announcing it (server:true) would
+        // publish a discovery key that the privacy model says should stay
+        // device-local, letting unrelated peers probe for it. client:true
+        // is retained so this device still dials and replicates when a
+        // sibling device announces the same Corestore. If announce-based
+        // discovery is ever required here, flip server back to true with an
+        // explicit justification.
+        if (topic) this.swarm.join(topic, { server: false, client: true })
       } catch (err) {
         console.warn('[SwarmGrants] swarm join failed:', err && err.message)
       }

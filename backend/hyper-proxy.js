@@ -10,6 +10,7 @@
 
 const http = require('bare-http1')
 const crypto = require('bare-crypto')
+const b4a = require('b4a')
 
 const USER_FRIENDLY_ERRORS = {
   'Invalid drive key': 'This link appears to be broken or incomplete',
@@ -198,10 +199,39 @@ class HyperProxy {
       return res.end('Invalid origin')
     }
 
-    // Set CORS headers — echo the request origin (which we just validated
-    // is loopback or a well-formed http(s) origin) or fall back to
-    // loopback for browsers that don't send Origin.
-    res.setHeader('Access-Control-Allow-Origin', origin || 'http://127.0.0.1')
+    // CORS — default-DENY the echo. We only reflect Access-Control-Allow-Origin
+    // for an origin we can affirmatively trust:
+    //   - loopback origins (http://127.0.0.1, http://localhost), OR
+    //   - a non-loopback http(s) origin that presents a valid, unexpired
+    //     origin-scoped token (X-Pear-Token header, or `token` query param
+    //     for EventSource which cannot set headers) issued for THAT exact
+    //     origin.
+    // The token is validated BEFORE the echo decision. An arbitrary,
+    // unauthenticated https origin is NEVER echoed — it falls back to the
+    // loopback default, so the browser denies the cross-origin read.
+    let allowOrigin = 'http://127.0.0.1'
+    if (origin && isLoopbackOrigin(origin)) {
+      allowOrigin = origin
+    } else if (origin) {
+      const rawToken = req.headers['x-pear-token']
+      let token = Array.isArray(rawToken) ? rawToken[0] : rawToken
+      if (!token) {
+        // EventSource fallback — token may ride in the query string.
+        try {
+          token = new URL(req.url, `http://localhost:${this._port}`)
+            .searchParams.get('token') || null
+        } catch {
+          token = null
+        }
+      }
+      const entry = token ? this.validateApiToken(token) : null
+      if (entry && entry.kind === 'origin' && entry.origin === origin) {
+        allowOrigin = origin
+      }
+    }
+
+    res.setHeader('Access-Control-Allow-Origin', allowOrigin)
+    res.setHeader('Vary', 'Origin')
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Pear-Token')
 
@@ -230,6 +260,15 @@ class HyperProxy {
     try {
       let driveKeyHex, filePath
 
+      // KNOWN LIMITATION — single shared origin: both /hyper/KEY/... and
+      // /app/KEY/... are served from the one origin http://127.0.0.1:PORT.
+      // There is therefore NO per-app isolation at the browser layer — all
+      // drives/apps share the same origin and thus the same cookie jar,
+      // localStorage, and same-origin fetch reach. The canonical fix is to
+      // give each app its OWN origin (a custom scheme handler, or a
+      // per-drive-key subdomain). We deliberately do NOT re-architect that
+      // here; the injected CSP only limits what a single shared-origin page
+      // can load, it does not separate apps from each other.
       if (path.startsWith('/hyper/')) {
         // Direct hyper:// browsing: /hyper/KEY/path
         const rest = path.slice('/hyper/'.length)
@@ -289,6 +328,26 @@ class HyperProxy {
       }
       this._cacheStats.misses++
 
+      // STREAMING PATH for large / range-requested non-HTML files.
+      // drive.get() buffers the WHOLE file into memory before we send a
+      // byte — fine for small cached assets, ruinous for video/audio/large
+      // downloads and pointless for a 206 range slice. So before the
+      // (buffering) hybrid fetch, resolve the entry: if the drive is
+      // reachable, the entry exists, and the file is either being
+      // range-requested or is larger than the streaming threshold, pipe
+      // drive.createReadStream(path, { start, length }) straight to res
+      // with streamx backpressure. drive.get() stays reserved for small
+      // files (so they can still be cached + HTML-injected below).
+      const contentTypeGuess = guessType(filePath)
+      const isHtml = contentTypeGuess.includes('text/html')
+      const rangeHeader = req.headers.range
+      if (!isHtml) {
+        const streamed = await this._maybeStreamFromDrive(
+          req, res, driveKeyHex, filePath, contentTypeGuess, rangeHeader
+        )
+        if (streamed) return
+      }
+
       // HYBRID FETCH: race relay (fast) vs P2P (reliable)
       const result = await this._hybridFetch(driveKeyHex, filePath)
 
@@ -314,9 +373,10 @@ class HyperProxy {
         return this._serveHtmlWithBridge(res, path, driveKeyHex, content)
       }
 
-      // Range request support for streaming (video, audio, large files)
+      // Range request support for buffered fallback (small files, or when
+      // the streaming path above could not take over — e.g. served via
+      // relay, or the drive/entry was momentarily unresolved).
       res.setHeader('Accept-Ranges', 'bytes')
-      const rangeHeader = req.headers.range || req.headers['range']
 
       if (rangeHeader) {
         const total = content.length
@@ -343,6 +403,7 @@ class HyperProxy {
       const userMessage = getUserFriendlyError(err.message)
       res.statusCode = 502
       res.setHeader('Content-Type', 'text/html')
+      res.setHeader('Content-Security-Policy', this._contentSecurityPolicy())
       res.end(`<!DOCTYPE html>
 <html>
 <head>
@@ -388,8 +449,38 @@ class HyperProxy {
     }
   }
 
+  /**
+   * Strict Content-Security-Policy for proxied HTML. The capability token
+   * is injected into a page-readable <meta name="pear-api-token">, so we
+   * must stop any third-party or inline script from reading it back out to
+   * an attacker. Locking script-src/connect-src to the proxy's own loopback
+   * origin (no inline, no remote) blocks token exfiltration.
+   *
+   * connect-src is pinned to the actual proxy port so the injected
+   * window.pear.swarm.v1 shim can still reach /api/* on this server.
+   */
+  _contentSecurityPolicy () {
+    const self = `http://127.0.0.1:${this._port}`
+    const selfLocalhost = `http://localhost:${this._port}`
+    return [
+      "default-src 'self'",
+      "script-src 'self'",
+      `connect-src 'self' ${self} ${selfLocalhost}`,
+      "object-src 'none'",
+      "base-uri 'self'"
+    ].join('; ')
+  }
+
   _serveHtmlWithBridge (res, path, driveKeyHex, content) {
-    const html = content.toString('utf-8')
+    // KNOWN LIMITATION (browser-layer isolation): every drive/app is served
+    // from the same single origin http://127.0.0.1:PORT, so there is NO
+    // per-app origin isolation at the browser layer — one app's page can,
+    // within CSP limits, reach another app's same-origin resources and
+    // shares cookies/storage/token surface. The canonical fix is a per-app
+    // origin (a custom scheme handler, or a per-drive-key subdomain so each
+    // app gets its own origin). That is deliberately NOT attempted here;
+    // the CSP below only narrows what a single shared-origin page may load.
+    const html = b4a.toString(content, 'utf-8')
     const prefix = path.startsWith('/app/') ? '/app/' : '/hyper/'
     const baseHref = `http://localhost:${this._port}${prefix}${driveKeyHex}/`
     const apiToken = this.issueApiToken(driveKeyHex)
@@ -400,8 +491,111 @@ class HyperProxy {
     const injected = html.includes('<head>')
       ? html.replace('<head>', `<head>${headInjection}`)
       : html.replace(/<html>/i, `<html><head>${headInjection}</head>`)
+    res.setHeader('Content-Security-Policy', this._contentSecurityPolicy())
     res.statusCode = 200
-    return res.end(Buffer.from(injected))
+    return res.end(b4a.from(injected))
+  }
+
+  /**
+   * Stream a non-HTML drive file directly to res using
+   * drive.createReadStream(path, { start, length }) with streamx
+   * backpressure, instead of buffering the whole blob via drive.get().
+   *
+   * Only takes over for files that actually benefit: a Range (206) request,
+   * or a file larger than _streamThreshold. Small, non-ranged files fall
+   * through (returns false) to the buffered hybrid-fetch path so they can
+   * still be served from relay and populated into the LRU cache.
+   *
+   * Returns true once it has assumed responsibility for the response
+   * (headers sent / stream piping), false to let the caller continue.
+   */
+  async _maybeStreamFromDrive (req, res, driveKeyHex, filePath, contentType, rangeHeader) {
+    const STREAM_THRESHOLD = 5 * 1024 * 1024 // 5MB — matches cache ceiling
+
+    let drive
+    try {
+      drive = await this._getDrive(driveKeyHex)
+    } catch {
+      return false
+    }
+    if (!drive || typeof drive.createReadStream !== 'function') return false
+
+    // Resolve the entry to learn the blob size. No size → can't compute
+    // Content-Length / Content-Range, so defer to the buffered path.
+    let entry
+    try {
+      entry = await drive.entry(filePath)
+    } catch {
+      return false
+    }
+    const total = entry && entry.value && entry.value.blob
+      ? entry.value.blob.byteLength
+      : null
+    if (total === null) return false
+
+    // Small, non-ranged file → let the cache-friendly buffered path handle it.
+    if (!rangeHeader && total <= STREAM_THRESHOLD) return false
+
+    res.setHeader('Accept-Ranges', 'bytes')
+    res.setHeader('Content-Type', contentType)
+    res.setHeader('X-Cache', 'MISS')
+    res.setHeader('X-Source', 'p2p-stream')
+
+    let start = 0
+    let end = total - 1
+    let statusCode = 200
+
+    if (rangeHeader) {
+      const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader)
+      if (match) {
+        start = match[1] ? parseInt(match[1], 10) : 0
+        end = match[2] ? parseInt(match[2], 10) : total - 1
+        // Clamp to valid bounds.
+        if (Number.isNaN(start) || start < 0) start = 0
+        if (Number.isNaN(end) || end > total - 1) end = total - 1
+        if (start > end) {
+          // Unsatisfiable range.
+          res.removeHeader && res.removeHeader('Content-Type')
+          res.setHeader('Content-Range', `bytes */${total}`)
+          res.statusCode = 416
+          res.end()
+          return true
+        }
+        statusCode = 206
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`)
+      }
+    }
+
+    const length = end - start + 1
+    res.setHeader('Content-Length', length)
+    res.statusCode = statusCode
+
+    // createReadStream takes { start, length } (passed through to the blob
+    // store). HEAD must not carry a body.
+    if (req.method === 'HEAD') {
+      res.end()
+      return true
+    }
+
+    const rs = drive.createReadStream(filePath, { start, length })
+
+    // streamx backpressure + error propagation. If the read stream errors
+    // (block unavailable, drive closed), destroy res so the socket tears
+    // down cleanly; if res errors/closes early, destroy the read stream so
+    // we stop pulling blocks. Surface the read error to _onError.
+    rs.on('error', (err) => {
+      this._onError(driveKeyHex + filePath, 'stream: ' + (err && err.message))
+      if (!res.destroyed) res.destroy(err)
+    })
+    res.on('error', () => {
+      if (!rs.destroyed) rs.destroy()
+    })
+    res.on('close', () => {
+      if (!rs.destroyed) rs.destroy()
+    })
+
+    rs.pipe(res)
+    return true
   }
 
   /**
@@ -687,6 +881,7 @@ class HyperProxy {
 
     res.statusCode = 200
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.setHeader('Content-Security-Policy', this._contentSecurityPolicy())
     res.end(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>hyper://${escapeHtml(keyHex.slice(0, 8))}...${escapeHtml(dirPath)}</title>

@@ -6,13 +6,21 @@
  */
 
 const http = require('bare-http1')
+const b4a = require('b4a')
 const { getUserFriendlyError } = require('./hyper-proxy')
+
+// Bare exposes env via Bare.env; fall back to process.env when running under Node.
+const ENV = (typeof Bare !== 'undefined' && Bare.env) ||
+  (typeof process !== 'undefined' && process.env) || {}
 
 class RelayClient {
   constructor (opts = {}) {
     this.relays = opts.relays || ['http://127.0.0.1:9100']
     this.timeout = opts.timeout || 5000
     this.enabled = opts.enabled !== false // default on; explicit false disables hybrid fetch
+    // Optional API key for relays that require auth on the /seed endpoint.
+    // Config wins; otherwise fall back to env (HIVE_RELAY_API_KEY).
+    this.apiKey = opts.apiKey || ENV.HIVE_RELAY_API_KEY || null
     this._stats = { hits: 0, misses: 0, errors: 0 }
 
     // Circuit breaker state per relay
@@ -193,26 +201,64 @@ class RelayClient {
     return results
   }
 
+  /**
+   * Ask a relay to seed (pin/replicate) the given app key.
+   *
+   * Live relay path is `/seed` (the `/v1/seed` variant 404s). Body is
+   * `{ appKey }`. If an API key is configured it is sent as a bearer token
+   * plus `x-api-key` so the relay can pick whichever it expects.
+   *
+   * Returns { ok: true, relay } on success, or { ok: false, error, status,
+   * relay } describing the last failure — non-2xx responses are surfaced as a
+   * clear error rather than silently swallowed.
+   */
   async requestSeed (keyHex) {
+    if (!keyHex || typeof keyHex !== 'string') {
+      return { ok: false, error: 'requestSeed requires a hex app key' }
+    }
+
+    const headers = { 'Content-Type': 'application/json' }
+    if (this.apiKey) {
+      headers.Authorization = `Bearer ${this.apiKey}`
+      headers['x-api-key'] = this.apiKey
+    }
+
+    const body = JSON.stringify({ appKey: keyHex })
+    let lastError = 'no relays available'
+    let lastStatus = 0
+    let lastRelay = null
+
     for (const relayUrl of this.relays) {
       // Skip if circuit is open
-      if (!this._checkCircuit(relayUrl)) continue
+      if (!this._checkCircuit(relayUrl)) {
+        lastError = 'circuit open'
+        lastRelay = relayUrl
+        continue
+      }
 
+      lastRelay = relayUrl
       try {
-        const result = await this._httpPost(
-          `${relayUrl}/v1/seed`,
-          JSON.stringify({ key: keyHex }),
-          5000
-        )
-        if (result.status === 200) {
+        const result = await this._httpPost(`${relayUrl}/seed`, body, 5000, headers)
+
+        if (result.status >= 200 && result.status < 300) {
           this._recordSuccess(relayUrl)
           return { ok: true, relay: relayUrl }
         }
-      } catch {
+
+        // Non-2xx: surface a clear error instead of failing silently.
         this._recordFailure(relayUrl)
+        lastStatus = result.status
+        const detail = result.body && result.body.length
+          ? b4a.toString(result.body, 'utf8').slice(0, 200)
+          : ''
+        lastError = `relay returned HTTP ${result.status}${detail ? `: ${detail}` : ''}`
+      } catch (err) {
+        this._recordFailure(relayUrl)
+        lastError = err && err.message ? err.message : String(err)
       }
     }
-    return { ok: false }
+
+    return { ok: false, error: lastError, status: lastStatus, relay: lastRelay }
   }
 
   /**
@@ -235,7 +281,7 @@ class RelayClient {
           resolve({
             status: res.statusCode,
             contentType: res.headers['content-type'] || 'application/octet-stream',
-            body: Buffer.concat(chunks)
+            body: b4a.concat(chunks)
           })
         })
         res.on('error', (err) => {
@@ -254,17 +300,18 @@ class RelayClient {
   /**
    * HTTP POST using bare-http1
    */
-  _httpPost (url, body, timeout) {
+  _httpPost (url, body, timeout, headers = {}) {
     return new Promise((resolve, reject) => {
       const parsed = new URL(url)
+      const isHttps = parsed.protocol === 'https:'
       const timer = setTimeout(() => reject(new Error(getUserFriendlyError('Timeout'))), timeout)
 
       const req = http.request({
         method: 'POST',
         hostname: parsed.hostname,
-        port: parseInt(parsed.port) || 80,
-        path: parsed.pathname,
-        headers: { 'Content-Type': 'application/json' }
+        port: parseInt(parsed.port) || (isHttps ? 443 : 80),
+        path: parsed.pathname + parsed.search,
+        headers: { 'Content-Type': 'application/json', ...headers }
       }, (res) => {
         const chunks = []
         res.on('data', (chunk) => chunks.push(chunk))
@@ -272,8 +319,12 @@ class RelayClient {
           clearTimeout(timer)
           resolve({
             status: res.statusCode,
-            body: Buffer.concat(chunks)
+            body: b4a.concat(chunks)
           })
+        })
+        res.on('error', (err) => {
+          clearTimeout(timer)
+          reject(err)
         })
       })
 

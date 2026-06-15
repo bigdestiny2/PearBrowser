@@ -112,7 +112,7 @@ The streaming half uses **Server-Sent Events** rather than WebSockets. SSE is pl
 { type: 'closed' }
 ```
 
-Backpressure: the WS path is bounded; the worklet drops frames + emits an `error` of `'overflow'` rather than buffering unboundedly. Pages that need ordered guaranteed delivery wrap with their own ack protocol on top.
+Backpressure: the per-channel SSE stream is bounded; the worklet drops frames + emits an `error` of `'overflow'` rather than buffering unboundedly. Pages that need ordered guaranteed delivery wrap with their own ack protocol on top.
 
 ---
 
@@ -220,7 +220,7 @@ The HTTP `/api/swarm/*` endpoints are similarly versioned in their request body:
 ## 9. Implementation order
 
 1. **`backend/swarm-bridge.js`** — manages page-scoped channels, multiplexes hyperswarm conns, enforces rate limits.
-2. **`backend/http-bridge.js`** — adds `/api/swarm/{join,leave,send}` REST + `/ws/swarm` WebSocket upgrade.
+2. **`backend/http-bridge.js`** — adds `/api/swarm/{join,leave,send}` REST + `GET /api/swarm/events` SSE stream (one `text/event-stream` per channel; no WebSocket upgrade).
 3. **`backend/swarm-grants.js`** — Hyperbee for persisted Tier C grants (mirrors `profile.js` shape).
 4. **`backend/index.js`** — boots the bridge + grants store + handles `EVT_SWARM_REQUEST` / `CMD_SWARM_RESOLVE`.
 5. **`backend/pear-bridge.js`** — page-side injected shim adds `window.pear.swarm.v1`.

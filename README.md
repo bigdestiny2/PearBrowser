@@ -2,10 +2,18 @@
 
 A peer-to-peer mobile app platform for iOS and Android. Browse the decentralized web, discover P2P apps from decentralized catalogs, build personal websites, and run web apps that can use Pear identity, Autobase sync, Hyperdrive content, and direct Hyperswarm channels from a phone.
 
-**Live demo:** The Pear POS app is serving right now from HiveRelay:
+**Try it locally:** Build the iOS shell and run the bundled example app from source — see [Setup](#setup) below. In short:
+
+```bash
+git clone https://github.com/bigdestiny2/PearBrowser.git
+cd PearBrowser
+npm install --legacy-peer-deps
+npm run bundle-all && npm run bundle-all-native
+cd ios-native && xcodegen generate && cd ..
+npx expo run:ios
 ```
-https://relay.p2phiverelay.xyz/v1/hyper/4fd242fd4c90b77b354d6bcbd30654b732905cebf4b94bfefc0adbf97c171e04/index.html
-```
+
+The `examples/echo-peer/` fixture exercises the `window.pear.swarm.v1` bridge end to end. The default relays the app talks to are `relay-us.p2phiverelay.xyz` and `relay-sg.p2phiverelay.xyz`.
 
 ## Why PearBrowser?
 
@@ -34,11 +42,16 @@ Developer                          HiveRelay                    PearBrowser
 1. Build app (HTML/JS/CSS)
    + manifest.json
 
-2. Publish as Hyperdrive
-   node publish-app.js ./dist
-
-3. Seed on relay                 → Relay replicates the drive
-   POST /seed {"appKey":"..."}   → Reads manifest.json
+2. Publish as Hyperdrive +
+   announce on the DHT
+   node tools/publish-app.js ./dist
+   (joins topic
+    'pearbrowser-apps-v1',
+    keeps serving the drive)
+                                 → Relay watches that topic,
+                                   discovers the publisher,
+                                   replicates the drive
+                                 → Reads manifest.json
                                  → Adds to /catalog.json         → User opens
                                                                     Apps tab
                                                                  → Sees the app
@@ -137,9 +150,9 @@ HiveRelay nodes are the always-on infrastructure of the P2P network. They solve 
 
 **Anyone can run a relay.** The more relays, the more resilient the network. Relays are open source and free to operate.
 
-**Currently running:**
-- `relay.p2phiverelay.xyz` — primary public relay
-- 3 additional relays across different regions
+**Default public relays** (the hosts PearBrowser ships pointing at):
+- `relay-us.p2phiverelay.xyz`
+- `relay-sg.p2phiverelay.xyz`
 
 ## P2P App API
 
@@ -207,15 +220,11 @@ node tools/publish-app.js ./my-app --name "My App"
 # Output: Key: abc123... — keep this process running
 ```
 
-### 3. Seed on a HiveRelay
+### 3. Let relays discover it
 
-```bash
-curl -X POST https://relay.p2phiverelay.xyz/seed \
-  -H 'Content-Type: application/json' \
-  -d '{"appKey": "abc123..."}'
-```
+`publish-app.js` announces your app on the `pearbrowser-apps-v1` DHT topic and keeps serving the drive while it runs. Catalog relays (`tools/catalog-relay.js`) watch that same topic as clients, discover the announcement, replicate your drive, read its `manifest.json`, and add it to their `/catalog.json`. There is no relay endpoint to call — just keep the publish process running long enough for a relay to pick it up (and ideally have a relay seed the drive for 24/7 availability).
 
-Your app now appears in the relay's catalog. PearBrowser users who browse that relay's App Store will see it.
+Your app then appears in the catalog of any relay watching the topic. PearBrowser users who browse that relay's App Store will see it.
 
 ### 4. Users install and run
 

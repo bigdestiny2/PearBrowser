@@ -16,8 +16,7 @@
     "bundle-all-native": "npm run bundle-backend-native-ios && npm run bundle-backend-native-android",
     "barekit:fetch": "node scripts/fetch-barekit.js",
     "barekit:fetch:addons": "node scripts/fetch-barekit-addons.js",
-    "test": "npx tsc --noEmit && node --check backend/index.js backend/hyper-proxy.js backend/http-bridge.js backend/swarm-bridge.js backend/swarm-grants.js backend/site-manager.js backend/relay-client.js backend/catalog-manager.js backend/app-manager.js backend/pear-bridge.js backend/rpc.js backend/xhr-streamx.js && node --test --test-concurrency=1 test/*.test.js",
-    "smoke:swarm-v1:native": "node scripts/smoke-native-swarm-v1.js"
+    "test": "npx tsc --noEmit && node --check backend/index.js backend/hyper-proxy.js backend/http-bridge.js backend/swarm-bridge.js backend/swarm-grants.js backend/site-manager.js backend/relay-client.js backend/catalog-manager.js backend/app-manager.js backend/pear-bridge.js backend/rpc.js backend/xhr-streamx.js && node --test test/*.test.js"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.1.0",

@@ -4,16 +4,18 @@
  * See docs/SWARM-V1.md for the full design. Short version:
  *
  *   Pages call:        page → POST /api/swarm/join { topicHex, protocol, ... }
- *                      page → ws://127.0.0.1:PORT/ws/swarm?token=…&channelId=…
+ *                      page → GET  /api/swarm/events?channelId=… (SSE stream)
  *                      page → POST /api/swarm/send { channelId, peerId, data }
  *
  *   Worklet does:      tracks one Channel per (token,channelId), multiplexes
- *                      Hyperswarm peer events back over the WS. Pages never
- *                      hold raw socket FDs or private keys.
+ *                      Hyperswarm peer events back over the SSE stream. Pages
+ *                      never hold raw socket FDs or private keys.
  *
  * Topic policy (mirrors §4 of the spec):
  *   Tier A — drive-derived `sha256("pear.swarm.v1:" + driveKey + subtopic)`:
- *            no consent prompt, always allowed.
+ *            no consent prompt, always allowed. This is convenience
+ *            scoping only — drive keys are public, so the namespace is
+ *            not provably private to the drive (see deriveTierATopic).
  *   Tier B — autobase / mint-then-rejoin: persisted grant, no prompt.
  *   Tier C — arbitrary topic: requires user consent via EVT_SWARM_REQUEST.
  *
@@ -40,8 +42,14 @@ const DEFAULT_LIMITS = {
 
 /**
  * sha256(TIER_A_PREFIX || driveKeyHex || subtopic) — the Tier A topic
- * derivation. Pages can always join these without a consent prompt
- * because only their drive's owner can address this namespace.
+ * derivation. Pages can always join these without a consent prompt.
+ *
+ * NOTE: this is a *convenience* scoping, not a security boundary. Drive
+ * keys are public, so any peer who knows a drive key can re-derive this
+ * topic and join the same namespace. The no-consent policy just spares
+ * the page's own owner a prompt for their own drive's topics — it does
+ * NOT prove the topic is private to that drive. Pages that need
+ * authenticated peers must run their own handshake on top.
  */
 function deriveTierATopic (driveKeyHex, subtopic) {
   const h = hashCrypto.createHash('sha256')
@@ -74,6 +82,26 @@ class SwarmBridge {
     this.topicRefs = new Map()
     /** Map<driveKeyHex, { joinsInWindow: number, windowStart: number, pending: number }> — per-app rate limits */
     this.appState = new Map()
+    /** Set<conn> — connections this bridge has already attributed to a channel. */
+    this._claimedConns = new WeakSet()
+
+    // ONE swarm-level 'connection' listener for the whole bridge (not one
+    // per Channel). Hyperswarm fires 'connection' once per peer regardless of
+    // how many topics that peer overlaps; registering per-channel made every
+    // channel on a shared topic attach its own 'data' listener to the same
+    // socket and re-broadcast the peer's frames into every channel
+    // (cross-delivery). With a single handler we attribute each connection to
+    // exactly one Channel, so channels no longer see each other's frames.
+    //
+    // TODO(swarm.v1): the fully canonical fix is to build a Protomux per
+    // connection and have each Channel open a muxed sub-channel
+    //   mux.createChannel({ protocol: 'pear.swarm.v1/' + protocol, id: topicBuffer })
+    // Protomux length-frames and namespaces by (protocol, topic) for free,
+    // which would also let two channels share one socket on different topics.
+    // That is the planned next step; protomux is already in the dep tree
+    // (used by hypercore replication).
+    this._onConnection = (conn, info) => this._routeConnection(conn, info)
+    this.swarm.on('connection', this._onConnection)
   }
 
   // ---- Public API (called by http-bridge.js) ----
@@ -97,8 +125,13 @@ class SwarmBridge {
     if (!/^[0-9a-f]{64}$/.test(driveKeyHex)) {
       throw new Error('SwarmBridge: invalid driveKeyHex')
     }
-    this._enforceJoinRate(driveKeyHex)
+    // Check both budgets BEFORE we touch anything, but do NOT reserve either
+    // yet. A denied consent prompt (or any throw below) must not permanently
+    // burn a channel slot — otherwise ~8 denials lock the app out of swarm —
+    // and must not silently eat the per-minute join budget either. Both are
+    // committed only once the Channel is actually live.
     this._enforceChannelCount(driveKeyHex)
+    this._enforceJoinRate(driveKeyHex)
 
     const { topicHex, tier } = await this._resolveTopic(driveKeyHex, args)
 
@@ -118,9 +151,20 @@ class SwarmBridge {
       client: args.client !== false
     })
 
+    // Commit the channel, then count both budgets. If joining the swarm
+    // throws, roll everything back so neither budget is leaked.
     this.channels.set(channelId, channel)
+    this._incrementChannelCount(driveKeyHex)
+    this._commitJoinRate(driveKeyHex)
     this._refTopic(topicHex, channelId)
-    await channel._joinSwarm()
+    try {
+      await channel._joinSwarm()
+    } catch (err) {
+      this.channels.delete(channelId)
+      this._unrefTopic(topicHex, channelId)
+      this._decrementChannelCount(driveKeyHex)
+      throw err
+    }
 
     return {
       channelId,
@@ -170,6 +214,10 @@ class SwarmBridge {
 
   /** Tear down all channels — used by the global teardown path. */
   async destroy () {
+    if (this._onConnection) {
+      try { this.swarm.off('connection', this._onConnection) } catch {}
+      this._onConnection = null
+    }
     const all = [...this.channels.values()]
     this.channels.clear()
     this.topicRefs.clear()
@@ -237,9 +285,11 @@ class SwarmBridge {
   }
 
   _isTierATopic (driveKeyHex, topicHex) {
-    // We can't reverse the hash, but a page that says "topicHex" without a
-    // subtopic might still claim Tier A by accident — we only mark Tier A
-    // when the page passes `subtopic`. So return false here.
+    // We can't reverse the hash, and Tier A is only a convenience-scoping
+    // marker anyway (the derivation is from a *public* drive key, so it is
+    // not a security boundary). We only mark Tier A when the page passes a
+    // `subtopic` and we derive the topic ourselves. A raw topicHex without a
+    // subtopic is never assumed to be Tier A. So return false here.
     return false
   }
 
@@ -252,6 +302,9 @@ class SwarmBridge {
     return s
   }
 
+  // Pure check (also rolls the sliding window). Does NOT consume a token —
+  // a denied consent or a later failure shouldn't burn the join budget.
+  // The token is consumed via _commitJoinRate once the channel is live.
   _enforceJoinRate (driveKeyHex) {
     const s = this._appStateFor(driveKeyHex)
     const now = Date.now()
@@ -262,14 +315,25 @@ class SwarmBridge {
     if (s.joinsInWindow + 1 > this.limits.maxJoinsPerMinute) {
       throw new Error(`rate-limited: max ${this.limits.maxJoinsPerMinute} swarm joins per minute`)
     }
+  }
+
+  _commitJoinRate (driveKeyHex) {
+    const s = this._appStateFor(driveKeyHex)
     s.joinsInWindow += 1
   }
 
+  // Pure check — does NOT reserve a slot. The slot is only committed via
+  // _incrementChannelCount once the Channel is actually created, so denied
+  // consent prompts and other throws can't permanently burn a slot.
   _enforceChannelCount (driveKeyHex) {
     const s = this._appStateFor(driveKeyHex)
     if (s.channelCount + 1 > this.limits.maxChannelsPerApp) {
       throw new Error(`rate-limited: max ${this.limits.maxChannelsPerApp} simultaneous swarm channels per app`)
     }
+  }
+
+  _incrementChannelCount (driveKeyHex) {
+    const s = this._appStateFor(driveKeyHex)
     s.channelCount += 1
   }
 
@@ -294,6 +358,54 @@ class SwarmBridge {
   _decrementChannelCount (driveKeyHex) {
     const s = this.appState.get(driveKeyHex)
     if (s) s.channelCount = Math.max(0, s.channelCount - 1)
+  }
+
+  /**
+   * Route one swarm-level 'connection' to the single Channel it belongs to.
+   *
+   * Attribution rules:
+   *   - Outbound (client) peers: Hyperswarm populates info.topics with the
+   *     topic(s) that discovered the peer, so we match a channel by topic.
+   *   - Inbound (server) peers: info.topics is EMPTY for server-accepted
+   *     connections (Hyperswarm builds the PeerInfo from the remote key, not
+   *     from a topic). The previous code branched on info.topics and so
+   *     dropped EVERY peer for announced/server channels. Instead we
+   *     attribute inbound peers to a channel that joined a topic with
+   *     server:true.
+   *
+   * Each connection is claimed by exactly one channel. Without protocol/topic
+   * negotiation on the wire we cannot tell two server channels apart, so the
+   * first eligible server channel wins (single-attribution avoids the
+   * cross-delivery the old per-channel broadcast caused). The full Protomux
+   * fix (see constructor TODO) would make this precise.
+   */
+  _routeConnection (conn, info) {
+    if (this._claimedConns.has(conn)) return
+
+    const topics = info && info.topics
+    const isClient = !!(info && info.client)
+    let target = null
+
+    if (topics && topics.length > 0) {
+      // Outbound / discovered peer — attribute by topic membership.
+      for (const ch of this.channels.values()) {
+        if (ch._destroyed) continue
+        if (topics.some((t) => b4a.equals(t, ch._topicBuffer))) { target = ch; break }
+      }
+    }
+
+    if (!target && !isClient) {
+      // Inbound / server-accepted peer with no topic on the PeerInfo —
+      // hand it to a channel that announced itself (joined server:true).
+      for (const ch of this.channels.values()) {
+        if (ch._destroyed) continue
+        if (ch.serverRole) { target = ch; break }
+      }
+    }
+
+    if (!target) return
+    this._claimedConns.add(conn)
+    target._adoptConnection(conn, info)
   }
 }
 
@@ -336,26 +448,21 @@ class Channel {
 
   async _joinSwarm () {
     if (this._destroyed) return
-    // Hyperswarm.join returns a discovery handle. We listen to swarm-level
-    // 'connection' events, filtered to those whose remoteTopic matches.
+    // Hyperswarm.join returns a discovery handle. Connections themselves are
+    // delivered through the bridge's SINGLE swarm-level 'connection' listener
+    // (see SwarmBridge constructor / _routeConnection), which attributes each
+    // peer to exactly one channel. We no longer register a per-channel
+    // listener here — doing so made channels on a shared topic cross-deliver.
     this._discovery = this.bridge.swarm.join(this._topicBuffer, {
       server: this.serverRole,
       client: this.clientRole
     })
-    // Listen at the swarm level rather than the discovery handle because
-    // the discovery API surface varies. We filter by topic in the handler.
-    this._onConnection = (conn, info) => this._handleConnection(conn, info)
-    this.bridge.swarm.on('connection', this._onConnection)
     // Best-effort flush — Hyperswarm may already have peers on this topic.
     try { await this._discovery.flushed?.() } catch {}
   }
 
   async _leaveSwarm () {
     this._destroyed = true
-    if (this._onConnection) {
-      try { this.bridge.swarm.off('connection', this._onConnection) } catch {}
-      this._onConnection = null
-    }
     // Detach all peer conns owned by this channel (don't destroy them — the
     // hyperswarm conn may be shared across multiple channels on overlapping
     // topics; let hyperswarm GC it when no one refs it).
@@ -375,13 +482,11 @@ class Channel {
     }
   }
 
-  _handleConnection (conn, info) {
+  // Called by the bridge once a connection has been attributed to THIS
+  // channel (see SwarmBridge._routeConnection). The topic/role filtering
+  // already happened there, so we just wire the peer up.
+  _adoptConnection (conn, info) {
     if (this._destroyed) return
-    // Filter: hyperswarm fires 'connection' for every topic this swarm
-    // has joined. We only want connections whose info.topics include
-    // ours.
-    const topics = info && info.topics
-    if (!topics || !topics.some((t) => b4a.equals(t, this._topicBuffer))) return
 
     if (this.peers.size >= this.bridge.limits.maxPeersPerChannel) {
       // newest-wins: drop the oldest peer
@@ -405,7 +510,7 @@ class Channel {
       this._emit({
         type: 'message',
         peerId,
-        data: b4a.from(data).toString('base64')
+        data: b4a.toString(b4a.from(data), 'base64')
       })
     }
     conn.on('data', peer._onData)

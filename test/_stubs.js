@@ -12,7 +12,9 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const stubDir = path.join(__dirname, '.stubs')
-if (!fs.existsSync(stubDir)) fs.mkdirSync(stubDir)
+// recursive:true is a no-op (not EEXIST) if another concurrent test process
+// created the dir between our check and this call — safe under parallel runs.
+fs.mkdirSync(stubDir, { recursive: true })
 
 const STUB_SOURCES = {
   'bare-http1': 'module.exports = { request: () => ({ end: () => {} }) }',
@@ -29,9 +31,15 @@ const STUB_SOURCES = {
 const STUBS = {}
 for (const [name, body] of Object.entries(STUB_SOURCES)) {
   const file = path.join(stubDir, `${name.replace(/[^a-z0-9]/gi, '_')}.js`)
-  // Write every time — keeps all tests in sync even if one changed the stub
-  fs.writeFileSync(file, body)
   STUBS[name] = file
+  // Skip if already correct — avoids racing a concurrent writer for no reason.
+  if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === body) continue
+  // Atomic publish: write to a pid-unique temp then rename. rename(2) is atomic
+  // on the same filesystem, so a concurrent test process never observes a
+  // half-written stub (the old race that --test-concurrency=1 was masking).
+  const tmp = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(tmp, body)
+  fs.renameSync(tmp, file)
 }
 
 // Install the resolver hook (idempotent — we wrap once)

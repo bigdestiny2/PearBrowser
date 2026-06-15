@@ -11,6 +11,7 @@
  */
 
 const EventEmitter = require('bare-events')
+const b4a = require('b4a')
 
 class WorkletRPC extends EventEmitter {
   constructor (ipc) {
@@ -104,7 +105,7 @@ class WorkletRPC extends EventEmitter {
       }
 
       const json = JSON.stringify(msg)
-      const buf = Buffer.from(json.length.toString(16).padStart(8, '0') + json)
+      const buf = b4a.from(json.length.toString(16).padStart(8, '0') + json)
       this._ipc.write(buf)
     } catch (err) {
       console.error('RPC send failed:', err)

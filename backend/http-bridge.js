@@ -84,6 +84,17 @@ class HttpBridge {
     let token = Array.isArray(rawToken) ? rawToken[0] : rawToken
     // EventSource cannot set custom headers, so the SSE endpoint accepts
     // the same in-memory capability token as a query parameter.
+    //
+    // TRADEOFF: a token in the query string can leak into access logs,
+    // browser history, and Referer headers. We accept this only because the
+    // tokens here are (a) in-memory only — never persisted to disk, dropped
+    // on worklet restart; (b) origin-scoped — an `origin` token is rejected
+    // unless the request's Origin header matches the issuing origin (see
+    // below), so a leaked token cannot be replayed from another page; and
+    // (c) short-lived — issued per pear.session() and revoked on teardown.
+    // The proper fix is a one-time SSE ticket (header-set token exchanged
+    // for a single-use stream id), which the EventSource handshake in
+    // hyper-proxy would have to mint — tracked as a cross-file follow-up.
     if (!token && urlObj && urlObj.searchParams) {
       token = urlObj.searchParams.get('token') || null
     }
@@ -516,23 +527,116 @@ class HttpBridge {
           res.write(': pear.swarm.v1 stream\n\n')
 
           const closeHandlers = []
+          let ended = false
+
+          // --- Backpressure-aware SSE writer ---
+          //
+          // res.write() returns false when the kernel/page socket buffer is
+          // full. A slow page that drains the EventSource slowly would
+          // otherwise let the worklet's outbound socket buffer balloon
+          // without bound, since peer data keeps arriving. We honor drain:
+          // once res.write() returns false we stop forwarding and buffer
+          // into a *bounded* in-flight queue, flushing it on 'drain'. If the
+          // page falls so far behind that the queue overflows, we drop the
+          // stream (close the connection) rather than grow unbounded — the
+          // page gets a fresh channelId on reconnect.
+          //
+          // NOTE: full backpressure would also pause the peer hyperswarm
+          // conn while drained and resume it on 'drain'. The peer conns are
+          // owned by SwarmBridge's channel, not reachable from here, so that
+          // half lives in swarm-bridge.js (see crossFileNeeds). This handler
+          // does the localhost-side half: a slow page can no longer balloon
+          // the worklet socket buffer.
+          const MAX_QUEUED = 1024 // events buffered while the page is drained
+          const queue = []
+          let draining = false
+          let drainBound = false
+
+          const flushQueue = () => {
+            draining = false
+            while (queue.length > 0) {
+              if (ended || res.writableEnded || res.destroyed) {
+                queue.length = 0
+                return
+              }
+              const frame = queue.shift()
+              let ok
+              try {
+                ok = res.write(frame)
+              } catch {
+                queue.length = 0
+                return
+              }
+              if (ok === false) {
+                // Still backed up — wait for the next drain.
+                draining = true
+                bindDrain()
+                return
+              }
+            }
+          }
+
+          const bindDrain = () => {
+            if (drainBound) return
+            drainBound = true
+            res.once('drain', () => {
+              drainBound = false
+              flushQueue()
+            })
+          }
+
           const stream = {
             send (eventObj) {
+              if (ended || res.writableEnded || res.destroyed) return
+              let frame
               try {
-                res.write('data: ' + JSON.stringify(eventObj) + '\n\n')
-              } catch {}
+                frame = 'data: ' + JSON.stringify(eventObj) + '\n\n'
+              } catch {
+                return // non-serializable event — drop it, never throw to the peer path
+              }
+              // Already buffering — append (bounded) and let drain flush.
+              if (draining) {
+                if (queue.length >= MAX_QUEUED) {
+                  // Page is hopelessly behind: drop the stream instead of
+                  // unbounded growth. onClose tears the channel down.
+                  try { res.destroy() } catch {}
+                  return
+                }
+                queue.push(frame)
+                bindDrain()
+                return
+              }
+              let ok
+              try {
+                ok = res.write(frame)
+              } catch {
+                return
+              }
+              if (ok === false) {
+                // Socket buffer full — stop forwarding until 'drain'.
+                draining = true
+                bindDrain()
+              }
             },
             close () {
+              if (ended) return
+              ended = true
+              queue.length = 0
               try { res.end() } catch {}
             },
             onClose (fn) {
               closeHandlers.push(fn)
             }
           }
-          const cleanup = () => closeHandlers.forEach((fn) => { try { fn() } catch {} })
+          const cleanup = () => {
+            ended = true
+            queue.length = 0
+            closeHandlers.forEach((fn) => { try { fn() } catch {} })
+          }
           req.on('close', cleanup)
           req.on('error', cleanup)
           res.on('close', cleanup)
+          res.on('error', cleanup)
 
           this._swarmBridge.attachStream(channelId, stream)
           return true

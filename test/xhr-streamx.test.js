@@ -93,3 +93,66 @@ test('installXHR swaps + restores the global XMLHttpRequest', () => {
   restore()
   assert.equal(globalThis.XMLHttpRequest, before)
 })
+
+const idle = (ms) => new Promise((r) => setTimeout(r, ms)) // ref'd timer — keeps the loop alive while we wait
+
+// An idle streamx Readable (like a Hyperdrive stream waiting on a peer block)
+// that records when it is torn down — teardown is observed via 'close', not the
+// async-settled `.destroyed` flag.
+function trackedReadable () {
+  const s = new Readable({ read () {} })
+  s._destroyCalled = false
+  const orig = s.destroy.bind(s)
+  s.destroy = (...a) => { s._destroyCalled = true; return orig(...a) }
+  return s
+}
+
+test('abort() during streaming destroys the source — no leak, no late load (idle hypercore case)', async () => {
+  const src = trackedReadable()
+  let loadFired = false
+  const XHR = createXHR({ handler: () => ({ status: 200, body: src }) })
+  const xhr = new XHR()
+  xhr.addEventListener('load', () => { loadFired = true })
+  xhr.open('GET', '/stream'); xhr.send()
+  await idle(10)
+  src.push(b4a.from('partial'))
+  await idle(10)
+  xhr.abort() // source is idle (no further data) — abort must tear it down eagerly, not wait for a chunk
+  await idle(30)
+  assert.equal(xhr.readyState, 4)
+  assert.ok(src._destroyCalled, 'abort destroyed the source stream')
+  src.push(b4a.from('late')) // must not resurrect the request
+  await idle(10)
+  assert.equal(loadFired, false, 'no load after abort')
+})
+
+test('exceeding maxResponseBytes errors and tears down the source', async () => {
+  const src = trackedReadable()
+  let errFired = false; let status = -1
+  const XHR = createXHR({ handler: () => ({ status: 200, body: src }), maxResponseBytes: 8 })
+  const xhr = new XHR()
+  xhr.addEventListener('error', () => { errFired = true; status = xhr.status })
+  xhr.open('GET', '/big'); xhr.send()
+  await idle(10)
+  src.push(b4a.from('0123456789')) // 10 bytes > cap of 8
+  await idle(30)
+  assert.ok(errFired, 'error fired when the cap is exceeded')
+  assert.equal(status, 0)
+  assert.ok(src._destroyCalled, 'cap-exceed destroyed the source stream')
+})
+
+test('timeout marks done — a later abort() does not re-fire terminal events', async () => {
+  const src = trackedReadable()
+  let loadend = 0; let timedOut = false
+  const XHR = createXHR({ handler: () => ({ status: 200, body: src }) })
+  const xhr = new XHR()
+  xhr.addEventListener('loadend', () => { loadend++ })
+  xhr.addEventListener('timeout', () => { timedOut = true })
+  xhr.timeout = 20
+  xhr.open('GET', '/slow'); xhr.send()
+  await idle(60) // ref'd wait keeps the loop alive so the unref'd XHR timeout actually fires
+  assert.ok(timedOut, 'timeout fired')
+  xhr.abort() // must be a no-op — already terminal
+  await idle(10)
+  assert.equal(loadend, 1, 'loadend fired exactly once across timeout+abort')
+})
