@@ -325,10 +325,16 @@ it never makes.
   `http://127.0.0.1:PORT` origin, so the browser does not partition them. Canonical
   fix: a per-app origin (custom scheme handler / per-key subdomain). CSP +
   token-scoping mitigate in the meantime.
-- *Full Protomux multiplexing for swarm.v1* — cross-delivery is fixed today by
-  single-attribution routing; the canonical next step is one Protomux per
-  connection with a `pear.swarm.v1/<protocol>` sub-channel per logical channel
-  (the primitive hypercore replication itself muxes over).
+
+**Update — full Protomux multiplexing landed.** `swarm.v1` now multiplexes many
+logical channels over one connection per peer: `Protomux.from(conn)` plus a
+`pear.swarm.v1/<protocol>` sub-channel keyed by the topic buffer (the same
+primitive hypercore replication muxes over). **Pairing is the topic filter**,
+which structurally fixes both server-role peers and cross-delivery, and two
+channels share one socket with zero cross-talk — covered by a multiplexing
+isolation test (two channels, one connection, each sees only its own frames).
+This is the "acts like a real browser" model: concurrent logical streams over
+multiplexed connections.
 
 ---
 

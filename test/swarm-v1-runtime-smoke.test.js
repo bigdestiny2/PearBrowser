@@ -8,28 +8,22 @@ const path = require('node:path')
 require('./_stubs')
 const { HttpBridge } = require('../backend/http-bridge')
 const { SwarmBridge, deriveTierATopic } = require('../backend/swarm-bridge')
+const { duplexPair, MockPeer } = require('./helpers/protomux-pair')
 
 const root = path.join(__dirname, '..')
 const DRIVE_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 const TOKEN = 'swarm-smoke-token'
 const SUBTOPIC = 'examples/echo-peer/runtime-smoke'
 
-class FakeConnection extends EventEmitter {
-  constructor () {
-    super()
-    this.writes = []
-  }
-
-  write (data) {
-    this.writes.push(Buffer.from(data))
-    return true
-  }
-
-  destroy () {
-    this.emit('close')
-  }
+// Full mux protocol the bridge pairs on for a given page-chosen protocol.
+function muxProtocol (protocol) {
+  return 'pear.swarm.v1/' + protocol
 }
 
+// A FakeSwarm whose connections are real Protomux-capable byte Duplex pairs.
+// The bridge listens on swarm.on('connection') and runs Protomux.from() on the
+// connection it is handed; the test drives the *other* end via a MockPeer that
+// opens the matching (protocol, topic) sub-channel.
 class FakeSwarm extends EventEmitter {
   constructor () {
     super()
@@ -50,16 +44,22 @@ class FakeSwarm extends EventEmitter {
     return discovery
   }
 
-  connect (topicHex, conn = new FakeConnection()) {
-    this.connections.add(conn)
-    conn.once('close', () => this.connections.delete(conn))
-    conn.once('error', () => this.connections.delete(conn))
-    this.emit('connection', conn, {
-      topics: [Buffer.from(topicHex, 'hex')],
-      client: true,
-      server: false
-    })
-    return conn
+  /**
+   * Simulate a peer connecting. Emits the bridge's end through 'connection'
+   * and returns a MockPeer wrapping the remote end so the test can open
+   * matching mux sub-channels.
+   *
+   * @param {object} [info] — overrides the PeerInfo (client/server roles).
+   */
+  connectPeer (info = { client: false, server: true }) {
+    const [bridgeEnd, peerEnd] = duplexPair()
+    this.connections.add(bridgeEnd)
+    bridgeEnd.once('close', () => this.connections.delete(bridgeEnd))
+    bridgeEnd.once('error', () => this.connections.delete(bridgeEnd))
+    // info.topics deliberately omitted: with Protomux pairing the topic match
+    // comes from the (protocol, id) the remote opens, NOT from info.topics.
+    this.emit('connection', bridgeEnd, info)
+    return new MockPeer(peerEnd)
   }
 }
 
@@ -271,18 +271,32 @@ test('examples/echo-peer exercises swarm.v1 join, event stream, send, and leave'
   assert.equal(fakeSwarm.joins[0].topic.toString('hex'), expectedTopic)
   assert.deepEqual(fakeSwarm.joins[0].opts, { server: true, client: true })
 
+  // Bring up a remote peer that speaks Protomux and opens the SAME
+  // (protocol, topic) sub-channel. Protomux pairing — not info.topics — is
+  // what attributes it to this channel, so the page sees exactly one peer.
   const peerEvent = onceChannelEvent(channel, 'peer')
-  const conn = fakeSwarm.connect(channel.topicHex)
+  const mockPeer = fakeSwarm.connectPeer({ client: false, server: true })
+  const remoteReceived = []
+  const remoteChannel = mockPeer.openChannel({
+    protocol: muxProtocol('pear.echo-peer.v1'),
+    id: Buffer.from(channel.topicHex, 'hex'),
+    onmessage: (buf) => remoteReceived.push(buf)
+  })
   const [peer] = await peerEvent
   assert.equal(peer.pubkey, null)
   assert.equal(channel.peers.length, 1)
 
+  // Page → peer: the framed payload must arrive verbatim on the remote's
+  // c.raw message (channel-level assertion, replacing the old raw conn.writes
+  // check).
   peer.send(new TextEncoder().encode('ping'))
-  await waitFor(() => conn.writes.length === 1, 'outbound send')
-  assert.equal(conn.writes[0].toString(), 'ping')
+  await waitFor(() => remoteReceived.length === 1, 'remote received ping')
+  assert.equal(new TextDecoder().decode(remoteReceived[0]), 'ping')
 
+  // Peer → page: the page receives it through the channel 'message' event,
+  // decoded back to the original bytes.
   const messageEvent = onceChannelEvent(channel, 'message')
-  conn.emit('data', Buffer.from('pong'))
+  remoteChannel.send(new TextEncoder().encode('pong'))
   const [messagePeer, data] = await messageEvent
   assert.equal(messagePeer.id, peer.id)
   assert.equal(new TextDecoder().decode(data), 'pong')
@@ -293,4 +307,102 @@ test('examples/echo-peer exercises swarm.v1 join, event stream, send, and leave'
   await waitFor(() => swarmBridge.channels.size === 0, 'channel leave')
   assert.throws(() => peer.send(new TextEncoder().encode('after-close')), /channel destroyed/)
   assert.equal(fakeSwarm.discoveries[0].destroyed, true)
+
+  mockPeer.destroy()
+})
+
+// Drives a Channel directly through an in-memory stream collector, so we can
+// assert exactly which page events each logical channel sees — no HTTP/SSE in
+// the loop. Mirrors the stream contract SwarmBridge.attachStream expects.
+function collectStream () {
+  const events = []
+  const stream = {
+    send (ev) { events.push(ev) },
+    close () {},
+    onClose () {}
+  }
+  return { events, stream }
+}
+
+function peerIdsOf (events) {
+  return events.filter(e => e.type === 'peer').map(e => e.peerId)
+}
+
+function messagesFor (events, peerId) {
+  return events
+    .filter(e => e.type === 'message' && e.peerId === peerId)
+    .map(e => Buffer.from(e.data, 'base64').toString())
+}
+
+test('two swarm.v1 channels (same protocol, different topics) multiplex over ONE connection without cross-delivery', async (t) => {
+  const PROTOCOL = 'pear.echo-peer.v1'
+  const SUB_A = 'examples/echo-peer/mux-a'
+  const SUB_B = 'examples/echo-peer/mux-b'
+
+  const fakeSwarm = new FakeSwarm()
+  const swarmBridge = new SwarmBridge(fakeSwarm, {
+    requestConsent: async () => { throw new Error('Tier A must not prompt') }
+  })
+  t.after(async () => { await swarmBridge.destroy() })
+
+  // Two logical channels from the same drive/app: same protocol, distinct
+  // (Tier A derived) topics.
+  const joinA = await swarmBridge.join({
+    driveKeyHex: DRIVE_KEY, appName: 'mux', subtopic: SUB_A,
+    protocol: PROTOCOL, version: 1, server: true, client: true
+  })
+  const joinB = await swarmBridge.join({
+    driveKeyHex: DRIVE_KEY, appName: 'mux', subtopic: SUB_B,
+    protocol: PROTOCOL, version: 1, server: true, client: true
+  })
+  assert.notEqual(joinA.topicHex, joinB.topicHex, 'topics must differ')
+
+  const a = collectStream()
+  const b = collectStream()
+  swarmBridge.attachStream(joinA.channelId, a.stream)
+  swarmBridge.attachStream(joinB.channelId, b.stream)
+
+  // ONE connection. Both bridge channels open their sub-channels on it; the
+  // remote opens BOTH matching (protocol, topic) sub-channels over the same
+  // socket.
+  const mockPeer = fakeSwarm.connectPeer({ client: false, server: true })
+  assert.equal(fakeSwarm.connections.size, 1, 'exactly one underlying connection')
+
+  const remoteA = mockPeer.openChannel({
+    protocol: muxProtocol(PROTOCOL),
+    id: Buffer.from(joinA.topicHex, 'hex')
+  })
+  const remoteB = mockPeer.openChannel({
+    protocol: muxProtocol(PROTOCOL),
+    id: Buffer.from(joinB.topicHex, 'hex')
+  })
+
+  // Each channel should pair exactly one peer.
+  await waitFor(() => peerIdsOf(a.events).length === 1 && peerIdsOf(b.events).length === 1,
+    'both channels paired one peer each')
+  const peerA = peerIdsOf(a.events)[0]
+  const peerB = peerIdsOf(b.events)[0]
+
+  // Remote sends a distinct payload on each sub-channel.
+  remoteA.send(Buffer.from('only-for-A'))
+  remoteB.send(Buffer.from('only-for-B'))
+
+  await waitFor(() => messagesFor(a.events, peerA).length === 1 && messagesFor(b.events, peerB).length === 1,
+    'each channel received its own message')
+
+  // Each channel got ONLY its own payload — no cross-delivery.
+  assert.deepEqual(messagesFor(a.events, peerA), ['only-for-A'])
+  assert.deepEqual(messagesFor(b.events, peerB), ['only-for-B'])
+  assert.equal(a.events.filter(e => e.type === 'message').length, 1, 'A saw exactly one message')
+  assert.equal(b.events.filter(e => e.type === 'message').length, 1, 'B saw exactly one message')
+
+  // And page→peer direction stays namespaced too.
+  swarmBridge.send(joinA.channelId, peerA, Buffer.from('to-A').toString('base64'))
+  swarmBridge.send(joinB.channelId, peerB, Buffer.from('to-B').toString('base64'))
+  await waitFor(() => remoteA.received.length === 1 && remoteB.received.length === 1,
+    'remote received per-channel payloads')
+  assert.equal(remoteA.received[0].toString(), 'to-A')
+  assert.equal(remoteB.received[0].toString(), 'to-B')
+
+  mockPeer.destroy()
 })
