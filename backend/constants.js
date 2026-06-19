@@ -113,6 +113,9 @@ const EVT_LOGIN_REQUEST = 106
 /** A WebView called window.pear.swarm.v1.join() for an arbitrary topic.
  *  Payload: { requestId, driveKey, appName, reason, topicHex, protocol } */
 const EVT_SWARM_REQUEST = 107
+/** A signed P2P catalog bee appended (producer published an update) and
+ *  re-verified successfully. Payload: { keyHex, catalog } */
+const EVT_CATALOG_UPDATED = 108
 
 module.exports = {
   CMD_NAVIGATE, CMD_GET_STATUS,
@@ -139,5 +142,5 @@ module.exports = {
   CMD_BRIDGE,
   CMD_STOP,
   EVT_READY, EVT_PEER_COUNT, EVT_ERROR, EVT_INSTALL_PROGRESS, EVT_SITE_PUBLISHED, EVT_BOOT_PROGRESS,
-  EVT_LOGIN_REQUEST, EVT_SWARM_REQUEST,
+  EVT_LOGIN_REQUEST, EVT_SWARM_REQUEST, EVT_CATALOG_UPDATED,
 }

@@ -204,10 +204,22 @@ rpc.handle(C.CMD_LOAD_CATALOG, async (data) => {
   return await catalogManager.loadCatalog(data.keyHex)
 })
 
-// Phase 1 ticket 1 — Hyperbee-backed catalog (pre-positioning; relay
-// publishes Hyperdrive catalogs today. Once a Hyperbee catalog exists,
-// ExploreScreen can switch by sending `hyperbee://<key>` URLs.)
+// Hyperbee-backed catalog.
+//
+// Two formats share this command:
+//   - SIGNED P2P catalog (data.signed === true): the relay advertises a
+//     `catalogBeeKey` in /catalog.json. We replicate that bee, VERIFY its
+//     signed `\x00meta` manifest against the bee's own pubkey (the trust
+//     anchor), and scan entries. FAIL CLOSED on verify failure — the handler
+//     throws and ExploreScreen falls back to HTTP. Live producer updates are
+//     pushed to the UI via EVT_CATALOG_UPDATED.
+//   - Legacy `app!`-prefixed bee (no flag): the original unsigned format.
 rpc.handle(C.CMD_LOAD_CATALOG_BEE, async (data) => {
+  if (data && data.signed) {
+    return await catalogManager.loadSignedCatalogBee(data.keyHex, (updated) => {
+      rpc.event(C.EVT_CATALOG_UPDATED, { keyHex: data.keyHex, catalog: updated })
+    })
+  }
   return await catalogManager.loadCatalogBee(data.keyHex)
 })
 

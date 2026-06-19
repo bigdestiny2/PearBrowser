@@ -83,4 +83,6 @@ export const EVT = {
   LOGIN_REQUEST: 106,
   /** A page called window.pear.swarm.v1.join() for an arbitrary topic. */
   SWARM_REQUEST: 107,
+  /** A signed P2P catalog bee was updated by its producer and re-verified. */
+  CATALOG_UPDATED: 108,
 } as const

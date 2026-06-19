@@ -114,6 +114,14 @@ export class PearRPC {
     return this.request(CMD.LOAD_CATALOG_BEE, { keyHex }, 60000)
   }
 
+  // Signed P2P catalog (relay's `catalogBeeKey`). Replicates the bee,
+  // verifies its signed `\x00meta` manifest against the bee's own pubkey,
+  // and returns the scanned entries. Rejects (so the caller falls back to
+  // HTTP) if verification fails.
+  loadSignedCatalogBee(keyHex: string) {
+    return this.request(CMD.LOAD_CATALOG_BEE, { keyHex, signed: true }, 60000)
+  }
+
   installApp(appInfo: any) {
     return this.request(CMD.INSTALL_APP, appInfo, 120000)
   }
@@ -289,6 +297,11 @@ export class PearRPC {
 
   onBootProgress(cb: (data: { stage: string; message: string; error?: string }) => void) {
     return this.on(EVT.BOOT_PROGRESS, cb)
+  }
+
+  // A signed P2P catalog bee was updated by its producer and re-verified.
+  onCatalogUpdated(cb: (data: { keyHex: string; catalog: any }) => void) {
+    return this.on(EVT.CATALOG_UPDATED, cb)
   }
 
   // --- Wire protocol ---

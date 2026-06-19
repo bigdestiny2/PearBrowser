@@ -30,12 +30,28 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
   const [error, setError] = useState<string | null>(null)
 
   const [lastLoadSource, setLastLoadSource] = useState<string | null>(null)
+  // Drive key of a signed P2P catalog bee we're currently subscribed to, so
+  // live producer updates can be matched against what's on screen.
+  const [activeBeeKey, setActiveBeeKey] = useState<string | null>(null)
+
+  // Normalize a catalog entry into the shape SiteCard renders.
+  const normalizeEntry = useCallback((a: any): SiteInfo => {
+    const driveKey = a.driveKey || a.appKey || a.key || ''
+    return {
+      ...a,
+      driveKey,
+      id: a.id || a.appKey || driveKey,
+      name: a.name || a.title || 'Untitled',
+      description: a.description || '',
+    }
+  }, [])
 
   const handleLoadDirectory = useCallback(async (overrideUrl?: string) => {
     const url = (overrideUrl ?? directoryUrl).trim()
     if (!url) return
     setLoading(true)
     setError(null)
+    setActiveBeeKey(null)
     try {
       if (url.startsWith('http://') || url.startsWith('https://')) {
         const catalogUrl = url.endsWith('/catalog.json') ? url : url + '/catalog.json'
@@ -44,20 +60,31 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
           throw new Error(`Relay returned ${res.status} ${res.statusText || ''}`.trim())
         }
         const catalog = await res.json()
+
+        // PREFER BEE: a relay that publishes a signed P2P catalog advertises
+        // its bee key here. If the worklet RPC is available, replicate +
+        // verify the bee and render those entries. Any failure (no peers,
+        // signature invalid, etc.) falls through to the HTTP `apps[]` path
+        // below so old relays — and offline P2P — keep working.
+        const beeKey = typeof catalog.catalogBeeKey === 'string' ? catalog.catalogBeeKey.trim() : ''
+        if (rpc && /^[0-9a-f]{64}$/i.test(beeKey)) {
+          try {
+            const beeCatalog = await rpc.loadSignedCatalogBee(beeKey)
+            const beeEntries: any[] = beeCatalog.apps || beeCatalog.items || []
+            setSites(beeEntries.map(normalizeEntry))
+            setActiveBeeKey(beeKey.toLowerCase())
+            setLastLoadSource(`${url} (signed P2P catalog)`)
+            return
+          } catch (beeErr: any) {
+            // Verification or replication failed — fall back to HTTP.
+            console.warn('[Explore] signed catalog bee unavailable, using HTTP:', beeErr?.message)
+          }
+        }
+
         // Live relay catalog returns `apps`; the paginated variant returns `items`.
         // Entries use `appKey` (immutable primary key) and/or `driveKey`; `icon` may be missing.
         const entries: any[] = catalog.apps || catalog.items || []
-        setSites(entries.map((a: any) => {
-          const driveKey = a.driveKey || a.appKey || a.key || ''
-          return {
-            ...a,
-            driveKey,
-            // Normalize field names
-            id: a.id || driveKey,
-            name: a.name || a.title || 'Untitled',
-            description: a.description || '',
-          }
-        }))
+        setSites(entries.map(normalizeEntry))
         setLastLoadSource(url)
       } else if (rpc) {
         // hyperbee://KEY — canonical Pear-native catalog (Phase 1 ticket 1)
@@ -80,7 +107,19 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [rpc, directoryUrl])
+  }, [rpc, directoryUrl, normalizeEntry])
+
+  // LIVE UPDATES: when the worklet re-verifies a producer append for the
+  // signed bee we're showing, refresh the list in place (no re-poll).
+  useEffect(() => {
+    if (!rpc || !activeBeeKey) return
+    const off = rpc.onCatalogUpdated(({ keyHex, catalog }) => {
+      if (!keyHex || keyHex.toLowerCase() !== activeBeeKey) return
+      const entries: any[] = catalog?.apps || catalog?.items || []
+      setSites(entries.map(normalizeEntry))
+    })
+    return off
+  }, [rpc, activeBeeKey, normalizeEntry])
 
   useEffect(() => {
     let mounted = true
