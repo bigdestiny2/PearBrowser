@@ -375,7 +375,9 @@ export default function App() {
 
   // Launch app by drive key or URL (from explore directory)
   const handleLaunchByKey = useCallback((keyOrUrl: string) => {
-    if (keyOrUrl.startsWith('http')) {
+    if (/^(?:hyper|pear|file):\/\//i.test(keyOrUrl)) {
+      setBrowseUrl(keyOrUrl)
+    } else if (keyOrUrl.startsWith('http')) {
       const match = keyOrUrl.match(/\/v1\/hyper\/([a-f0-9]{64})/i)
       if (match) {
         setBrowseUrl(`hyper://${match[1]}`)

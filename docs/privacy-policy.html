@@ -15,37 +15,42 @@
 </head>
 <body>
   <h1>PearBrowser Privacy Policy</h1>
-  <p class="updated">Last updated: April 12, 2026</p>
+  <p class="updated">Last updated: June 22, 2026</p>
 
   <h2>Overview</h2>
   <p>PearBrowser is a peer-to-peer web browser. We are committed to protecting your privacy. This policy explains what data the app accesses and how it is used.</p>
 
   <h2>Data We Collect</h2>
-  <p><strong>We do not collect any personal data.</strong> PearBrowser does not have analytics, telemetry, advertising, or tracking of any kind. There is no account system and no data is sent to our servers.</p>
+  <p><strong>We do not collect personal data.</strong> PearBrowser does not have analytics, telemetry, advertising, or tracking of any kind. There is no account system and no PearBrowser-operated analytics server.</p>
 
   <h2>Local Storage</h2>
   <p>The app stores the following data locally on your device only:</p>
   <ul>
     <li><strong>Bookmarks</strong> &mdash; sites you save for quick access</li>
     <li><strong>Browsing history</strong> &mdash; URLs you visit (can be cleared in Settings)</li>
-    <li><strong>Settings</strong> &mdash; your preferences (catalog URL, private mode)</li>
+    <li><strong>Settings</strong> &mdash; your preferences, relay/catalog URLs, trusted origins, and local diagnostics settings</li>
+    <li><strong>Identity and grants</strong> &mdash; your local identity seed, backup/restore state, app-scoped login grants, swarm grants, and connected-app records</li>
+    <li><strong>Profile fields</strong> &mdash; optional name/contact fields you choose to save and grant to apps</li>
     <li><strong>Published sites</strong> &mdash; websites you create with the built-in editor</li>
   </ul>
-  <p>This data never leaves your device unless you choose to share it.</p>
+  <p>This data stays on your device unless you choose to share, publish, sync, seed content through a relay, or grant an app access through a PearBrowser consent prompt.</p>
 
   <h2>Peer-to-Peer Networking</h2>
   <p>PearBrowser uses peer-to-peer (P2P) networking via the Hyperswarm protocol. When you browse P2P content:</p>
   <ul>
-    <li>Your IP address is visible to peers you connect with. This is inherent to how P2P networking works.</li>
-    <li>Content is fetched directly from peers or via a relay gateway &mdash; no centralized server stores or logs your browsing activity.</li>
+    <li>Your IP address is visible to peers you connect with. This is inherent to how direct P2P networking works.</li>
+    <li>Content may be fetched directly from peers or via a relay gateway. A relay gateway can see the request metadata it serves, such as your IP address, requested drive key, path, and timing.</li>
     <li>The Distributed Hash Table (DHT) is used for peer discovery. Your participation in the DHT is limited to finding peers for content you request.</li>
   </ul>
+
+  <h2>App Permissions</h2>
+  <p>Apps loaded in PearBrowser can request capabilities through the <code>window.pear</code> bridge. PearBrowser uses app-scoped keys and consent prompts for sensitive access such as profile fields, contacts, sign-in grants, and arbitrary Hyperswarm topics. Apps should not receive your root identity key.</p>
 
   <h2>Camera</h2>
   <p>PearBrowser requests camera access solely for scanning QR codes containing hyper:// addresses. No images or video are stored, transmitted, or processed beyond reading the QR code data.</p>
 
   <h2>Third-Party Services</h2>
-  <p>PearBrowser does not integrate any third-party analytics, advertising, or tracking services. The app may connect to a relay gateway (configurable in Settings) to fetch P2P content over HTTPS as a fallback.</p>
+  <p>PearBrowser does not integrate any third-party analytics, advertising, or tracking services. The app may connect to relay gateways that you configure or that ship as defaults to fetch P2P content over HTTPS as a fast path or fallback.</p>
 
   <h2>Children's Privacy</h2>
   <p>PearBrowser does not knowingly collect any information from children under 13.</p>

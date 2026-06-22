@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pearbrowser.app.rpc.LocalPearRpc
 import com.pearbrowser.app.rpc.PearBookmark
+import com.pearbrowser.app.rpc.PearRpcStatus
 import com.pearbrowser.app.ui.theme.PearColors
 
 /**
@@ -51,16 +52,23 @@ import com.pearbrowser.app.ui.theme.PearColors
  * simple for now: search bar + synced bookmark quick access.
  */
 @Composable
-fun HomeScreen(onNavigate: (String) -> Unit) {
+fun HomeScreen(onNavigate: (String) -> Unit, status: PearRpcStatus?) {
     var input by remember { mutableStateOf("") }
     var bookmarks by remember { mutableStateOf<List<PearBookmark>>(emptyList()) }
     var bookmarksLoading by remember { mutableStateOf(false) }
     var bookmarksError by remember { mutableStateOf<String?>(null) }
     val scroll = rememberScrollState()
     val rpc = LocalPearRpc.current
+    val backendReady = status != null
 
-    LaunchedEffect(rpc) {
+    LaunchedEffect(rpc, backendReady) {
         val client = rpc ?: return@LaunchedEffect
+        if (!backendReady) {
+            bookmarksLoading = true
+            bookmarksError = null
+            return@LaunchedEffect
+        }
+
         bookmarksLoading = true
         bookmarksError = null
         try {
@@ -191,7 +199,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                         if (bookmarksError == null) {
                             "Browse the decentralized web, discover P2P sites, and build your own websites."
                         } else {
-                            "Bookmarks will appear here once the P2P engine is ready."
+                            "Bookmarks are unavailable right now. Try again in a moment."
                         },
                         color = PearColors.TextSecondary,
                         fontSize = 14.sp,

@@ -199,6 +199,30 @@ class PearRpcClient(context: Context) : AutoCloseable {
     suspend fun getStatus(): PearRpcStatus =
         PearRpcStatus.fromJson(request(Cmd.GET_STATUS).jsonObject)
 
+    suspend fun navigate(url: String): JsonObject =
+        request(
+            Cmd.NAVIGATE,
+            buildJsonObject { put("url", url) },
+            bindTimeoutMs = 60_000,
+        ).jsonObject
+
+    suspend fun loadCatalog(keyHex: String): JsonObject =
+        request(
+            Cmd.LOAD_CATALOG,
+            buildJsonObject { put("keyHex", keyHex) },
+            bindTimeoutMs = 60_000,
+        ).jsonObject
+
+    suspend fun loadCatalogBee(keyHex: String, signed: Boolean = false): JsonObject =
+        request(
+            Cmd.LOAD_CATALOG_BEE,
+            buildJsonObject {
+                put("keyHex", keyHex)
+                if (signed) put("signed", true)
+            },
+            bindTimeoutMs = 60_000,
+        ).jsonObject
+
     suspend fun getSettings(): PearSettings {
         val root = request(Cmd.USERDATA_GET_SETTINGS).jsonObject
         return PearSettings.fromJson(root["settings"]?.jsonObjectOrNull() ?: JsonObject(emptyMap()))

@@ -2,15 +2,16 @@ package com.pearbrowser.app.ui.screens
 
 import android.annotation.SuppressLint
 import android.graphics.Color
-import android.view.ViewGroup
+import android.os.Handler
+import android.os.Looper
 import android.webkit.JavascriptInterface
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
@@ -25,94 +26,165 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.pearbrowser.app.bridge.PearBridgeScript
+import com.pearbrowser.app.rpc.LocalPearRpc
 import com.pearbrowser.app.ui.theme.PearColors
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import java.net.URI
 
 /**
- * BrowseScreen — WebView host with Pear bridge injection.
+ * BrowseScreen - native WebView host for hyper:// content.
  *
- * The Kotlin equivalent of `app/screens/BrowseScreen.tsx`. Uses native
- * Android WebView (no react-native-webview wrapper) — drops ~5MB of RN
- * dependencies and gives us direct access to addJavascriptInterface for
- * native callbacks from the page.
- *
- * Phase 2 ticket 6 — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
+ * For hyper:// URLs, the native shell mirrors the React Native flow:
+ * it calls CMD_NAVIGATE on the worklet, receives a localhost proxy URL plus
+ * a drive-scoped X-Pear-Token, then injects the shared window.pear bridge.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BrowseScreen(initialUrl: String?) {
-    // Placeholder port + token — will be populated once the worklet
-    // reports READY via PearRpc.onReady in the next pass.
+    val rpc = LocalPearRpc.current
+    var currentUrl by remember { mutableStateOf(initialUrl) }
+    var webViewUrl by remember { mutableStateOf<String?>(null) }
     var proxyPort by remember { mutableStateOf(0) }
     var apiToken by remember { mutableStateOf("") }
-    var currentUrl by remember { mutableStateOf(initialUrl) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(initialUrl) { currentUrl = initialUrl }
 
-    if (currentUrl == null) {
-        Column(
-            Modifier.fillMaxSize().background(PearColors.Bg).padding(32.dp),
-        ) {
-            Text(
-                "Browse",
-                color = PearColors.TextPrimary,
-                fontSize = 24.sp,
-            )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Enter a hyper:// address on the Home tab, or tap a site in Explore.",
-                color = PearColors.TextSecondary,
-                fontSize = 14.sp,
-            )
+    LaunchedEffect(currentUrl, rpc) {
+        val target = currentUrl ?: return@LaunchedEffect
+        error = null
+
+        if (target.startsWith("hyper://", ignoreCase = true)) {
+            val client = rpc
+            if (client == null) {
+                error = "P2P engine is not ready yet."
+                webViewUrl = null
+                apiToken = ""
+                proxyPort = 0
+                return@LaunchedEffect
+            }
+
+            try {
+                val result = client.navigate(target)
+                val localUrl = result["localUrl"]?.jsonPrimitive?.contentOrNull
+                    ?: throw IllegalStateException("Backend did not return localUrl")
+                webViewUrl = localUrl
+                apiToken = result["apiToken"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                proxyPort = result["proxyPort"]?.jsonPrimitive?.intOrNull ?: parsePort(localUrl)
+            } catch (e: Throwable) {
+                error = e.message ?: "Could not navigate to $target"
+                webViewUrl = null
+                apiToken = ""
+                proxyPort = 0
+            }
+        } else {
+            // Direct HTTP(S) browsing is allowed for relay/catalog fallback and
+            // developer pages. It does not receive a Pear bridge token.
+            webViewUrl = target
+            apiToken = ""
+            proxyPort = 0
         }
+    }
+
+    if (currentUrl == null) {
+        EmptyBrowseState()
         return
     }
 
-    AndroidView(
-        modifier = Modifier.fillMaxSize().background(PearColors.Bg),
-        factory = { ctx ->
-            WebView(ctx).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                )
-                setBackgroundColor(Color.parseColor("#0A0A0A"))
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.mediaPlaybackRequiresUserGesture = false
-                settings.allowFileAccess = false
-                settings.allowContentAccess = false
+    Column(Modifier.fillMaxSize().background(PearColors.Bg)) {
+        error?.let {
+            Text(
+                it,
+                color = PearColors.Error,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
 
-                // Native hooks the bridge script calls back to. Matches the
-                // `window.PearBrowserNative` path declared in
-                // app/lib/pear-bridge-spec.ts (mirrored in
-                // bridge/PearBridgeScript.kt).
-                addJavascriptInterface(object {
-                    @JavascriptInterface
-                    fun navigate(url: String) {
-                        // TODO: post through a callback prop so the root
-                        // navigator can switch to the Browse tab.
-                    }
-                    @JavascriptInterface
-                    fun share(url: String) { /* TODO: Intent.ACTION_SEND */ }
-                }, "PearBrowserNative")
+        val targetUrl = webViewUrl
+        if (targetUrl == null) {
+            Text(
+                "Preparing P2P route...",
+                color = PearColors.TextSecondary,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(32.dp),
+            )
+            return@Column
+        }
 
-                webViewClient = object : WebViewClient() {
-                    override fun onPageStarted(
-                        view: WebView?, url: String?, favicon: android.graphics.Bitmap?
-                    ) {
-                        // Inject the Pear bridge as early as possible so
-                        // pages see window.pear before their onload runs.
-                        val script = PearBridgeScript.build(proxyPort, apiToken)
-                        view?.evaluateJavascript(script, null)
+        AndroidView(
+            modifier = Modifier.fillMaxSize().background(PearColors.Bg),
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    val mainHandler = Handler(Looper.getMainLooper())
+                    setBackgroundColor(Color.parseColor("#0A0A0A"))
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.mediaPlaybackRequiresUserGesture = false
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = false
+
+                    addJavascriptInterface(object {
+                        @JavascriptInterface
+                        fun navigate(url: String) {
+                            mainHandler.post { currentUrl = url }
+                        }
+
+                        @JavascriptInterface
+                        fun share(url: String) {
+                            // TODO: wire Intent.ACTION_SEND once the share sheet
+                            // route is ported from the RN shell.
+                        }
+                    }, "PearBrowserNative")
+
+                    webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                        ): Boolean {
+                            val url = request?.url?.toString() ?: return false
+                            if (url.startsWith("hyper://", ignoreCase = true)) {
+                                currentUrl = url
+                                return true
+                            }
+                            return false
+                        }
+
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            if (proxyPort > 0 && apiToken.isNotBlank()) {
+                                view?.evaluateJavascript(
+                                    PearBridgeScript.build(proxyPort, apiToken),
+                                    null,
+                                )
+                            }
+                        }
                     }
                 }
-            }
-        },
-        update = { web ->
-            val target = currentUrl
-            if (target != null && target != web.url) {
-                web.loadUrl(target)
-            }
-        },
-    )
+            },
+            update = { web ->
+                if (targetUrl != web.url) web.loadUrl(targetUrl)
+            },
+        )
+    }
 }
+
+@Composable
+private fun EmptyBrowseState() {
+    Column(
+        Modifier.fillMaxSize().background(PearColors.Bg).padding(32.dp),
+    ) {
+        Text("Browse", color = PearColors.TextPrimary, fontSize = 24.sp)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Enter a hyper:// address on the Home tab, or tap a site in Explore.",
+            color = PearColors.TextSecondary,
+            fontSize = 14.sp,
+        )
+    }
+}
+
+private fun parsePort(url: String): Int =
+    try { URI(url).port.takeIf { it > 0 } ?: 0 } catch (_: Throwable) { 0 }

@@ -136,10 +136,6 @@ class PearWorkletService : Service() {
             val optionsClass = Class.forName("to.holepunch.bare.kit.Worklet\$Options")
             val options = optionsClass.getDeclaredConstructor().newInstance()
             val wkt = workletClass.getDeclaredConstructor(optionsClass).newInstance(options)
-            val ipc = JavaBareIpcAdapter(wkt)
-            val client = PearRpc(ipc)
-            attachConsentEvents(client)
-            rpc = client
 
             // Worklet.start(filename, args). bare-kit reads the bundle from
             // filename on disk.
@@ -147,7 +143,11 @@ class PearWorkletService : Service() {
                 "start", String::class.java, Array<String>::class.java
             )
             startFile.invoke(wkt, bundlePath, arrayOf(storagePath.absolutePath))
+            val ipc = JavaBareIpcAdapter(wkt)
+            val client = PearRpc(ipc)
+            attachConsentEvents(client)
             worklet = wkt
+            rpc = client
             Log.i(TAG, "Worklet started: bundle=$bundlePath storage=${storagePath.absolutePath}")
         } catch (e: ClassNotFoundException) {
             Log.w(TAG, "bare-kit AAR not installed — see BUILD.md. Running in demo mode.")
@@ -367,7 +367,6 @@ private class JavaBareIpcAdapter(private val worklet: Any) : WorkletIpc {
             null
         }
         readableMethod.invoke(ipc, callback)
-        drainReadable(listener)
     }
 
     private fun drainReadable(listener: (ByteArray) -> Unit) {

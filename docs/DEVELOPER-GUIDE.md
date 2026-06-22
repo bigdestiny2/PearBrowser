@@ -204,10 +204,15 @@ Create `index.html`. The `window.pear` API is automatically injected by PearBrow
       }
     });
 
-    // --- Listen for Sync Events ---
-    window.pear.sync.onSync(function() {
-      refreshTodos();
+    // --- Refresh on focus / interval ---
+    // The current bridge does not expose a generic onSync callback. Refresh
+    // after local writes, when the page becomes visible, and on a light timer.
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden && syncReady) refreshTodos();
     });
+    setInterval(function() {
+      if (syncReady) refreshTodos();
+    }, 5000);
 
     // --- Boot ---
     init();
@@ -293,7 +298,7 @@ To test the full P2P flow, publish the app and load it in PearBrowser on a simul
 
 ## 2. The window.pear API Reference
 
-The `window.pear` object is injected into every WebView that loads a P2P app. It communicates with PearBrowser's Bare worklet backend through a `postMessage` bridge. All methods return Promises.
+The `window.pear` object is injected into trusted WebViews that load PearBrowser apps. It communicates with PearBrowser's Bare worklet backend through the token-gated local bridge. Most data/API methods return Promises; host navigation/share commands are fire-and-forget. Always feature-detect the namespace you need; the bridge is absent on ordinary external pages.
 
 ### Sync API
 
@@ -312,7 +317,7 @@ console.log(result.appId);     // 'my-app'
 **Parameters:**
 - `appId` (string) -- A unique identifier for the sync group. Convention: lowercase kebab-case (e.g., `my-app`, `pear-pos`).
 
-**Returns:** `{ inviteKey: string, appId: string }`
+**Returns:** `{ inviteKey: string, appId: string, writerPublicKey: string }`
 
 The invite key is derived from the Autobase's public key. Save it (e.g., in `localStorage`) so you can rejoin on restart.
 
@@ -330,7 +335,7 @@ const result = await window.pear.sync.join('my-app', '4a3b2c1d...');
 - `appId` (string) -- Must match the group you are joining.
 - `inviteKey` (string) -- 64-character hex string from `sync.create()`.
 
-**Returns:** `{ inviteKey: string, appId: string }`
+**Returns:** `{ inviteKey: string, appId: string, writerPublicKey: string }`
 
 ---
 
@@ -404,6 +409,39 @@ const txns = await window.pear.sync.list('my-app', 'transactions!2024-01', { lim
 
 ---
 
+#### `window.pear.sync.range(appId, opts)`
+
+Query entries with explicit Hyperbee bounds and optional reverse ordering.
+
+```javascript
+const newest = await window.pear.sync.range('my-app', {
+  gte: 'transactions!',
+  lt: 'transactions!\xff',
+  reverse: true,
+  limit: 20
+});
+```
+
+**Parameters:**
+- `appId` (string) -- The sync group.
+- `opts` (object, optional) -- `gte`, `gt`, `lte`, `lt`, `reverse`, and `limit`.
+
+**Returns:** Array of `{ key: string, value: object }`.
+
+---
+
+#### `window.pear.sync.count(appId, prefix)`
+
+Count entries under a prefix without fetching every value.
+
+```javascript
+const { count } = await window.pear.sync.count('my-app', 'tickets!');
+```
+
+**Returns:** `{ count: number }`.
+
+---
+
 #### `window.pear.sync.status(appId)`
 
 Get the current status of a sync group.
@@ -426,34 +464,83 @@ const status = await window.pear.sync.status('my-app');
 
 ---
 
-#### `window.pear.sync.onSync(callback)`
-
-Register a listener for sync events. Called when new data arrives from other peers.
-
-```javascript
-window.pear.sync.onSync(function() {
-  console.log('New data received from peers');
-  refreshUI();
-});
-```
-
-**Parameters:**
-- `callback` (function) -- Called with no arguments when a sync event occurs.
-
----
-
 ### Identity API
 
 #### `window.pear.identity.getPublicKey()`
 
-Get the device's ed25519 public key from the Hyperswarm keypair. This is a stable identifier for the device (not the user).
+Get the app-scoped ed25519 public key. It is stable for this user and this app drive, and different from what other apps see.
 
 ```javascript
-const { publicKey } = await window.pear.identity.getPublicKey();
+const { publicKey, driveKey, algorithm } = await window.pear.identity.getPublicKey();
 console.log(publicKey); // '7f8e9d...' (64-char hex)
 ```
 
-**Returns:** `{ publicKey: string | null }` -- `null` if Hyperswarm has not connected yet.
+**Returns:** `{ publicKey: string, driveKey: string, algorithm: 'ed25519' }`.
+
+---
+
+#### `window.pear.identity.sign(payload, namespace)`
+
+Sign an app-scoped payload with domain separation.
+
+```javascript
+const proof = await window.pear.identity.sign(JSON.stringify({ orderId }), 'orders');
+```
+
+**Returns:** `{ signature, publicKey, algorithm, tag }`.
+
+---
+
+### Login and Contacts API
+
+#### `window.pear.login(opts)`
+
+Request app-scoped sign-in. The first call shows a native consent prompt; later
+calls reuse the stored grant until it expires or the user revokes it.
+
+```javascript
+const login = await window.pear.login({
+  appName: 'My Todo App',
+  scopes: ['profile:name'],
+  reason: 'Show your name beside shared tasks.'
+});
+```
+
+**Returns:** `{ appPubkey, scopes, grantedAt, expiresAt, loginProof, tag, profile }`.
+
+Use `window.pear.login.status()` to check the current grant without prompting,
+and `window.pear.login.logout()` to revoke this app's grant.
+
+`window.pear.contacts.list()` and `window.pear.contacts.lookup(pubkey)` require
+a `contacts:read` grant from `window.pear.login()`.
+
+---
+
+### Swarm API
+
+#### `window.pear.swarm.v1.join(topicHex, opts)`
+
+Join a direct Hyperswarm channel. Prefer drive-scoped subtopics, which do not
+need a prompt:
+
+```javascript
+const channel = await window.pear.swarm.v1.join(null, {
+  subtopic: 'rooms/lobby',
+  appName: 'My Chat',
+  reason: 'Find peers in the lobby.'
+});
+
+channel.on('peer', (peer) => {
+  peer.send(new TextEncoder().encode('hello'));
+});
+
+channel.on('message', (peer, data) => {
+  console.log(peer.id, new TextDecoder().decode(data));
+});
+```
+
+Passing an arbitrary 64-hex topic asks for explicit user consent and can reject
+with `consent-denied` or `consent-pending`.
 
 ---
 
@@ -465,13 +552,13 @@ Navigate PearBrowser to a different URL. Supports `hyper://` addresses.
 
 ```javascript
 // Navigate to another P2P app or site
-await window.pear.navigate('hyper://abc123.../index.html');
+window.pear.navigate('hyper://abc123.../index.html');
 ```
 
 **Parameters:**
 - `url` (string) -- The URL to navigate to.
 
-**Returns:** `{ ok: true }`
+**Returns:** Nothing. This posts a host-navigation request to the native shell.
 
 Note: Navigation is handled by the React Native layer. The WebView will be replaced with the new content.
 
@@ -482,13 +569,13 @@ Note: Navigation is handled by the React Native layer. The WebView will be repla
 Trigger the iOS share sheet for a URL.
 
 ```javascript
-await window.pear.share('hyper://abc123...');
+window.pear.share('hyper://abc123...');
 ```
 
 **Parameters:**
 - `url` (string) -- The URL to share.
 
-**Returns:** `{ ok: true }`
+**Returns:** Nothing. This asks the native shell to open the platform share flow.
 
 ---
 
@@ -513,7 +600,7 @@ The `window.posAPI` is a higher-level API that wraps `window.pear.sync` with a p
 | `getSyncStatus()` | Returns `{ appId, inviteKey, writerCount, viewLength }`. |
 | `getSyncInviteKey()` | Returns the saved invite key from `localStorage`. |
 | `joinSyncGroup(inviteKey)` | Join POS sync group from another device. |
-| `getConfig()` | Read config from `config!main` key. |
+| `getConfig()` | Read config from the `config!merchant` key. |
 | `updateConfig(updates)` | Merge updates into config. |
 
 ---
@@ -522,7 +609,10 @@ The `window.posAPI` is a higher-level API that wraps `window.pear.sync` with a p
 
 ### Publish your app to a relay catalog
 
-This is the path that makes your app installable in PearBrowser's App Store:
+This is the path that makes your app launchable in PearBrowser's App Store. The
+catalog entry becomes the user's stable way to open the current available
+release, without visiting your project page, downloading a bundle, or applying
+manual updates.
 
 1. **Build your app + `manifest.json`.** Ship a `manifest.json` at the drive root with `name`, `description`, `author`, `version`, `categories`, and an optional `icon`. The relay reads these to build the catalog entry — an app seeded **without a manifest shows up as "Unknown App."**
 
@@ -588,12 +678,13 @@ If you stop the publish process, your app becomes unavailable until you restart 
 
 ```bash
 # Ask a relay to seed your app's Hyperdrive
-curl -X POST http://your-relay:9100/v1/seed \
+curl -X POST http://your-relay:9100/seed \
   -H 'Content-Type: application/json' \
-  -d '{"key": "4a3b2c1de5f6..."}'
+  -H 'Authorization: Bearer YOUR_RELAY_TOKEN' \
+  -d '{"appKey": "4a3b2c1de5f6..."}'
 ```
 
-Once seeded, the relay stores and serves your app's content. PearBrowser's hybrid fetch system will load it from the relay HTTP gateway in 1-2 seconds, even if your local publish process is not running.
+If your relay expects an API key header instead of bearer auth, send `x-api-key: YOUR_RELAY_TOKEN` as well. Once seeded, the relay stores and serves your app's content. PearBrowser's hybrid fetch system will load it from the relay HTTP gateway in 1-2 seconds, even if your local publish process is not running.
 
 ### Registering with a Catalog Relay
 

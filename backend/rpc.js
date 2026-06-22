@@ -105,8 +105,9 @@ class WorkletRPC extends EventEmitter {
       }
 
       const json = JSON.stringify(msg)
-      const buf = b4a.from(json.length.toString(16).padStart(8, '0') + json)
-      this._ipc.write(buf)
+      const body = b4a.from(json)
+      const header = b4a.from(body.length.toString(16).padStart(8, '0'))
+      this._ipc.write(b4a.concat([header, body]))
     } catch (err) {
       console.error('RPC send failed:', err)
 

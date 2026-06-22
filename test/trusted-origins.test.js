@@ -17,6 +17,10 @@ require('./_stubs')
 const Corestore = require('corestore')
 const { TrustedOrigins, normaliseOrigin } = require('../backend/trusted-origins.js')
 
+function read (rel) {
+  return fs.readFileSync(path.join(__dirname, '..', rel), 'utf-8')
+}
+
 function makeTmpStore () {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-trust-'))
   return { store: new Corestore(dir), dir }
@@ -158,4 +162,31 @@ test('TrustedOrigins: touch is best-effort (no throw on unknown origin)', async 
   await t.touch('https://nope.example')
   await t.touch('not a url')
   await t.touch(null)
+})
+
+test('iOS native Trusted Sites screen is wired to the shared trusted-origin RPCs', () => {
+  const screen = read('ios-native/PearBrowser/Sources/UI/Screens/TrustedSitesScreen.swift')
+  assert.match(screen, /ScreenHeader\("Trusted Sites"/, 'Trusted Sites screen heading missing')
+  assert.match(screen, /Inject everywhere/, 'Trusted Sites must expose all-sites mode')
+  assert.match(screen, /Allow-list only/, 'Trusted Sites must expose allow-list mode')
+  assert.match(screen, /trustedOriginsList\(\)/, 'Trusted Sites must list origins')
+  assert.match(screen, /trustedOriginsSetMode\(next\)/, 'Trusted Sites must set injection mode')
+  assert.match(screen, /trustedOriginsAdd\(raw\)/, 'Trusted Sites must add origins')
+  assert.match(screen, /trustedOriginsRemove\(origin\)/, 'Trusted Sites must remove origins')
+  assert.match(screen, /https:\/\/example\.com/, 'Trusted Sites must prompt for HTTPS origins')
+
+  const settings = read('ios-native/PearBrowser/Sources/UI/Screens/SettingsScreen.swift')
+  assert.match(settings, /identityRow\("Trusted Sites"/, 'iOS Settings must expose Trusted Sites')
+
+  const main = read('ios-native/PearBrowser/Sources/App/MainView.swift')
+  assert.match(main, /case trustedSites/, 'iOS MainView must route to Trusted Sites')
+  assert.match(main, /TrustedSitesScreen/, 'iOS MainView must render TrustedSitesScreen')
+
+  const browse = read('ios-native/PearBrowser/Sources/UI/Screens/BrowseScreen.swift')
+  assert.match(browse, /trustedOriginsAdd\(origin\)/, 'iOS Browse must be able to trust current HTTPS origin')
+
+  const rpc = read('ios-native/PearBrowser/Sources/RPC/PearRPC.swift')
+  for (const helper of ['trustedOriginsList', 'trustedOriginsAdd', 'trustedOriginsRemove', 'trustedOriginsSetMode']) {
+    assert.match(rpc, new RegExp(`func ${helper}\\(`), `iOS RPC helper missing: ${helper}`)
+  }
 })

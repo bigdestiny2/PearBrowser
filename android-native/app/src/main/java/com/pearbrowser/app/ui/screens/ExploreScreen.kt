@@ -106,8 +106,8 @@ fun ExploreScreen(onVisit: (String) -> Unit, settings: PearSettings? = null) {
             )
             else -> sites.forEach { site ->
                 SiteCard(site = site, onVisit = {
-                    val relayBase = sourceUrl.removeSuffix("/catalog.json")
-                    onVisit("$relayBase/v1/hyper/${site.driveKey}/index.html")
+                    val target = site.link ?: site.driveKey?.let { "hyper://$it" }
+                    if (target != null) onVisit(target)
                 })
             }
         }
@@ -149,7 +149,8 @@ private data class Site(
     val id: String,
     val name: String,
     val description: String,
-    val driveKey: String,
+    val driveKey: String?,
+    val link: String?,
 )
 
 private fun fetchCatalog(base: String): List<Site> {
@@ -163,21 +164,68 @@ private fun fetchCatalog(base: String): List<Site> {
     conn.inputStream.use { stream ->
         val body = stream.bufferedReader().readText()
         val root = Json.parseToJsonElement(body).jsonObject
-        // Live relay catalog returns `apps`; the paginated variant returns `items`.
-        // Entries use `appKey` (immutable primary key) and/or `driveKey`; `icon` may be missing.
-        val apps: JsonElement = root["apps"] ?: root["items"] ?: return emptyList()
+        // Live relay catalog returns `apps`; the paginated variant returns `items`;
+        // legacy registry exports may use `entries`.
+        val apps: JsonElement = root["apps"] ?: root["items"] ?: root["entries"] ?: return emptyList()
         return apps.jsonArray.mapNotNull { el ->
             val obj = el.jsonObject
-            val driveKey = obj["driveKey"]?.jsonPrimitive?.content
-                ?: obj["appKey"]?.jsonPrimitive?.content
-                ?: obj["key"]?.jsonPrimitive?.content
-                ?: return@mapNotNull null
+            val link = normalizeCatalogLink(obj.stringAt("link"))
+            val driveKey = normalizeDriveKey(obj.stringAt("driveKey"))
+                ?: normalizeDriveKey(obj.stringAt("appKey"))
+                ?: normalizeDriveKey(obj.stringAt("key"))
+                ?: driveKeyFromHyperLink(link)
+            if (driveKey == null && link == null) return@mapNotNull null
             Site(
-                id = obj["id"]?.jsonPrimitive?.content ?: driveKey,
-                name = obj["name"]?.jsonPrimitive?.content ?: "Untitled",
-                description = obj["description"]?.jsonPrimitive?.content ?: "",
+                id = obj.stringAt("id") ?: driveKey ?: link ?: return@mapNotNull null,
+                name = obj.stringAt("name") ?: "Untitled",
+                description = obj.stringAt("description") ?: "",
                 driveKey = driveKey,
+                link = link,
             )
         }
     }
+}
+
+private val hex64 = Regex("^[0-9a-fA-F]{64}$")
+
+private fun JsonObject.stringAt(key: String): String? {
+    return this[key]?.let { element ->
+        runCatching { element.jsonPrimitive.content.trim() }.getOrNull()
+    }?.takeIf { it.isNotEmpty() }
+}
+
+private fun normalizeDriveKey(raw: String?): String? {
+    val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    if (hex64.matches(trimmed)) return trimmed.lowercase()
+    return driveKeyFromHyperLink(trimmed)
+}
+
+private fun normalizeCatalogLink(raw: String?): String? {
+    val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val separator = trimmed.indexOf("://")
+    if (separator <= 0) return null
+    val scheme = trimmed.substring(0, separator).lowercase()
+    return when (scheme) {
+        "hyper" -> normalizeHyperLink(trimmed)
+        "pear", "file" -> "$scheme://${trimmed.substring(separator + 3)}"
+        else -> null
+    }
+}
+
+private fun normalizeHyperLink(link: String): String? {
+    val trimmed = link.trim()
+    val separator = trimmed.indexOf("://")
+    if (separator <= 0 || trimmed.substring(0, separator).lowercase() != "hyper") return null
+    val rest = trimmed.substring(separator + 3)
+    val keyEnd = rest.indexOfAny(charArrayOf('/', '?', '#')).let { if (it < 0) rest.length else it }
+    val key = rest.substring(0, keyEnd)
+    if (!hex64.matches(key)) return null
+    return "hyper://${key.lowercase()}${rest.substring(keyEnd)}"
+}
+
+private fun driveKeyFromHyperLink(link: String?): String? {
+    val normalized = normalizeHyperLink(link ?: "") ?: return null
+    val rest = normalized.removePrefix("hyper://")
+    val keyEnd = rest.indexOfAny(charArrayOf('/', '?', '#')).let { if (it < 0) rest.length else it }
+    return rest.substring(0, keyEnd)
 }

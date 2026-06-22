@@ -26,8 +26,9 @@ Developer                          Catalog Relay                    PearBrowser
 
                                                                     8. Displays apps in Store tab
 
-                                                                    9. User taps "Get" → downloads
-                                                                       app's Hyperdrive
+                                                                    9. User taps "Get/Open"
+                                                                       → launches current app
+                                                                         from stable drive/link
 ```
 
 ## App Manifest Format
@@ -68,12 +69,23 @@ The catalog relay:
 4. Adds the app to its `catalog.json` Hyperdrive
 5. Serves the catalog via HTTP gateway + P2P
 
+## Catalog JSON Envelopes
+
+PearBrowser normalizes relay catalog envelopes before rendering or checking app
+updates. Preferred catalogs expose `apps[]`, current HiveRelay gateway responses
+may expose `items[]`, and older registry exports may expose `entries[]`. Entries
+should include one stable drive key field: `driveKey`, `appKey`, `key`, or a
+safe `hyper://`, `pear://`, or `file://` launch link.
+
 ## Multiple Catalogs
 
 - PearBrowser ships with one default catalog relay URL
 - Users can add more in Settings
 - Each catalog is independent — different relays may have different apps
 - PearBrowser aggregates and deduplicates across all catalogs
+- Catalog entries give users a stable place to run the current app, so they do
+  not need to rediscover a project URL, download a bundle, or apply updates by
+  hand.
 
 ## Moderation
 

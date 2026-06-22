@@ -106,4 +106,6 @@ object Evt {
     const val LOGIN_REQUEST = 106
     /** A page called window.pear.swarm.v1.join() for an arbitrary topic. */
     const val SWARM_REQUEST = 107
+    /** A signed P2P catalog bee updated and re-verified successfully. */
+    const val CATALOG_UPDATED = 108
 }

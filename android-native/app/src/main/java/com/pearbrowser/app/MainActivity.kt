@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -187,7 +188,7 @@ private fun PearBrowserRoot() {
     CompositionLocalProvider(LocalPearRpc provides rpcClient) {
         Column(Modifier.fillMaxSize().background(PearColors.Bg)) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -216,7 +217,7 @@ private fun PearBrowserRoot() {
 
             Box(Modifier.weight(1f)) {
                 when (activeTab) {
-                    Tab.Home -> HomeScreen(onNavigate = onNavigate)
+                    Tab.Home -> HomeScreen(onNavigate = onNavigate, status = workletStatus)
                     Tab.Explore -> ExploreScreen(onVisit = onNavigate, settings = pearSettings)
                     Tab.Browse -> BrowseScreen(initialUrl = browseUrl)
                     Tab.More -> {

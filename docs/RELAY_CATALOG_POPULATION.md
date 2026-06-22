@@ -76,4 +76,4 @@ In PearBrowser → Explore tab:
 
 ## PearBrowser-Side Is Ready
 
-The browser doesn't need any change — it reads `catalog.apps[]` and works correctly whether the array has 0, 1, or 100 items. The empty-state UI has been updated to clearly say "Directory is empty" when the relay returns `apps: []` vs "No directory connected" when nothing has been loaded yet.
+The browser normalizes `catalog.apps[]`, HiveRelay gateway `catalog.items[]`, and legacy `catalog.entries[]` before rendering or update checks. It works correctly whether the resolved app list has 0, 1, or 100 items. The empty-state UI has been updated to clearly say "Directory is empty" when the relay returns an empty app list vs "No directory connected" when nothing has been loaded yet.

@@ -39,6 +39,7 @@ const {
   buildSignedDigest,
   verifyCatalogMeta,
   verifyAndScanCatalogBee,
+  resolveSignerKey,
   META_KEY,
 } = require('../backend/catalog-manager')
 
@@ -191,6 +192,53 @@ test('MISSING \\x00meta is REJECTED', async () => {
     assert.equal(res.entries, undefined, 'no entries returned (fail closed)')
   } finally {
     await cleanup()
+  }
+})
+
+test('manifest core (key=hash, the real producer shape) VERIFIES via the manifest signer', async () => {
+  // The curated catalog (publish-catalog-bee.js via Corestore) is a hypercore-11
+  // MANIFEST core: core.key is a manifest HASH, and the Ed25519 writer lives in
+  // core.manifest.signers[0] (core.key cryptographically commits to it). A bare
+  // Hypercore with no `compat` reproduces that shape. The producer anchors the
+  // digest to core.key but SIGNS with the writer key.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-bee-manifest-'))
+  const core = new Hypercore(dir) // no compat → manifest core (key !== signer pubkey)
+  await core.ready()
+  assert.ok(core.manifest && Array.isArray(core.manifest.signers) && core.manifest.signers.length === 1,
+    'expected a single-signer manifest core')
+  const anchorKey = core.key
+  const writerPub = core.keyPair.publicKey
+  const writerSecret = core.keyPair.secretKey
+  assert.ok(!b4a.equals(anchorKey, writerPub), 'manifest core: key must NOT equal signer pubkey')
+
+  // Producer: digest anchored to the bee KEY, signed by the WRITER key.
+  const meta = { version: 5, name: 'PearBrowser Network', publishedAt: 1000 }
+  const signedMeta = signMeta(anchorKey, writerSecret, meta)
+
+  const bee = new Hyperbee(core, { keyEncoding: 'utf-8', valueEncoding: 'json' })
+  await bee.ready()
+  await bee.put(META_KEY, signedMeta)
+  await bee.put(ENTRY_A.appKey, ENTRY_A)
+  await bee.put(ENTRY_B.appKey, ENTRY_B)
+
+  try {
+    const signerKey = resolveSignerKey(core, anchorKey)
+    assert.ok(b4a.equals(signerKey, writerPub), 'resolveSignerKey returns the manifest writer pubkey')
+
+    // Old behaviour (verify against core.key alone) MUST fail — proves the fix is needed.
+    assert.equal(verifyCatalogMeta(anchorKey, signedMeta), false,
+      'verifying a manifest-core signature against core.key alone must fail')
+    // New behaviour (verify against the manifest signer) succeeds.
+    assert.equal(verifyCatalogMeta(anchorKey, signedMeta, signerKey), true,
+      'verifying against the manifest signer succeeds')
+
+    const res = await verifyAndScanCatalogBee(bee, anchorKey, signerKey)
+    assert.equal(res.ok, true, 'manifest-core scan succeeds')
+    assert.equal(res.entries.length, 2, 'two entries, meta excluded')
+    assert.equal(res.meta.name, 'PearBrowser Network')
+  } finally {
+    try { await core.close() } catch (_) {}
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch (_) {}
   }
 })
 

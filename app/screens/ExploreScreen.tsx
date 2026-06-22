@@ -15,6 +15,7 @@ type SiteInfo = {
   author: string
   version: string
   driveKey: string
+  link?: string
   categories: string[]
 }
 
@@ -35,16 +36,29 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
   const [activeBeeKey, setActiveBeeKey] = useState<string | null>(null)
 
   // Normalize a catalog entry into the shape SiteCard renders.
-  const normalizeEntry = useCallback((a: any): SiteInfo => {
-    const driveKey = a.driveKey || a.appKey || a.key || ''
+  const normalizeEntry = useCallback((a: any): SiteInfo | null => {
+    if (!a || typeof a !== 'object') return null
+    const rawLink = typeof a.link === 'string' ? a.link.trim() : ''
+    const link = /^(?:hyper|pear|file):\/\/.+/i.test(rawLink)
+      ? rawLink.replace(/^([a-z][a-z0-9+.-]*):\/\//i, (_match: string, scheme: string) => scheme.toLowerCase() + '://')
+      : ''
+    const linkKey = link.match(/^hyper:\/\/([0-9a-f]{64})(?:[/?#].*)?$/i)?.[1]
+    const rawKey = String(a.driveKey || a.appKey || a.key || linkKey || '').trim()
+    const driveKey = /^[a-f0-9]{64}$/i.test(rawKey) ? rawKey.toLowerCase() : ''
+    if (!driveKey && !link) return null
     return {
       ...a,
       driveKey,
-      id: a.id || a.appKey || driveKey,
+      ...(link ? { link } : {}),
+      id: a.id || a.appKey || driveKey || link,
       name: a.name || a.title || 'Untitled',
       description: a.description || '',
     }
   }, [])
+
+  const normalizeEntries = useCallback((entries: any[]): SiteInfo[] => (
+    entries.map(normalizeEntry).filter((site): site is SiteInfo => !!site)
+  ), [normalizeEntry])
 
   const handleLoadDirectory = useCallback(async (overrideUrl?: string) => {
     const url = (overrideUrl ?? directoryUrl).trim()
@@ -70,8 +84,8 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
         if (rpc && /^[0-9a-f]{64}$/i.test(beeKey)) {
           try {
             const beeCatalog = await rpc.loadSignedCatalogBee(beeKey)
-            const beeEntries: any[] = beeCatalog.apps || beeCatalog.items || []
-            setSites(beeEntries.map(normalizeEntry))
+            const beeEntries: any[] = beeCatalog.apps || beeCatalog.items || beeCatalog.entries || []
+            setSites(normalizeEntries(beeEntries))
             setActiveBeeKey(beeKey.toLowerCase())
             setLastLoadSource(`${url} (signed P2P catalog)`)
             return
@@ -81,10 +95,11 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
           }
         }
 
-        // Live relay catalog returns `apps`; the paginated variant returns `items`.
+        // Live relay catalog returns `apps`; the paginated variant returns `items`;
+        // legacy registry exports may use `entries`.
         // Entries use `appKey` (immutable primary key) and/or `driveKey`; `icon` may be missing.
-        const entries: any[] = catalog.apps || catalog.items || []
-        setSites(entries.map(normalizeEntry))
+        const entries: any[] = catalog.apps || catalog.items || catalog.entries || []
+        setSites(normalizeEntries(entries))
         setLastLoadSource(url)
       } else if (rpc) {
         // hyperbee://KEY — canonical Pear-native catalog (Phase 1 ticket 1)
@@ -96,7 +111,8 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
         const catalog = isBee
           ? await rpc.loadCatalogBee(key)
           : await rpc.loadCatalog(key)
-        setSites(catalog.apps || catalog.items || [])
+        const entries: any[] = catalog.apps || catalog.items || catalog.entries || []
+        setSites(normalizeEntries(entries))
         setLastLoadSource(`${isBee ? 'hyperbee' : 'hyper'}://${key}`)
       } else {
         throw new Error('P2P engine not available. Use an https:// relay URL instead.')
@@ -107,7 +123,7 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [rpc, directoryUrl, normalizeEntry])
+  }, [rpc, directoryUrl, normalizeEntries])
 
   // LIVE UPDATES: when the worklet re-verifies a producer append for the
   // signed bee we're showing, refresh the list in place (no re-poll).
@@ -115,11 +131,11 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
     if (!rpc || !activeBeeKey) return
     const off = rpc.onCatalogUpdated(({ keyHex, catalog }) => {
       if (!keyHex || keyHex.toLowerCase() !== activeBeeKey) return
-      const entries: any[] = catalog?.apps || catalog?.items || []
-      setSites(entries.map(normalizeEntry))
+      const entries: any[] = catalog?.apps || catalog?.items || catalog?.entries || []
+      setSites(normalizeEntries(entries))
     })
     return off
-  }, [rpc, activeBeeKey, normalizeEntry])
+  }, [rpc, activeBeeKey, normalizeEntries])
 
   useEffect(() => {
     let mounted = true
@@ -138,6 +154,10 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
   }, [])
 
   const handleVisit = useCallback((site: SiteInfo) => {
+    if (site.link) {
+      onVisit(site.link)
+      return
+    }
     let key = (site.driveKey || (site as any).key || (site as any).appKey || '').toString()
     if (key.startsWith('hyper://')) key = key.replace('hyper://', '')
     if (/^[a-f0-9]{64}$/i.test(key)) {
