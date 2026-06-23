@@ -114,11 +114,13 @@ tracked fix adds `expo-linking@~55.0.15`, and Expo autolinking now resolves the
 now succeeds with signing disabled and DerivedData under `/private/tmp`, proving
 the CocoaPods autolink, BareKit xcframework copy, and generated Expo configure
 phases are no longer the immediate blocker. The generated Expo Release simulator
-path is still not release-cleared: `export:embed` emits a 7.5 MB JS bundle, then
-Hermes bytecode compilation stalls before producing `PearBrowser.app/main.jsbundle`
-(`hermesc -O` inside Xcode and a direct `hermesc -Og` repro both had to be
-interrupted). Treat the generated Expo shell as a compatibility host until that
-Hermes/bundle path is fixed or intentionally moved to JavaScriptCore.
+build also succeeds when `HERMES_CLI_PATH` is passed as an Xcode build setting
+pointing at `ios/Pods/hermes-engine/destroot/bin/hermesc`; `npm run
+ios:generated:release` wraps that requirement. The earlier stall was isolated to
+Xcode invoking the `node_modules/hermes-compiler` binary from the generated
+bundle phase; the Pods compiler bytecodes the same 7.5 MB JS bundle in under a
+second. Treat the generated Expo shell as a compatibility host, while the
+tracked SwiftUI shell remains the iOS release path.
 
 The tracked SwiftUI `ios-native` shell now builds, installs, launches on the
 iPhone 17 simulator, and reaches the green "Connected" worklet state. That run
@@ -145,10 +147,9 @@ certificate warnings.
 - Mobile has no standalone Pear GUI window launcher.
 - A static Hyperdrive with root `/index.html` is required for a guaranteed
   in-WebView app experience.
-- Native mobile distribution still needs generated Expo iOS Release/Hermes cleanup
-  if the compatibility shell remains a target, production Android upload/release
-  key validation, app-store-style distribution checks, and broader real-device
-  validation beyond the current simulator/emulator smoke passes.
+- Native mobile distribution still needs production Apple/Android signing,
+  store/distribution validation, and broader real-device validation beyond the
+  current simulator/emulator smoke passes.
 - Public Nostr, desktop federated search, and desktop petname/name registry are
   desktop-side capabilities today; mobile documentation should link to the
   desktop architecture when discussing those browser-wide systems.

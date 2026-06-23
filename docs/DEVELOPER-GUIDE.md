@@ -1097,15 +1097,20 @@ xcodebuild -project ios-native/PearBrowser.xcodeproj -scheme PearBrowser -config
 # Expo/React Native compatibility shell
 npx expo run:ios --device "iPhone 17 Pro"
 
+# Expo/React Native compatibility Release simulator build
+npm run ios:generated:release
+
 # Or open the Expo compatibility workspace in Xcode for debugging
 open ios/PearBrowser.xcworkspace
 # Select a simulator target, then Build & Run (Cmd+R)
 ```
 
 The generated Expo iOS shell is currently a compatibility host, not the iOS
-release path. Debug simulator builds pass with `ExpoLinking` autolinked; Release
-simulator bundling still needs Hermes bytecode cleanup before this shell should
-be promoted.
+release path. Debug simulator builds pass with `ExpoLinking` autolinked, and
+Release simulator builds pass when `HERMES_CLI_PATH` is supplied as an Xcode
+build setting pointing at `ios/Pods/hermes-engine/destroot/bin/hermesc`. Use
+`npm run ios:generated:release`; the raw parent-process environment variable is
+not enough because Xcode script phases did not preserve it in local testing.
 
 ### Running Tests
 
