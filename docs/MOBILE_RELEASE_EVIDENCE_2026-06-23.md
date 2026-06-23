@@ -11,7 +11,7 @@ commit does not change runtime source.
 - `npm audit --audit-level=high`: exited `0`.
 - `npm run release:preflight -- --soft`: `14 pass`, `0 warn`, `4 fail`.
 - `npm run release:preflight -- --json --soft`: same counts, machine-readable
-  report generated at `2026-06-23T15:07:32.366Z`.
+  report generated at `2026-06-23T15:51:08.065Z`.
 
 The high-severity audit gate is green. A full audit still reports 15 moderate
 Expo/React Native toolchain advisories through `js-yaml` and `uuid`; npm's
