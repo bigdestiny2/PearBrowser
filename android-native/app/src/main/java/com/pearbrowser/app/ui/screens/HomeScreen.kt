@@ -44,6 +44,7 @@ import com.pearbrowser.app.rpc.LocalPearRpc
 import com.pearbrowser.app.rpc.PearBookmark
 import com.pearbrowser.app.rpc.PearRpcStatus
 import com.pearbrowser.app.ui.theme.PearColors
+import kotlinx.coroutines.delay
 
 /**
  * HomeScreen — mirror of `app/screens/HomeScreen.tsx`.
@@ -71,14 +72,23 @@ fun HomeScreen(onNavigate: (String) -> Unit, status: PearRpcStatus?) {
 
         bookmarksLoading = true
         bookmarksError = null
-        try {
-            bookmarks = client.listBookmarks()
-        } catch (e: Throwable) {
-            bookmarks = emptyList()
-            bookmarksError = e.message ?: "Bookmarks unavailable"
-        } finally {
-            bookmarksLoading = false
+        var lastError: Throwable? = null
+        for (attempt in 0 until 5) {
+            try {
+                bookmarks = client.listBookmarks()
+                bookmarksError = null
+                bookmarksLoading = false
+                return@LaunchedEffect
+            } catch (e: Throwable) {
+                lastError = e
+                if (!e.isBootRace() || attempt == 4) break
+                delay(400L * (attempt + 1))
+            }
         }
+
+        bookmarks = emptyList()
+        bookmarksError = lastError?.message ?: "Bookmarks unavailable"
+        bookmarksLoading = false
     }
 
     fun go() {
@@ -208,6 +218,13 @@ fun HomeScreen(onNavigate: (String) -> Unit, status: PearRpcStatus?) {
             }
         }
     }
+}
+
+private fun Throwable.isBootRace(): Boolean {
+    val msg = message ?: return false
+    return msg.contains("still booting", ignoreCase = true) ||
+        msg.contains("not available", ignoreCase = true) ||
+        msg.contains("not connected yet", ignoreCase = true)
 }
 
 @Composable

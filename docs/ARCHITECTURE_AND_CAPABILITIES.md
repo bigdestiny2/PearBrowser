@@ -120,9 +120,14 @@ iPhone 17 simulator, and reaches the green "Connected" worklet state. That run
 also exposed and verified recovery from a stale root Corestore: if the root
 storage belongs to another Corestore, the backend now falls back to an
 identity-scoped Corestore subdirectory instead of failing boot. Android native
-Gradle task discovery and `:app:compileDebugKotlin` pass with Homebrew
-OpenJDK 17; `:app:assembleDebug` still needs follow-up because the Java/package
-phase hung in this environment before refreshing the APK.
+Gradle task discovery, Kotlin/Java compile, and `:app:assembleDebug` pass with
+a verified JDK 17 distribution whose `jmod` completes Android Gradle Plugin's
+JDK image transform. The 2026-06-23 Android smoke installed the fresh debug APK
+onto a headless `pp_avd` emulator, launched `com.pearbrowser.app/.MainActivity`,
+loaded `libbare-kit.so`, extracted `backend.android.bundle`, opened the local
+proxy, and reached the green "Connected" Home screen. That run also exposed and
+fixed a first-launch Binder boot race where Home could briefly show bookmarks as
+unavailable before the worklet finished booting.
 
 ## Current Limits
 
@@ -130,8 +135,9 @@ phase hung in this environment before refreshing the APK.
 - Mobile has no standalone Pear GUI window launcher.
 - A static Hyperdrive with root `/index.html` is required for a guaranteed
   in-WebView app experience.
-- Native mobile distribution still needs generated Expo iOS cleanup, Android
-  APK assembly plus device/emulator launch, and app-store-style signing checks.
+- Native mobile distribution still needs generated Expo iOS cleanup,
+  release APK/AAB signing and distribution checks, and broader real-device
+  validation beyond the current simulator/emulator smoke passes.
 - Public Nostr, desktop federated search, and desktop petname/name registry are
   desktop-side capabilities today; mobile documentation should link to the
   desktop architecture when discussing those browser-wide systems.

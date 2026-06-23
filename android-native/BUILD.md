@@ -19,18 +19,23 @@ reusing the `backend/` worklet from the RN project verbatim.
 | MoreScreen | ✅ connected-apps route + live status/settings summary |
 | BookmarksScreen, HistoryScreen, SettingsScreen, MySitesScreen, SiteEditorScreen, QRScannerScreen, TemplatePickerScreen | ⏳ stubs / pending port |
 | QR scanner (CameraX + ML Kit) | ⏳ dependencies added, screen TODO |
-| Gradle task discovery | ✅ passes with Homebrew OpenJDK 17 |
-| Kotlin compile | ✅ `:app:compileDebugKotlin` passes with Homebrew OpenJDK 17 |
-| APK build + sign | ⏳ `:app:assembleDebug` reached Java/package phase but hung before refreshing the APK in the 2026-06-23 smoke |
+| Gradle task discovery | ✅ passes |
+| Kotlin compile | ✅ `:app:compileDebugKotlin` passes |
+| Debug APK build | ✅ `:app:assembleDebug` passes with a verified JDK 17 (`jmod` support required) |
+| Emulator launch smoke | ✅ fresh install on headless `pp_avd` reaches green `Connected` without the first-launch bookmark error |
+| Release build + signing | ⏳ release APK/AAB, signing, and distribution checks remain |
 | TestFlight-equivalent distribution | ⏳ Firebase App Distribution config TODO |
 
 ## Prerequisites
 
 1. **Android Studio Ladybug (2024.2.1)** or newer with:
    - Android SDK 35 installed
-   - NDK 27.2.12479018 installed (Holepunch-required version)
+   - NDK 27.1.12297006 installed (matches `android.ndkVersion`)
    - `cmdline-tools/latest`
-2. **JDK 17** on your `JAVA_HOME`.
+2. **JDK 17** on your `JAVA_HOME`. Use a distribution whose `javac` and
+   `jmod` complete Android Gradle Plugin's JDK image transform. Eclipse
+   Temurin 17 is verified locally; Homebrew OpenJDK 17.0.19 hung in `jmod`
+   on this machine during `:app:assembleDebug`.
 3. **Node.js 20+** (for bundling the backend).
 4. **`bare-kit.aar` or `bare-kit.jar`** — download the latest release from
    <https://github.com/holepunchto/bare-kit/releases> and drop it in
@@ -103,7 +108,7 @@ npm run bundle-backend-native-android
 
 | Build type | Target | Current |
 |---|---|---|
-| Debug APK | < 60 MB | TBD (needs first build) |
+| Debug APK | Diagnostic only | 169 MB (unminified, arm64-v8a + armeabi-v7a, bare-kit/addons included) |
 | Release APK (arm64 only) | < 50 MB | TBD |
 | Release AAB (all ABIs) | < 70 MB | TBD |
 
@@ -149,20 +154,36 @@ Runtime smoke on a device/emulator:
 **Latest local smoke, 2026-06-23:**
 
 ```bash
-export JAVA_HOME=/opt/homebrew/Cellar/openjdk@17/17.0.19/libexec/openjdk.jdk/Contents/Home
-export PATH=/opt/homebrew/Cellar/openjdk@17/17.0.19/bin:$PATH
+export JAVA_HOME=/path/to/temurin-17/Contents/Home
+export PATH=$JAVA_HOME/bin:$PATH
 npm run bundle-backend-native-android
 android/gradlew -p android-native :app:tasks --all
 android/gradlew -p android-native --no-daemon \
+  -Dorg.gradle.workers.max=1 \
   -Dkotlin.compiler.execution.strategy=in-process \
   :app:compileDebugKotlin
+android/gradlew -p android-native --no-daemon \
+  -Dorg.gradle.workers.max=1 \
+  -Dkotlin.compiler.execution.strategy=in-process \
+  :app:assembleDebug
 ```
 
-Result: task discovery and Kotlin compile passed. The first compile attempt with
-the default Kotlin daemon went idle; the in-process compiler finished. A stronger
-`:app:assembleDebug` attempt reached `compileDebugJavaWithJavac`/packaging and
-then went idle before producing a fresh APK, so APK assembly and emulator/device
-runtime remain release gates.
+Result: task discovery, Kotlin compile, Java compile, and `:app:assembleDebug`
+passed with Eclipse Temurin 17. A fresh
+`android-native/app/build/outputs/apk/debug/app-debug.apk` was installed onto a
+headless `pp_avd` emulator and launched via `com.pearbrowser.app/.MainActivity`.
+The app extracted `backend.android.bundle`, loaded `libbare-kit.so`, started the
+worklet, recovered with the identity-scoped Corestore path when needed, opened
+the local proxy, and showed a green `Connected` Home screen. The Home screen now
+retries bookmark loading across the initial Binder boot race, so a clean install
+no longer shows "Bookmarks are unavailable right now" before the worklet is
+ready.
+
+Local evidence files from that run:
+- `/private/tmp/pearbrowser-android-native-smoke-fixed.png` — clean Home screen,
+  green `Connected`
+- `adb logcat` focused tags showed `Worklet started`, `Corestore ready`,
+  `UserData ready`, `HTTP proxy started`, and `Backend ready`
 
 **Bridge JS changes:**
 The Pear bridge script lives in **two** places:
