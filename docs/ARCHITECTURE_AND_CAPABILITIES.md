@@ -1,6 +1,6 @@
 # PearBrowser Mobile Architecture and Capabilities
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
 
 PearBrowser Mobile is the iOS and Android host for PearBrowser apps and
 `hyper://` sites. It pairs native mobile shells with a Bare Kit worklet so a
@@ -102,7 +102,9 @@ privileged bridge.
 The React Native shell remains the compatibility host. The SwiftUI and Jetpack
 Compose shells are tracked with source-contract tests that check protocol
 constants, bridge shape, catalogue safe-link behavior, and screen parity. The
-current audit snapshot has the mobile test suite passing at 124 tests.
+current 2026-06-23 release snapshot has the mobile test suite passing at 124
+tests, and `npm audit --audit-level=high` passing after the safe lockfile audit
+refresh.
 
 ## Current Limits
 
