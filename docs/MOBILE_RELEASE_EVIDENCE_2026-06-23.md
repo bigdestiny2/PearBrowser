@@ -1,7 +1,8 @@
 # PearBrowser Mobile Release Evidence - 2026-06-23
 
-This is the current mobile/native release proof for commit
-`de85d420c942d433905324c3e098acc34458a23a`.
+This is the current mobile/native release proof for the source/runtime baseline
+`de85d420c942d433905324c3e098acc34458a23a`. The follow-up docs-only evidence
+commit does not change runtime source.
 
 ## Automated Checks
 
