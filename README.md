@@ -327,6 +327,8 @@ PearBrowser/
 │   └── catalog-relay.js          # Run a catalog relay
 ├── docs/                         # Documentation
 │   ├── ARCHITECTURE_AND_CAPABILITIES.md # Current system map
+│   ├── CURRENT_STATUS_AUDIT_2026-06-23.md # Current release audit
+│   ├── MOBILE_RELEASE_EVIDENCE_2026-06-23.md # Current mobile gate evidence
 │   ├── USER-FLOWS.md             # User journey diagrams
 │   ├── USE-CASES.md              # Detailed use cases
 │   └── DEVELOPER-GUIDE.md        # Full developer onboarding
@@ -339,6 +341,9 @@ PearBrowser/
 - **[Use Cases](docs/USE-CASES.md)** — Real-world scenarios (POS, publishing, marketplace, education)
 - **[Developer Guide](docs/DEVELOPER-GUIDE.md)** — Build and publish your first P2P app
 - **[Architecture and Capabilities](docs/ARCHITECTURE_AND_CAPABILITIES.md)** — Current mobile runtime map, catalogue model, bridge capabilities, native parity, and limits
+- **[Current Status Audit](docs/CURRENT_STATUS_AUDIT_2026-06-23.md)** — Current mobile release state, validation evidence, and production blockers
+- **[Mobile Release Evidence](docs/MOBILE_RELEASE_EVIDENCE_2026-06-23.md)** — Latest `npm test`, audit, and release-preflight proof for the mobile tree
+- **[Security Boundary Alignment](docs/SECURITY-BOUNDARY-ALIGNMENT-2026-06-23.md)** — Current mobile security boundary map and remaining caveats
 - **[Desktop Parity Audit](docs/DESKTOP_PARITY_AUDIT_2026-05-19.md)** — Current feature gap analysis against pearbrowser-desktop
 - **[Swarm v1 API](docs/SWARM-V1.md)** — Direct page-scoped Hyperswarm bridge design
 - **[Headless htmx over streamx](examples/htmx-headless/)** — run htmx apps with no HTTP server; `XMLHttpRequest` rides a streamx stream
