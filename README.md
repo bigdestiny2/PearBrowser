@@ -15,6 +15,14 @@ cd ios-native && xcodegen generate && cd ..
 xcodebuild -project ios-native/PearBrowser.xcodeproj -scheme PearBrowser -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO build
 ```
 
+**Production mobile release preflight:** before cutting a community release, run the hard gate:
+
+```bash
+npm run release:preflight
+```
+
+For an audit-only report that does not fail the shell, use `npm run release:preflight -- --soft`; for CI/artifact capture, use `npm run release:preflight -- --json`. The preflight verifies version/package ID alignment, native worklet bundles, iOS BareKit/addon frameworks, Android BareKit AAR, production signing inputs, and store-distribution validation markers. As of the 2026-06-23 audit the structural checks pass locally, while production Android signing, Apple team signing, and TestFlight/App Store Connect plus Play/Firebase validation remain explicit release blockers.
+
 **Try the App Store flow:** the `examples/echo-peer/` fixture is a complete app — `index.html` plus a `manifest.json` (name "Echo Peer", `swarm.v1` permission) that exercises the `window.pear.swarm.v1` bridge end to end. To see it in the App Store, have a relay operator **seed `examples/echo-peer` into a relay catalog** (relay dashboard → Seeding Registry / wizard, or `POST /seed` with its drive key). Because it ships a manifest, it appears as **"Echo Peer"** in PearBrowser's App Store — not "Unknown App." The default relays the app talks to are `relay-us.p2phiverelay.xyz` and `relay-sg.p2phiverelay.xyz`.
 
 ## Why PearBrowser?

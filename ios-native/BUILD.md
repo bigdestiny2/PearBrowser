@@ -151,6 +151,19 @@ See `backend/pear-bridge.js` for the exact key structures.
 - [ ] QR scanner: AVCaptureSession + Vision VNDetectBarcodesRequest
 - [ ] TestFlight submission + App Store Connect config
 
+Run the root release preflight before any signed archive is treated as
+community-ready:
+
+```bash
+npm run release:preflight
+```
+
+The iOS release blockers clear only when `DEVELOPMENT_TEAM` is filled in
+`ios-native/project.yml` or `PEARBROWSER_IOS_DEVELOPMENT_TEAM` is set, and
+either `PEARBROWSER_TESTFLIGHT_VALIDATED=1` or
+`PEARBROWSER_APP_STORE_CONNECT_VALIDATED=1` records a successful upload or
+validation in Apple's distribution tooling.
+
 ## Latest smoke evidence
 
 2026-06-23 release audit:

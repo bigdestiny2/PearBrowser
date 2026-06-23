@@ -112,6 +112,17 @@ test keystore: `app-release.apk` passes `apksigner verify --print-certs`, and
 certificate warnings. Distribution requires a real upload/release keystore and
 Play Console or Firebase App Distribution validation.
 
+Before treating an Android artifact as releasable, run the root preflight:
+
+```bash
+npm run release:preflight
+```
+
+The Android-specific blockers clear only when the production signing variables
+point at a real keystore and either `PEARBROWSER_PLAY_CONSOLE_VALIDATED=1` or
+`PEARBROWSER_FIREBASE_APP_DISTRIBUTION_VALIDATED=1` records that the signed
+artifact was accepted by the chosen distribution path.
+
 ## Installing on a device
 
 ```bash
