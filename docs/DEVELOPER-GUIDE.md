@@ -1090,13 +1090,22 @@ cd ios && LANG=en_US.UTF-8 pod install && cd ..
 ### Running on Simulator
 
 ```bash
-# Build and launch on iOS simulator
+# Release-path SwiftUI shell
+cd ios-native && xcodegen generate && cd ..
+xcodebuild -project ios-native/PearBrowser.xcodeproj -scheme PearBrowser -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO build
+
+# Expo/React Native compatibility shell
 npx expo run:ios --device "iPhone 17 Pro"
 
-# Or open in Xcode for debugging
+# Or open the Expo compatibility workspace in Xcode for debugging
 open ios/PearBrowser.xcworkspace
 # Select a simulator target, then Build & Run (Cmd+R)
 ```
+
+The generated Expo iOS shell is currently a compatibility host, not the iOS
+release path. Debug simulator builds pass with `ExpoLinking` autolinked; Release
+simulator bundling still needs Hermes bytecode cleanup before this shell should
+be promoted.
 
 ### Running Tests
 

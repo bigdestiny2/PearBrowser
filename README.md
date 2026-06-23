@@ -2,7 +2,7 @@
 
 A peer-to-peer mobile app platform for iOS and Android. Browse the decentralized web, discover P2P apps from decentralized catalogs, build personal websites, and run web apps that can use Pear identity, Autobase sync, Hyperdrive content, and direct Hyperswarm channels from a phone.
 
-**Current architecture:** start with [docs/ARCHITECTURE_AND_CAPABILITIES.md](docs/ARCHITECTURE_AND_CAPABILITIES.md). The current validation snapshot is `npm test` passing with 124 tests plus `npm audit --audit-level=high` passing after the safe lockfile refresh, including native source-contract and catalog safety coverage. Native release smoke is mostly cleared: the tracked SwiftUI iOS shell builds, installs, launches, and reaches a green "Connected" worklet state after stale Corestore recovery; Android native `:app:assembleDebug` builds with a verified JDK 17, installs on a headless emulator, launches, extracts the Bare worklet bundle, and reaches a green "Connected" Home screen. Remaining native gates are generated Expo iOS CocoaPods/Xcode script cleanup, release APK/AAB signing/distribution checks, and broader device-matrix validation.
+**Current architecture:** start with [docs/ARCHITECTURE_AND_CAPABILITIES.md](docs/ARCHITECTURE_AND_CAPABILITIES.md). The current validation snapshot is `npm test` passing with 124 tests plus `npm audit --audit-level=high` passing after the safe lockfile refresh, including native source-contract and catalog safety coverage. Native release smoke is mostly cleared: the tracked SwiftUI iOS shell builds, installs, launches, and reaches a green "Connected" worklet state after stale Corestore recovery; the generated Expo iOS compatibility shell now clears a Debug simulator Xcode build with `ExpoLinking` autolinked, but its Release simulator bundle path still stalls in Hermes bytecode compilation and is not the iOS release path; Android native `:app:assembleDebug` builds with a verified JDK 17, installs on a headless emulator, launches, extracts the Bare worklet bundle, and reaches a green "Connected" Home screen. Remaining native gates are generated Expo iOS Release/Hermes cleanup if that compatibility shell is promoted, release APK/AAB signing/distribution checks, and broader device-matrix validation.
 
 **Try it locally:** Build the iOS shell and run the bundled example app from source — see [Setup](#setup) below. In short:
 
@@ -12,7 +12,7 @@ cd PearBrowser
 npm install --legacy-peer-deps
 npm run bundle-all && npm run bundle-all-native
 cd ios-native && xcodegen generate && cd ..
-npx expo run:ios
+xcodebuild -project ios-native/PearBrowser.xcodeproj -scheme PearBrowser -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO build
 ```
 
 **Try the App Store flow:** the `examples/echo-peer/` fixture is a complete app — `index.html` plus a `manifest.json` (name "Echo Peer", `swarm.v1` permission) that exercises the `window.pear.swarm.v1` bridge end to end. To see it in the App Store, have a relay operator **seed `examples/echo-peer` into a relay catalog** (relay dashboard → Seeding Registry / wizard, or `POST /seed` with its drive key). Because it ships a manifest, it appears as **"Echo Peer"** in PearBrowser's App Store — not "Unknown App." The default relays the app talks to are `relay-us.p2phiverelay.xyz` and `relay-sg.p2phiverelay.xyz`.

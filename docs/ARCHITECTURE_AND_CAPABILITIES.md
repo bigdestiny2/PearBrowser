@@ -110,10 +110,15 @@ Release smoke note, 2026-06-23: native simulator/device smoke is partly cleared.
 The generated Expo iOS project launched far enough to expose
 `[runtime not ready]: Error: Cannot find native module 'ExpoLinking'`; the
 tracked fix adds `expo-linking@~55.0.15`, and Expo autolinking now resolves the
-`ExpoLinking` pod/module. A follow-up generated Expo iOS build is still blocked
-by local generated native tooling: BareKit's CocoaPods prepare hook hung while
-relinking add-on frameworks, and Xcode later hung in generated shell-script
-phases even when the phase contained only `true`.
+`ExpoLinking` pod/module. A follow-up generated Expo iOS Debug simulator build
+now succeeds with signing disabled and DerivedData under `/private/tmp`, proving
+the CocoaPods autolink, BareKit xcframework copy, and generated Expo configure
+phases are no longer the immediate blocker. The generated Expo Release simulator
+path is still not release-cleared: `export:embed` emits a 7.5 MB JS bundle, then
+Hermes bytecode compilation stalls before producing `PearBrowser.app/main.jsbundle`
+(`hermesc -O` inside Xcode and a direct `hermesc -Og` repro both had to be
+interrupted). Treat the generated Expo shell as a compatibility host until that
+Hermes/bundle path is fixed or intentionally moved to JavaScriptCore.
 
 The tracked SwiftUI `ios-native` shell now builds, installs, launches on the
 iPhone 17 simulator, and reaches the green "Connected" worklet state. That run
@@ -135,7 +140,8 @@ unavailable before the worklet finished booting.
 - Mobile has no standalone Pear GUI window launcher.
 - A static Hyperdrive with root `/index.html` is required for a guaranteed
   in-WebView app experience.
-- Native mobile distribution still needs generated Expo iOS cleanup,
+- Native mobile distribution still needs generated Expo iOS Release/Hermes cleanup
+  if the compatibility shell remains a target,
   release APK/AAB signing and distribution checks, and broader real-device
   validation beyond the current simulator/emulator smoke passes.
 - Public Nostr, desktop federated search, and desktop petname/name registry are
