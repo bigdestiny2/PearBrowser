@@ -104,7 +104,11 @@ Compose shells are tracked with source-contract tests that check protocol
 constants, bridge shape, catalogue safe-link behavior, and screen parity. The
 current 2026-06-23 release snapshot has the mobile test suite passing at 124
 tests, and `npm audit --audit-level=high` passing after the safe lockfile audit
-refresh.
+refresh. A full `npm audit` still reports 15 moderate inherited Expo/React
+Native toolchain advisories (`js-yaml` through React Native's Jest path and
+`uuid` through Expo's `xcode` path). npm's suggested fixes require breaking
+framework changes, so the high/critical gate is clear while the moderate
+toolchain advisories remain tracked follow-up.
 
 Release smoke note, 2026-06-23: native simulator/device smoke is partly cleared.
 The generated Expo iOS project launched far enough to expose
