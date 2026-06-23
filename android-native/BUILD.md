@@ -23,7 +23,8 @@ reusing the `backend/` worklet from the RN project verbatim.
 | Kotlin compile | ✅ `:app:compileDebugKotlin` passes |
 | Debug APK build | ✅ `:app:assembleDebug` passes with a verified JDK 17 (`jmod` support required) |
 | Emulator launch smoke | ✅ fresh install on headless `pp_avd` reaches green `Connected` without the first-launch bookmark error |
-| Release build + signing | ⏳ release APK/AAB, signing, and distribution checks remain |
+| Release APK/AAB build | ✅ release APK/AAB builds pass with R8/resource shrink |
+| Release signing | ✅ env-driven signing config verified with a disposable test key; production keystore/distribution checks remain |
 | TestFlight-equivalent distribution | ⏳ Firebase App Distribution config TODO |
 
 ## Prerequisites
@@ -50,7 +51,7 @@ The Kotlin shell reuses `backend/` unchanged. Produce the canonical
 `.bundle` output at the repo root:
 
 ```bash
-cd /Users/localllm/Desktop/PearBrowser
+cd /Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser
 npm install                                    # if not already
 npm run bundle-backend-native-android
 # Produces backend/dist/backend.android.bundle
@@ -66,11 +67,11 @@ If this checkout does not include `android-native/gradlew`, substitute the
 sibling wrapper with `-p`:
 
 ```bash
-/Users/localllm/Desktop/PearBrowser/android/gradlew -p /Users/localllm/Desktop/PearBrowser/android-native <task>
+/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/android/gradlew -p /Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/android-native <task>
 ```
 
 ```bash
-cd /Users/localllm/Desktop/PearBrowser/android-native
+cd /Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/android-native
 
 # First build (downloads gradle wrapper distribution)
 ./gradlew --version
@@ -78,11 +79,38 @@ cd /Users/localllm/Desktop/PearBrowser/android-native
 # Debug APK (arm64 only, ~45MB target)
 ./gradlew :app:assembleDebug
 
-# Release APK (ProGuard + R8, ~30MB target)
+# Release APK (ProGuard + R8; unsigned unless signing env vars are set)
 ./gradlew :app:assembleRelease
+
+# Release AAB (Play/App Bundle format; unsigned unless signing env vars are set)
+./gradlew :app:bundleRelease
 ```
 
-Output: `android-native/app/build/outputs/apk/{debug,release}/app-*.apk`.
+Outputs:
+
+- APK: `android-native/app/build/outputs/apk/{debug,release}/app-*.apk`
+- AAB: `android-native/app/build/outputs/bundle/release/app-release.aab`
+
+## Release signing
+
+Release signing is intentionally driven by environment variables so secrets do
+not enter git:
+
+```bash
+export PEARBROWSER_ANDROID_KEYSTORE=/absolute/path/to/release.keystore
+export PEARBROWSER_ANDROID_STORE_PASSWORD=...
+export PEARBROWSER_ANDROID_KEY_ALIAS=pearbrowser
+export PEARBROWSER_ANDROID_KEY_PASSWORD=... # optional; defaults to store password
+
+./gradlew :app:assembleRelease :app:bundleRelease
+```
+
+Without these variables Gradle still produces unsigned release artifacts for
+R8/resource-shrink validation. The pipeline has been verified with a disposable
+test keystore: `app-release.apk` passes `apksigner verify --print-certs`, and
+`app-release.aab` passes `jarsigner -verify` with the expected self-signed test
+certificate warnings. Distribution requires a real upload/release keystore and
+Play Console or Firebase App Distribution validation.
 
 ## Installing on a device
 
@@ -109,8 +137,8 @@ npm run bundle-backend-native-android
 | Build type | Target | Current |
 |---|---|---|
 | Debug APK | Diagnostic only | 169 MB (unminified, arm64-v8a + armeabi-v7a, bare-kit/addons included) |
-| Release APK (arm64 only) | < 50 MB | TBD |
-| Release AAB (all ABIs) | < 70 MB | TBD |
+| Release APK (signed test artifact, 2 ABIs) | < 150 MB diagnostic ceiling | 142 MB |
+| Release AAB (signed test artifact, 2 ABIs) | < 70 MB | 49 MB |
 
 Compared to the RN Android build (**~372 MB**), we expect a **~85% reduction**.
 Drivers:

@@ -132,7 +132,12 @@ onto a headless `pp_avd` emulator, launched `com.pearbrowser.app/.MainActivity`,
 loaded `libbare-kit.so`, extracted `backend.android.bundle`, opened the local
 proxy, and reached the green "Connected" Home screen. That run also exposed and
 fixed a first-launch Binder boot race where Home could briefly show bookmarks as
-unavailable before the worklet finished booting.
+unavailable before the worklet finished booting. Android native release builds
+now also clear `:app:assembleRelease` and `:app:bundleRelease` with R8/resource
+shrink enabled. Release signing is env-driven and verified with a disposable
+test keystore: the signed APK passes `apksigner verify --print-certs`, and the
+signed AAB passes `jarsigner -verify` with the expected self-signed test
+certificate warnings.
 
 ## Current Limits
 
@@ -141,8 +146,8 @@ unavailable before the worklet finished booting.
 - A static Hyperdrive with root `/index.html` is required for a guaranteed
   in-WebView app experience.
 - Native mobile distribution still needs generated Expo iOS Release/Hermes cleanup
-  if the compatibility shell remains a target,
-  release APK/AAB signing and distribution checks, and broader real-device
+  if the compatibility shell remains a target, production Android upload/release
+  key validation, app-store-style distribution checks, and broader real-device
   validation beyond the current simulator/emulator smoke passes.
 - Public Nostr, desktop federated search, and desktop petname/name registry are
   desktop-side capabilities today; mobile documentation should link to the

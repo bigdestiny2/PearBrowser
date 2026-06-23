@@ -5,6 +5,16 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+val releaseKeystorePath = providers.environmentVariable("PEARBROWSER_ANDROID_KEYSTORE").orNull
+val releaseStorePassword = providers.environmentVariable("PEARBROWSER_ANDROID_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("PEARBROWSER_ANDROID_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("PEARBROWSER_ANDROID_KEY_PASSWORD").orNull
+    ?: releaseStorePassword
+val hasReleaseSigning = !releaseKeystorePath.isNullOrBlank() &&
+    !releaseStorePassword.isNullOrBlank() &&
+    !releaseKeyAlias.isNullOrBlank() &&
+    !releaseKeyPassword.isNullOrBlank()
+
 android {
     namespace = "com.pearbrowser.app"
     compileSdk = 35
@@ -32,6 +42,21 @@ android {
         manifestPlaceholders["usesCleartextTraffic"] = "true"
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
@@ -43,6 +68,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
