@@ -15,6 +15,7 @@ const b4a = require('b4a')
 const crypto = require('hypercore-crypto')
 const z32 = require('z32')
 const fs = require('bare-fs')
+const path = require('bare-path')
 const { WorkletRPC } = require('./rpc.js')
 const { HyperProxy } = require('./hyper-proxy.js')
 const { RelayClient } = require('./relay-client.js')
@@ -141,6 +142,7 @@ const SWARM_CONSENT_TIMEOUT_MS = 2 * 60 * 1000
 let peerCount = 0
 let browseDrives = new Map() // keyHex → Hyperdrive (for ad-hoc browsing)
 let storageTimer = null
+let corestorePath = storagePath
 
 // --- RPC ---
 
@@ -887,11 +889,11 @@ async function boot () {
     // on some Android/BareKit devices and can reject valid app-private data.
     corestoreOptions.allowBackup = true
   }
-  store = new Corestore(storagePath, corestoreOptions)
-  console.log('Corestore created, waiting for ready...')
+  const openedCorestore = await openCorestore(corestoreOptions)
+  store = openedCorestore.store
+  corestorePath = openedCorestore.path
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'corestore-ready', message: 'Storage ready' })
-  await store.ready()
-  console.log('Corestore ready')
+  console.log('Corestore ready at:', corestorePath)
 
   console.log('Creating Hyperswarm...')
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'hyperswarm-start', message: 'Starting P2P network...' })
@@ -1042,6 +1044,44 @@ async function shutdown () {
   if (store) { try { await store.close() } catch {} store = null }
 }
 
+async function openCorestore (corestoreOptions) {
+  try {
+    return await readyCorestore(storagePath, corestoreOptions)
+  } catch (err) {
+    if (!isCorestoreIdentityConflict(err)) throw err
+
+    const fallbackPath = path.join(
+      storagePath,
+      'corestore-' + identity.getPublicKeyHex().slice(0, 16)
+    )
+    console.warn('[corestore] Root storage belongs to another Corestore; using identity-scoped store:', fallbackPath)
+    rpc.event(C.EVT_BOOT_PROGRESS, {
+      stage: 'corestore-recover',
+      message: 'Recovering storage layout...'
+    })
+    return await readyCorestore(fallbackPath, corestoreOptions)
+  }
+}
+
+async function readyCorestore (storePath, corestoreOptions) {
+  let candidate = null
+  try {
+    candidate = new Corestore(storePath, corestoreOptions)
+    console.log('Corestore created at:', storePath)
+    await candidate.ready()
+    return { store: candidate, path: storePath }
+  } catch (err) {
+    if (candidate) {
+      try { await candidate.close() } catch {}
+    }
+    throw err
+  }
+}
+
+function isCorestoreIdentityConflict (err) {
+  return !!(err && /another corestore is stored here/i.test(err.message || ''))
+}
+
 // --- Storage Management ---
 
 async function checkStorageQuota () {
@@ -1060,7 +1100,6 @@ async function checkStorageQuota () {
 
 async function getStorageSize (dir) {
   const fs = require('bare-fs')
-  const path = require('bare-path')
 
   let total = 0
 

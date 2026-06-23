@@ -14,7 +14,7 @@ Pure Swift + SwiftUI + `BareKit` shell, reusing `backend/` verbatim.
 | SwiftUI theme | ✅ matches RN theme exactly |
 | HomeScreen / ExploreScreen / BrowseScreen | ✅ |
 | BareKit.framework + 17 native addons linked | ✅ sourced from `react-native-bare-kit/ios/addons/` |
-| **Worklet boots end-to-end on simulator** | ✅ **green "Connected" dot confirmed on iPhone 17 Pro sim** |
+| **Worklet boots end-to-end on simulator** | ✅ **green "Connected" dot confirmed on iPhone 17 sim, 2026-06-23** |
 | Remaining screen ports (More, Bookmarks, Settings, MySites, Editor, QR, TemplatePicker, BackupPhrase, Restore) | ⏳ |
 
 ## Prerequisites
@@ -145,12 +145,36 @@ See `backend/pear-bridge.js` for the exact key structures.
 
 ## Known TODOs before v1.0 iOS ship
 
-- [ ] **iOS addon linking** (see above — main blocker)
 - [ ] LocalPearRPC EnvironmentValue for screens
 - [ ] Finish screen ports (Bookmarks, History, Settings, MySites,
       SiteEditor, QRScanner, TemplatePicker, BackupPhrase, RestoreIdentity)
 - [ ] QR scanner: AVCaptureSession + Vision VNDetectBarcodesRequest
 - [ ] TestFlight submission + App Store Connect config
+
+## Latest smoke evidence
+
+2026-06-23 release audit:
+
+```bash
+npm run bundle-backend-native-ios
+xcodebuild -project ios-native/PearBrowser.xcodeproj \
+  -scheme PearBrowser \
+  -configuration Debug \
+  -destination 'id=13BEE7B5-1283-4DE4-BE38-8B70356E4A5B' \
+  -derivedDataPath ios-native/build/DerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  COMPILER_INDEX_STORE_ENABLE=NO \
+  build
+xcrun simctl install 13BEE7B5-1283-4DE4-BE38-8B70356E4A5B \
+  ios-native/build/DerivedData/Build/Products/Debug-iphonesimulator/PearBrowser.app
+xcrun simctl launch 13BEE7B5-1283-4DE4-BE38-8B70356E4A5B com.pearbrowser.app
+```
+
+Result: build/install/launch succeeded, screenshot showed the Home screen with a
+green **Connected** worklet state. The same run verified the backend's stale
+Corestore recovery path: when the root app-support directory contained another
+Corestore, boot recovered into an identity-scoped `corestore-*` subdirectory
+without deleting the old files.
 
 ## References
 

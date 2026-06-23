@@ -19,7 +19,9 @@ reusing the `backend/` worklet from the RN project verbatim.
 | MoreScreen | ✅ connected-apps route + live status/settings summary |
 | BookmarksScreen, HistoryScreen, SettingsScreen, MySitesScreen, SiteEditorScreen, QRScannerScreen, TemplatePickerScreen | ⏳ stubs / pending port |
 | QR scanner (CameraX + ML Kit) | ⏳ dependencies added, screen TODO |
-| APK build + sign | ⏳ needs `bare-kit` artifact + bundle |
+| Gradle task discovery | ✅ passes with Homebrew OpenJDK 17 |
+| Kotlin compile | ✅ `:app:compileDebugKotlin` passes with Homebrew OpenJDK 17 |
+| APK build + sign | ⏳ `:app:assembleDebug` reached Java/package phase but hung before refreshing the APK in the 2026-06-23 smoke |
 | TestFlight-equivalent distribution | ⏳ Firebase App Distribution config TODO |
 
 ## Prerequisites
@@ -143,6 +145,24 @@ Runtime smoke on a device/emulator:
 2. Confirm the top-right header changes from `Starting...` to `Engine ready`, `Connected`, or a peer count.
 3. Open **More** and confirm `Worklet Service` is `Bound`, then check live DHT/proxy/storage/settings rows.
 4. Add a bookmark through the worklet-backed user data path and confirm it appears on Home under **Quick Access**.
+
+**Latest local smoke, 2026-06-23:**
+
+```bash
+export JAVA_HOME=/opt/homebrew/Cellar/openjdk@17/17.0.19/libexec/openjdk.jdk/Contents/Home
+export PATH=/opt/homebrew/Cellar/openjdk@17/17.0.19/bin:$PATH
+npm run bundle-backend-native-android
+android/gradlew -p android-native :app:tasks --all
+android/gradlew -p android-native --no-daemon \
+  -Dkotlin.compiler.execution.strategy=in-process \
+  :app:compileDebugKotlin
+```
+
+Result: task discovery and Kotlin compile passed. The first compile attempt with
+the default Kotlin daemon went idle; the in-process compiler finished. A stronger
+`:app:assembleDebug` attempt reached `compileDebugJavaWithJavac`/packaging and
+then went idle before producing a fresh APK, so APK assembly and emulator/device
+runtime remain release gates.
 
 **Bridge JS changes:**
 The Pear bridge script lives in **two** places:
