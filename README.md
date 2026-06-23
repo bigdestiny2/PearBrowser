@@ -2,7 +2,7 @@
 
 A peer-to-peer mobile app platform for iOS and Android. Browse the decentralized web, discover P2P apps from decentralized catalogs, build personal websites, and run web apps that can use Pear identity, Autobase sync, Hyperdrive content, and direct Hyperswarm channels from a phone.
 
-**Current architecture:** start with [docs/ARCHITECTURE_AND_CAPABILITIES.md](docs/ARCHITECTURE_AND_CAPABILITIES.md). The current validation snapshot is `npm test` passing with 124 tests plus `npm audit --audit-level=high` passing after the safe lockfile refresh, including native source-contract and catalog safety coverage. Native simulator/device smoke is still a release gate: iOS reached final framework embedding before a generated CocoaPods script was killed with signal 9, and Android Gradle inspection needs a local Java Runtime/JDK.
+**Current architecture:** start with [docs/ARCHITECTURE_AND_CAPABILITIES.md](docs/ARCHITECTURE_AND_CAPABILITIES.md). The current validation snapshot is `npm test` passing with 124 tests plus `npm audit --audit-level=high` passing after the safe lockfile refresh, including native source-contract and catalog safety coverage. Native simulator/device smoke is still a release gate: iOS launch exposed a missing `ExpoLinking` native module and the tracked dependency is now present, but the local generated CocoaPods/BareKit/Xcode script phases still need a clean rerun; Android Gradle inspection needs a local Java Runtime/JDK.
 
 **Try it locally:** Build the iOS shell and run the bundled example app from source — see [Setup](#setup) below. In short:
 

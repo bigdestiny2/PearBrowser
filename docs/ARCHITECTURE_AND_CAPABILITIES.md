@@ -107,12 +107,14 @@ tests, and `npm audit --audit-level=high` passing after the safe lockfile audit
 refresh.
 
 Release smoke note, 2026-06-23: native simulator/device smoke is not cleared
-yet. In the local generated `ios/` tree, CocoaPods metadata had drifted to stale
-nested Expo package paths while the current Expo autolinker resolves hoisted
-packages. Correcting the generated metadata moved the simulator build through
-the missing Expo privacy/source/header failures, but the app target then failed
-when the generated CocoaPods framework embed script was killed with signal 9.
-Android Gradle inspection also requires a local Java Runtime/JDK.
+yet. An installed iOS simulator build launched far enough to expose
+`[runtime not ready]: Error: Cannot find native module 'ExpoLinking'`; the
+tracked fix adds `expo-linking@~55.0.15`, and Expo autolinking now resolves the
+`ExpoLinking` pod/module. A follow-up build was still blocked by local generated
+native tooling: BareKit's CocoaPods prepare hook hung while relinking add-on
+frameworks, and Xcode later hung in generated shell-script phases even when the
+phase contained only `true`. Android Gradle inspection also requires a local
+Java Runtime/JDK.
 
 ## Current Limits
 
@@ -120,8 +122,9 @@ Android Gradle inspection also requires a local Java Runtime/JDK.
 - Mobile has no standalone Pear GUI window launcher.
 - A static Hyperdrive with root `/index.html` is required for a guaranteed
   in-WebView app experience.
-- Native mobile distribution still needs a clean iOS simulator build/launch and
-  Android Gradle smoke with a local Java Runtime/JDK.
+- Native mobile distribution still needs a clean iOS simulator build/launch
+  after regenerating CocoaPods/BareKit state and Android Gradle smoke with a
+  local Java Runtime/JDK.
 - Public Nostr, desktop federated search, and desktop petname/name registry are
   desktop-side capabilities today; mobile documentation should link to the
   desktop architecture when discussing those browser-wide systems.
