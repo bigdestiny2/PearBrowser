@@ -13,7 +13,6 @@ const Corestore = require('corestore')
 const Hyperdrive = require('hyperdrive')
 const b4a = require('b4a')
 const crypto = require('hypercore-crypto')
-const z32 = require('z32')
 const fs = require('bare-fs')
 const path = require('bare-path')
 const { WorkletRPC } = require('./rpc.js')
@@ -31,6 +30,7 @@ const { Contacts } = require('./contacts.js')
 const { TrustedOrigins } = require('./trusted-origins.js')
 const { SwarmBridge } = require('./swarm-bridge.js')
 const { SwarmGrants } = require('./swarm-grants.js')
+const { buildNavigateResponse } = require('./navigation.js')
 const C = require('./constants.js')
 
 const { IPC } = BareKit
@@ -103,15 +103,6 @@ function isAndroidStorageCompatRuntime () {
   return isNativeAppWorklet || platform === 'android'
 }
 
-function normalizeDriveKey (raw) {
-  if (!raw) return raw
-  if (/^[0-9a-f]{64}$/i.test(raw)) return raw.toLowerCase()
-  if (/^[13-9a-km-uw-z]{52}$/i.test(raw)) {
-    try { return b4a.toString(z32.decode(raw.toLowerCase()), 'hex') } catch {}
-  }
-  return raw
-}
-
 // --- Storage Limits ---
 const STORAGE_LIMIT = 1024 * 1024 * 1024 // 1GB max
 const STORAGE_CHECK_INTERVAL = 5 * 60 * 1000 // Check every 5 minutes
@@ -150,27 +141,21 @@ const rpc = new WorkletRPC(IPC)
 
 // Browser commands
 rpc.handle(C.CMD_NAVIGATE, async (data) => {
-  const { url } = data
-  const parsed = new URL(url)
-  const key = normalizeDriveKey(parsed.hostname)
-  const path = parsed.pathname || '/'
-  const apiToken = /^[0-9a-f]{64}$/i.test(key) && proxy?.issueApiToken
-    ? proxy.issueApiToken(key)
-    : null
+  if (!proxy) throw new Error('Proxy not running')
+  const result = buildNavigateResponse({
+    url: data && data.url,
+    proxyPort: proxy.port,
+    issueApiToken: proxy.issueApiToken && proxy.issueApiToken.bind(proxy),
+  })
 
   // Start loading the drive in the background — don't wait for sync.
   // The proxy will handle waiting for content when WebView requests it.
   // This makes NAVIGATE instant while the drive syncs behind the scenes.
-  ensureBrowseDrive(key).catch((err) => {
+  ensureBrowseDrive(result.key).catch((err) => {
     console.error('Failed to load browse drive:', err.message)
   })
 
-  return {
-    localUrl: `http://127.0.0.1:${proxy.port}/hyper/${key}${path}${parsed.search || ''}`,
-    key,
-    path,
-    apiToken
-  }
+  return result
 })
 
 rpc.handle(C.CMD_GET_STATUS, async () => {
@@ -218,8 +203,9 @@ rpc.handle(C.CMD_LOAD_CATALOG, async (data) => {
 //   - Legacy `app!`-prefixed bee (no flag): the original unsigned format.
 rpc.handle(C.CMD_LOAD_CATALOG_BEE, async (data) => {
   if (data && data.signed) {
-    return await catalogManager.loadSignedCatalogBee(data.keyHex, (updated) => {
-      rpc.event(C.EVT_CATALOG_UPDATED, { keyHex: data.keyHex, catalog: updated })
+    const keyHex = String(data.keyHex || '').trim().toLowerCase()
+    return await catalogManager.loadSignedCatalogBee(keyHex, (updated) => {
+      rpc.event(C.EVT_CATALOG_UPDATED, { keyHex, catalog: updated })
     })
   }
   return await catalogManager.loadCatalogBee(data.keyHex)

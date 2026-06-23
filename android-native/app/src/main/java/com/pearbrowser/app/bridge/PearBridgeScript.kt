@@ -1,5 +1,8 @@
 package com.pearbrowser.app.bridge
 
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
 /**
  * The Pear bridge script injected into WebViews that load hyper:// content.
  *
@@ -240,9 +243,8 @@ object PearBridgeScript {
      * through JSON encoding so embedded quotes are safe.
      */
     fun build(port: Int, apiToken: String): String {
-        require(port in 0..65535) { "port out of range: $port" }
-        // JSON-encode the token so embedded quotes are safe inside the script.
-        val tokenLiteral = "\"" + apiToken.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        require(port in 1..65535) { "port out of range: $port" }
+        val tokenLiteral = Json.encodeToString(apiToken)
         return TEMPLATE
             .replace("__PEAR_BRIDGE_PORT__", port.toString())
             .replace("__PEAR_BRIDGE_TOKEN__", tokenLiteral)

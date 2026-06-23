@@ -223,6 +223,9 @@ class PearRpcClient(context: Context) : AutoCloseable {
             bindTimeoutMs = 60_000,
         ).jsonObject
 
+    suspend fun loadSignedCatalogBee(keyHex: String): JsonObject =
+        loadCatalogBee(keyHex, signed = true)
+
     suspend fun getSettings(): PearSettings {
         val root = request(Cmd.USERDATA_GET_SETTINGS).jsonObject
         return PearSettings.fromJson(root["settings"]?.jsonObjectOrNull() ?: JsonObject(emptyMap()))

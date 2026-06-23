@@ -398,6 +398,10 @@ class CatalogManager {
    *   `meta!name` → string
    */
   async loadCatalogBee (keyHex) {
+    keyHex = String(keyHex || '').trim().toLowerCase()
+    if (!/^[0-9a-f]{64}$/.test(keyHex)) {
+      throw new Error('Invalid catalog bee key')
+    }
     const cacheKey = `bee:${keyHex}`
     if (this.catalogs.has(cacheKey)) {
       return this.catalogs.get(cacheKey).data
@@ -465,7 +469,8 @@ class CatalogManager {
    * @param {function} [onUpdate]      called with fresh `data` when the bee appends
    */
   async loadSignedCatalogBee (keyHex, onUpdate) {
-    if (!/^[0-9a-f]{64}$/i.test(keyHex)) {
+    keyHex = String(keyHex || '').trim().toLowerCase()
+    if (!/^[0-9a-f]{64}$/.test(keyHex)) {
       throw new Error('Invalid catalog bee key')
     }
     const cacheKey = `signed-bee:${keyHex}`

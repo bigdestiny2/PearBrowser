@@ -30,9 +30,14 @@ This plan lays out a phased migration that (a) keeps the current app shippable a
    - Everything calling `storage.ts` keeps working
 
 2. **Make `RelayClient` URL configurable via RPC + Settings UI**
-   - Backend: new `CMD_SET_RELAY` RPC handler (`backend/index.js`, `backend/constants.js`, `backend/relay-client.js`)
-   - App: Settings screen adds a "Relays" section (primary + fallbacks)
-   - Remove the TODO at `backend/index.js:368`
+   - Backend: `CMD_GET_RELAYS`, `CMD_SET_RELAYS`, and
+     `CMD_SET_RELAY_ENABLED` handlers are now present in `backend/index.js`
+     and persist relay config into `pearbrowser-state.json`.
+   - App/native shells can read/write primary + fallback relay settings through
+     the RPC mirrors.
+   - The old hardcoded-relay marker at `backend/index.js:368` is no longer
+     current; that line now validates the relay URL array for the config
+     handler.
 
 3. **Extract `window.pear` bridge spec into typed module**
    - Move `app/lib/bridge-inject.ts` injected-script template into `app/lib/pear-bridge-spec.ts` as a frozen constant with TS types

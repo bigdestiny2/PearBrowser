@@ -1,5 +1,9 @@
 package com.pearbrowser.app.ui.screens
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -15,15 +19,21 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import com.pearbrowser.app.bridge.PearWorkletEvents
+import com.pearbrowser.app.rpc.LocalPearRpc
+import com.pearbrowser.app.rpc.PearRpcClient
 import com.pearbrowser.app.rpc.PearSettings
 import com.pearbrowser.app.ui.theme.PearColors
 import kotlinx.coroutines.Dispatchers
@@ -40,35 +50,73 @@ import java.net.URL
 /**
  * ExploreScreen — catalog directory.
  *
- * The Kotlin equivalent of `app/screens/ExploreScreen.tsx`. In this first
- * pass we only support HTTP(S) catalog URLs (fetched via HttpURLConnection).
- * The worklet-backed Hyperbee/Hyperdrive paths (via PearRpc.loadCatalog and
- * loadCatalogBee) will be wired in once the service reports READY in the
- * follow-up pass.
+ * The Kotlin equivalent of `app/screens/ExploreScreen.tsx`. HTTP relay
+ * catalogs are fetched via HttpURLConnection; if a relay advertises a signed
+ * catalog bee, the worklet verifies and streams that P2P catalog instead.
  *
  * Phase 2 ticket — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
  */
 @Composable
 fun ExploreScreen(onVisit: (String) -> Unit, settings: PearSettings? = null) {
+    val context = LocalContext.current
+    val rpc = LocalPearRpc.current
     var sites by remember { mutableStateOf<List<Site>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var sourceUrl by remember { mutableStateOf(settings?.catalogUrl ?: "https://relay-us.p2phiverelay.xyz") }
+    var activeBeeKey by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(settings?.catalogUrl) {
         settings?.catalogUrl?.takeIf { it.isNotBlank() }?.let { sourceUrl = it }
     }
 
-    LaunchedEffect(sourceUrl) {
+    LaunchedEffect(sourceUrl, rpc) {
         loading = true
         error = null
+        activeBeeKey = null
         try {
-            sites = withContext(Dispatchers.IO) { fetchCatalog(sourceUrl) }
+            val result = loadCatalog(sourceUrl, rpc)
+            sites = result.sites
+            activeBeeKey = result.activeBeeKey
         } catch (e: Throwable) {
             error = e.message ?: "Could not load catalog"
             sites = emptyList()
         } finally {
             loading = false
+        }
+    }
+
+    DisposableEffect(context, activeBeeKey) {
+        val key = activeBeeKey
+        if (key == null) {
+            onDispose {}
+        } else {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context?, intent: Intent?) {
+                    if (intent?.action != PearWorkletEvents.ACTION_CATALOG_UPDATED) return
+                    val updatedKey = intent.getStringExtra(PearWorkletEvents.EXTRA_CATALOG_KEY)
+                        ?.lowercase()
+                        ?: return
+                    if (updatedKey != key) return
+                    val catalogJson = intent.getStringExtra(PearWorkletEvents.EXTRA_CATALOG_JSON) ?: return
+                    try {
+                        val root = Json.parseToJsonElement(catalogJson).jsonObject
+                        sites = sitesFromCatalog(root)
+                        error = null
+                    } catch (e: Throwable) {
+                        error = e.message ?: "Could not apply catalog update"
+                    }
+                }
+            }
+            ContextCompat.registerReceiver(
+                context,
+                receiver,
+                IntentFilter(PearWorkletEvents.ACTION_CATALOG_UPDATED),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            onDispose {
+                try { context.unregisterReceiver(receiver) } catch (_: Throwable) {}
+            }
         }
     }
 
@@ -153,7 +201,45 @@ private data class Site(
     val link: String?,
 )
 
-private fun fetchCatalog(base: String): List<Site> {
+private data class CatalogLoadResult(
+    val sites: List<Site>,
+    val activeBeeKey: String? = null,
+)
+
+private suspend fun loadCatalog(base: String, rpc: PearRpcClient?): CatalogLoadResult {
+    val source = base.trim()
+    if (source.startsWith("http://", ignoreCase = true) || source.startsWith("https://", ignoreCase = true)) {
+        val root = withContext(Dispatchers.IO) { fetchCatalogJson(source) }
+        val beeKey = root.stringAt("catalogBeeKey")?.takeIf { hex64.matches(it) }?.lowercase()
+        if (rpc != null && beeKey != null) {
+            try {
+                val beeCatalog = rpc.loadSignedCatalogBee(beeKey)
+                return CatalogLoadResult(
+                    sites = sitesFromCatalog(beeCatalog),
+                    activeBeeKey = beeKey,
+                )
+            } catch (_: Throwable) {
+                // Fall through to the relay JSON catalog. Signed bees fail closed
+                // in the worklet, so this path never trusts partial bee data.
+            }
+        }
+        return CatalogLoadResult(sitesFromCatalog(root))
+    }
+
+    val client = rpc ?: throw IllegalStateException("P2P engine not available. Use an https:// relay URL instead.")
+    val isBee = source.startsWith("hyperbee://", ignoreCase = true)
+    val key = when {
+        isBee -> source.removePrefixIgnoringCase("hyperbee://")
+        source.startsWith("hyper://", ignoreCase = true) -> source.removePrefixIgnoringCase("hyper://")
+        else -> source
+    }.trim().substringBefore('/').substringBefore('?').substringBefore('#')
+    if (!hex64.matches(key)) throw IllegalArgumentException("Invalid catalog key")
+
+    val catalog = if (isBee) client.loadCatalogBee(key) else client.loadCatalog(key)
+    return CatalogLoadResult(sitesFromCatalog(catalog))
+}
+
+private fun fetchCatalogJson(base: String): JsonObject {
     val target = if (base.endsWith("/catalog.json")) base else "$base/catalog.json"
     val url = URL(target)
     val conn = url.openConnection() as HttpURLConnection
@@ -163,26 +249,29 @@ private fun fetchCatalog(base: String): List<Site> {
     conn.setRequestProperty("Accept", "application/json")
     conn.inputStream.use { stream ->
         val body = stream.bufferedReader().readText()
-        val root = Json.parseToJsonElement(body).jsonObject
-        // Live relay catalog returns `apps`; the paginated variant returns `items`;
-        // legacy registry exports may use `entries`.
-        val apps: JsonElement = root["apps"] ?: root["items"] ?: root["entries"] ?: return emptyList()
-        return apps.jsonArray.mapNotNull { el ->
-            val obj = el.jsonObject
-            val link = normalizeCatalogLink(obj.stringAt("link"))
-            val driveKey = normalizeDriveKey(obj.stringAt("driveKey"))
-                ?: normalizeDriveKey(obj.stringAt("appKey"))
-                ?: normalizeDriveKey(obj.stringAt("key"))
-                ?: driveKeyFromHyperLink(link)
-            if (driveKey == null && link == null) return@mapNotNull null
-            Site(
-                id = obj.stringAt("id") ?: driveKey ?: link ?: return@mapNotNull null,
-                name = obj.stringAt("name") ?: "Untitled",
-                description = obj.stringAt("description") ?: "",
-                driveKey = driveKey,
-                link = link,
-            )
-        }
+        return Json.parseToJsonElement(body).jsonObject
+    }
+}
+
+private fun sitesFromCatalog(root: JsonObject): List<Site> {
+    // Live relay catalog returns `apps`; the paginated variant returns `items`;
+    // legacy registry exports may use `entries`.
+    val apps: JsonElement = root["apps"] ?: root["items"] ?: root["entries"] ?: return emptyList()
+    return apps.jsonArray.mapNotNull { el ->
+        val obj = el.jsonObject
+        val link = normalizeCatalogLink(obj.stringAt("link"))
+        val driveKey = normalizeDriveKey(obj.stringAt("driveKey"))
+            ?: normalizeDriveKey(obj.stringAt("appKey"))
+            ?: normalizeDriveKey(obj.stringAt("key"))
+            ?: driveKeyFromHyperLink(link)
+        if (driveKey == null && link == null) return@mapNotNull null
+        Site(
+            id = obj.stringAt("id") ?: driveKey ?: link ?: return@mapNotNull null,
+            name = obj.stringAt("name") ?: "Untitled",
+            description = obj.stringAt("description") ?: "",
+            driveKey = driveKey,
+            link = link,
+        )
     }
 }
 
@@ -229,3 +318,6 @@ private fun driveKeyFromHyperLink(link: String?): String? {
     val keyEnd = rest.indexOfAny(charArrayOf('/', '?', '#')).let { if (it < 0) rest.length else it }
     return rest.substring(0, keyEnd)
 }
+
+private fun String.removePrefixIgnoringCase(prefix: String): String =
+    if (startsWith(prefix, ignoreCase = true)) substring(prefix.length) else this

@@ -93,7 +93,10 @@ HiveRelay is an HTTP/HTTPS gateway in front of Hyperswarm. The hybrid fetch race
 
 - **hyper://** content should ideally come from peers, not a centralised relay
 - **The relay's `/catalog.json`** is a centralised directory — Pear Desktop discovers apps via Hypercore-backed indexes
-- **`RelayClient` is hardcoded** (`backend/index.js:368`) with a TODO comment — even the code acknowledges this is temporary
+- **`RelayClient` is configurable now** via `CMD_GET_RELAYS`,
+  `CMD_SET_RELAYS`, and `CMD_SET_RELAY_ENABLED` in `backend/index.js`. That
+  removes the old hardcoded-relay marker, but the broader architecture still
+  depends on an HTTP relay/catalog as the default discovery surface.
 
 The correct long-term path is: **distributed catalog Hypercore + HDHT-only fetch** with the HTTP relay as an opt-in speed cache.
 

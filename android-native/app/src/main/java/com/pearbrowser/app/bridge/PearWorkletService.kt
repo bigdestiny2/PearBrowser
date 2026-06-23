@@ -208,6 +208,17 @@ class PearWorkletService : Service() {
             Log.e(TAG, "Backend error: $payload")
         }
 
+        client.on(Evt.CATALOG_UPDATED) { payload ->
+            val obj = payload as? JsonObject ?: return@on
+            val keyHex = obj.string("keyHex")?.lowercase() ?: return@on
+            val catalog = obj["catalog"] ?: return@on
+            sendBroadcast(Intent(PearWorkletEvents.ACTION_CATALOG_UPDATED).apply {
+                setPackage(packageName)
+                putExtra(PearWorkletEvents.EXTRA_CATALOG_KEY, keyHex)
+                putExtra(PearWorkletEvents.EXTRA_CATALOG_JSON, catalog.toString())
+            })
+        }
+
         client.on(Evt.LOGIN_REQUEST) { payload ->
             val obj = payload as? JsonObject ?: return@on
             val requestId = obj.string("requestId") ?: return@on

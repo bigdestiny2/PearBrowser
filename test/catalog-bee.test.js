@@ -35,6 +35,7 @@ const Hyperbee = require('hyperbee')
 const sodium = require('sodium-universal')
 
 const {
+  CatalogManager,
   canonicalJson,
   buildSignedDigest,
   verifyCatalogMeta,
@@ -84,7 +85,7 @@ async function buildBee ({ publicKey, secretKey }, records) {
     try { await core.close() } catch (_) {}
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch (_) {}
   }
-  return { bee, beeKeyBuf: core.key, cleanup }
+  return { bee, core, beeKeyBuf: core.key, cleanup }
 }
 
 const ENTRY_A = { appKey: 'a'.repeat(64), name: 'App Alpha', description: 'first', version: '1.0.0', author: 'me', categories: ['utils'] }
@@ -253,3 +254,55 @@ test('verifyCatalogMeta fails closed on malformed signature inputs', () => {
   assert.equal(verifyCatalogMeta(b4a.alloc(31), signed), false, 'wrong-length key')
   assert.equal(verifyCatalogMeta(kp.publicKey, null), false, 'null meta')
 })
+
+test('loadSignedCatalogBee normalizes cache key and emits verified append updates', async () => {
+  const kp = freshKeypair()
+  const meta = { version: 1, name: 'Live Catalog', publishedAt: 1000 }
+  const signedMeta = signMeta(kp.publicKey, kp.secretKey, meta)
+
+  const { bee, core, beeKeyBuf, cleanup } = await buildBee(kp, [
+    [META_KEY, signedMeta],
+    [ENTRY_A.appKey, ENTRY_A],
+  ])
+
+  const joined = []
+  const manager = new CatalogManager({
+    get ({ key }) {
+      assert.equal(b4a.toString(key, 'hex'), b4a.toString(beeKeyBuf, 'hex'))
+      return core
+    }
+  }, {
+    join (discoveryKey, opts) {
+      joined.push({ discoveryKey, opts })
+    },
+    async leave () {}
+  })
+
+  const updates = []
+  try {
+    const initial = await manager.loadSignedCatalogBee(
+      b4a.toString(beeKeyBuf, 'hex').toUpperCase(),
+      (catalog) => updates.push(catalog)
+    )
+    assert.equal(initial.sourceKey, b4a.toString(beeKeyBuf, 'hex'))
+    assert.equal(initial.apps.length, 1)
+    assert.equal(joined.length, 1)
+
+    await bee.put(ENTRY_B.appKey, ENTRY_B)
+    await waitFor(() => updates.length === 1)
+    assert.deepEqual(updates[0].apps.map((app) => app.name).sort(), ['App Alpha', 'App Beta'])
+    assert.equal(updates[0].sourceKey, b4a.toString(beeKeyBuf, 'hex'))
+  } finally {
+    await manager.close()
+    await cleanup()
+  }
+})
+
+async function waitFor (predicate, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  assert.fail('condition was not met before timeout')
+}
