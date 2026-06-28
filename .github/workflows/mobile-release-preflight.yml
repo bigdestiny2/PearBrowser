@@ -1,0 +1,95 @@
+name: Mobile Release Preflight
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 22
+  PEARBROWSER_ANDROID_KEYSTORE_BASE64: ${{ secrets.PEARBROWSER_ANDROID_KEYSTORE_BASE64 || '' }}
+  PEARBROWSER_ANDROID_STORE_PASSWORD: ${{ secrets.PEARBROWSER_ANDROID_STORE_PASSWORD || '' }}
+  PEARBROWSER_ANDROID_KEY_ALIAS: ${{ secrets.PEARBROWSER_ANDROID_KEY_ALIAS || '' }}
+  PEARBROWSER_ANDROID_KEY_PASSWORD: ${{ secrets.PEARBROWSER_ANDROID_KEY_PASSWORD || '' }}
+  PEARBROWSER_IOS_DEVELOPMENT_TEAM: ${{ secrets.PEARBROWSER_IOS_DEVELOPMENT_TEAM || '' }}
+  PEARBROWSER_TESTFLIGHT_VALIDATED: ${{ secrets.PEARBROWSER_TESTFLIGHT_VALIDATED || '' }}
+  PEARBROWSER_APP_STORE_CONNECT_VALIDATED: ${{ secrets.PEARBROWSER_APP_STORE_CONNECT_VALIDATED || '' }}
+  PEARBROWSER_PLAY_CONSOLE_VALIDATED: ${{ secrets.PEARBROWSER_PLAY_CONSOLE_VALIDATED || '' }}
+  PEARBROWSER_FIREBASE_APP_DISTRIBUTION_VALIDATED: ${{ secrets.PEARBROWSER_FIREBASE_APP_DISTRIBUTION_VALIDATED || '' }}
+
+jobs:
+  release-preflight:
+    name: Mobile release preflight
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout mobile repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run mobile tests
+        run: npm test
+
+      - name: Run high-severity audit
+        run: npm audit --audit-level=high
+
+      - name: Build native worklet bundles
+        run: npm run bundle-all-native
+
+      - name: Prepare iOS BareKit frameworks
+        run: npm run barekit:fetch:addons
+
+      - name: Prepare Android BareKit AAR
+        run: npm run barekit:fetch:android
+
+      - name: Import Android release keystore when configured
+        if: env.PEARBROWSER_ANDROID_KEYSTORE_BASE64 != ''
+        run: |
+          set -euo pipefail
+          keystore="$RUNNER_TEMP/pearbrowser-release.keystore"
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          out = Path(os.environ["RUNNER_TEMP"]) / "pearbrowser-release.keystore"
+          out.write_bytes(base64.b64decode(os.environ["PEARBROWSER_ANDROID_KEYSTORE_BASE64"]))
+          PY
+          echo "PEARBROWSER_ANDROID_KEYSTORE=$keystore" >> "$GITHUB_ENV"
+
+      - name: Capture soft release preflight report
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-preflight
+          npm run --silent release:preflight -- --json --soft > dist/release-preflight/mobile-release-preflight.json
+          npm run check:release-preflight-report -- dist/release-preflight/mobile-release-preflight.json --allow-production-blockers
+
+      - name: Run strict release preflight when distribution markers are present
+        if: >
+          env.PEARBROWSER_ANDROID_KEYSTORE_BASE64 != '' &&
+          env.PEARBROWSER_ANDROID_STORE_PASSWORD != '' &&
+          env.PEARBROWSER_ANDROID_KEY_ALIAS != '' &&
+          env.PEARBROWSER_IOS_DEVELOPMENT_TEAM != '' &&
+          (env.PEARBROWSER_TESTFLIGHT_VALIDATED == '1' || env.PEARBROWSER_APP_STORE_CONNECT_VALIDATED == '1') &&
+          (env.PEARBROWSER_PLAY_CONSOLE_VALIDATED == '1' || env.PEARBROWSER_FIREBASE_APP_DISTRIBUTION_VALIDATED == '1')
+        run: npm run --silent release:preflight -- --json
+
+      - name: Upload release preflight report
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-release-preflight
+          path: dist/release-preflight/mobile-release-preflight.json
+          if-no-files-found: error

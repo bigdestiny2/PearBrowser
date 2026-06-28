@@ -38,9 +38,12 @@ reusing the `backend/` worklet from the RN project verbatim.
    Temurin 17 is verified locally; Homebrew OpenJDK 17.0.19 hung in `jmod`
    on this machine during `:app:assembleDebug`.
 3. **Node.js 20+** (for bundling the backend).
-4. **`bare-kit.aar` or `bare-kit.jar`** — download the latest release from
-   <https://github.com/holepunchto/bare-kit/releases> and drop it in
-   `android-native/app/libs/bare-kit.aar` (preferred) or
+4. **`bare-kit.aar` or `bare-kit.jar`** — run
+   `npm run barekit:fetch:android` to mirror the installed
+   `react-native-bare-kit` Android artifact into
+   `android-native/app/libs/bare-kit.aar`. You can also manually download the
+   latest release from <https://github.com/holepunchto/bare-kit/releases> and
+   drop it in `android-native/app/libs/bare-kit.aar` (preferred) or
    `android-native/app/libs/bare-kit.jar`.
 
 The artifact is **not checked in** (see `.gitignore`). You must fetch it fresh.
@@ -54,7 +57,9 @@ The Kotlin shell reuses `backend/` unchanged. Produce the canonical
 cd /Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser
 npm install                                    # if not already
 npm run bundle-backend-native-android
+npm run barekit:fetch:android
 # Produces backend/dist/backend.android.bundle
+# Produces android-native/app/libs/bare-kit.aar
 ```
 
 Gradle's `sourceSets.main.assets.srcDirs` includes `../../backend/dist`
@@ -115,6 +120,9 @@ Play Console or Firebase App Distribution validation.
 Before treating an Android artifact as releasable, run the root preflight:
 
 ```bash
+npm run bundle-all-native
+npm run barekit:fetch:addons
+npm run barekit:fetch:android
 npm run release:preflight
 ```
 

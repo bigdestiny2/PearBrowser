@@ -6,12 +6,19 @@ commit does not change runtime source.
 
 ## Automated Checks
 
-- `npm test`: passed `136/136`.
+- `npm test`: passed `139/139` after adding the release preflight report
+  verifier coverage.
 - `git diff --check`: passed.
 - `npm audit --audit-level=high`: exited `0`.
 - `npm run release:preflight -- --soft`: `14 pass`, `0 warn`, `4 fail`.
 - `npm run release:preflight -- --json --soft`: same counts, machine-readable
   report generated at `2026-06-23T15:51:08.065Z`.
+- `.github/workflows/mobile-release-preflight.yml` now reproduces the cold CI
+  release-preflight setup: `npm ci`, `npm test`, high-severity audit, native
+  worklet bundle generation, iOS BareKit/addon mirroring, Android BareKit AAR
+  mirroring, soft JSON preflight capture, and
+  `scripts/check-release-preflight-report.js` verification. The uploaded
+  `mobile-release-preflight` artifact is the machine-readable evidence source.
 
 The high-severity audit gate is green. A full audit still reports 15 moderate
 Expo/React Native toolchain advisories through `js-yaml` and `uuid`; npm's
@@ -52,3 +59,5 @@ follow-up rather than release-day force fixes.
 The mobile source tree is structurally ready for release validation, but not
 production-distribution-cleared. The remaining blockers require real platform
 credentials and store/distribution validation evidence, not code changes.
+The CI workflow intentionally allows only those four production blockers; any
+new structural blocker or warning fails the release-preflight check.

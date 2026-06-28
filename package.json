@@ -16,7 +16,9 @@
     "bundle-all-native": "npm run bundle-backend-native-ios && npm run bundle-backend-native-android",
     "ios:generated:release": "sh scripts/build-generated-ios-release.sh",
     "release:preflight": "node scripts/release-preflight.js",
+    "check:release-preflight-report": "node scripts/check-release-preflight-report.js",
     "barekit:fetch": "node scripts/fetch-barekit.js",
+    "barekit:fetch:android": "node scripts/fetch-android-barekit.js",
     "barekit:fetch:addons": "node scripts/fetch-barekit-addons.js",
     "test": "npx tsc --noEmit && node --check backend/index.js backend/hyper-proxy.js backend/http-bridge.js backend/swarm-bridge.js backend/swarm-grants.js backend/site-manager.js backend/relay-client.js backend/catalog-manager.js backend/app-manager.js backend/pear-bridge.js backend/rpc.js backend/xhr-streamx.js backend/navigation.js && node --test test/*.test.js"
   },
