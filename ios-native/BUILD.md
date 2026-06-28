@@ -89,7 +89,9 @@ npm run barekit:fetch:addons
 ```
 
 Run this after `npm install` or `npm update react-native-bare-kit` to
-pick up addon version bumps.
+pick up addon version bumps. If `node_modules/react-native-bare-kit/ios/addons`
+is missing, the script runs the package's `ios/link.mjs` first and then mirrors
+the generated addon xcframeworks into `ios-native/PearBrowser/Frameworks/addons`.
 
 ### RPC wire format (important for anyone touching PearRPC.swift)
 The worklet RPC is length-prefixed JSON, but **the length prefix is

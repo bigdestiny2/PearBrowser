@@ -19,7 +19,7 @@
 
 const fs = require('fs')
 const path = require('path')
-const { execSync } = require('child_process')
+const { execFileSync, execSync } = require('child_process')
 
 const ROOT = path.join(__dirname, '..')
 const SRC_ROOT = path.join(ROOT, 'node_modules', 'react-native-bare-kit', 'ios')
@@ -65,7 +65,16 @@ log('  patched BareKit.xcframework with module.modulemap (needed by bare-kit-swi
 
 // ---- Addons ----
 if (!fs.existsSync(SRC_ADDONS)) {
-  bail(`${SRC_ADDONS} missing — has react-native-bare-kit's postinstall link step run?`)
+  const linkScript = path.join(SRC_ROOT, 'link.mjs')
+  if (!fs.existsSync(linkScript)) {
+    bail(`${SRC_ADDONS} missing and ${linkScript} was not found.`)
+  }
+  log('Addon xcframeworks missing; running react-native-bare-kit iOS linker...')
+  execFileSync(process.execPath, [linkScript], { stdio: 'inherit' })
+}
+
+if (!fs.existsSync(SRC_ADDONS)) {
+  bail(`${SRC_ADDONS} missing after running react-native-bare-kit iOS linker.`)
 }
 if (fs.existsSync(DST_ADDONS)) execSync(`rm -rf "${DST_ADDONS}"`)
 fs.mkdirSync(DST_ADDONS, { recursive: true })
