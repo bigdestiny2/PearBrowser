@@ -4,10 +4,14 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
+// These must match the names android/app/build.gradle actually reads to sign
+// the release build, or a "configured" preflight could still produce a build
+// signed with the debug key.
 const ANDROID_SIGNING_ENV = [
-  'PEARBROWSER_ANDROID_KEYSTORE',
-  'PEARBROWSER_ANDROID_STORE_PASSWORD',
-  'PEARBROWSER_ANDROID_KEY_ALIAS'
+  'PEARBROWSER_RELEASE_STORE_FILE',
+  'PEARBROWSER_RELEASE_STORE_PASSWORD',
+  'PEARBROWSER_RELEASE_KEY_ALIAS',
+  'PEARBROWSER_RELEASE_KEY_PASSWORD'
 ]
 
 function readText (root, rel) {
@@ -182,16 +186,15 @@ function collectPreflight (root = process.cwd(), options = {}) {
   }
 
   const missingAndroidSigning = ANDROID_SIGNING_ENV.filter((name) => !String(env[name] || '').trim())
-  const androidKeystore = String(env.PEARBROWSER_ANDROID_KEYSTORE || '').trim()
+  const androidKeystore = String(env.PEARBROWSER_RELEASE_STORE_FILE || '').trim()
   if (missingAndroidSigning.length > 0) {
-    add('fail', 'android-release-signing', 'Android production signing env is configured', `missing ${missingAndroidSigning.join(', ')}`, 'Set PEARBROWSER_ANDROID_KEYSTORE, PEARBROWSER_ANDROID_STORE_PASSWORD, and PEARBROWSER_ANDROID_KEY_ALIAS for the real release keystore.')
+    add('fail', 'android-release-signing', 'Android production signing env is configured', `missing ${missingAndroidSigning.join(', ')}`, 'Set PEARBROWSER_RELEASE_STORE_FILE, PEARBROWSER_RELEASE_STORE_PASSWORD, PEARBROWSER_RELEASE_KEY_ALIAS, and PEARBROWSER_RELEASE_KEY_PASSWORD for the real release keystore (the names android/app/build.gradle reads).')
   } else if (!path.isAbsolute(androidKeystore)) {
-    add('fail', 'android-release-signing', 'Android production signing env is configured', 'PEARBROWSER_ANDROID_KEYSTORE must be an absolute path', 'Use an absolute path so Gradle signs the intended keystore.')
+    add('fail', 'android-release-signing', 'Android production signing env is configured', 'PEARBROWSER_RELEASE_STORE_FILE must be an absolute path', 'Use an absolute path so Gradle signs the intended keystore.')
   } else if (!fs.existsSync(androidKeystore)) {
-    add('fail', 'android-release-signing', 'Android production signing env is configured', `keystore missing: ${androidKeystore}`, 'Point PEARBROWSER_ANDROID_KEYSTORE at the production release/upload keystore.')
+    add('fail', 'android-release-signing', 'Android production signing env is configured', `keystore missing: ${androidKeystore}`, 'Point PEARBROWSER_RELEASE_STORE_FILE at the production release/upload keystore.')
   } else {
-    const keyPassword = env.PEARBROWSER_ANDROID_KEY_PASSWORD ? 'explicit key password' : 'key password defaults to store password'
-    add('pass', 'android-release-signing', 'Android production signing env is configured', `${path.basename(androidKeystore)}; ${keyPassword}`)
+    add('pass', 'android-release-signing', 'Android production signing env is configured', `${path.basename(androidKeystore)}; explicit key password`)
   }
 
   const teamFromConfig = yamlValue(project, 'DEVELOPMENT_TEAM')
