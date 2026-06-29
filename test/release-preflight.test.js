@@ -86,10 +86,10 @@ targets:
 
 function envFor (keystore, extras = {}) {
   return {
-    PEARBROWSER_ANDROID_KEYSTORE: keystore,
-    PEARBROWSER_ANDROID_STORE_PASSWORD: 'store-password',
-    PEARBROWSER_ANDROID_KEY_ALIAS: 'pearbrowser',
-    PEARBROWSER_ANDROID_KEY_PASSWORD: 'key-password',
+    PEARBROWSER_RELEASE_STORE_FILE: keystore,
+    PEARBROWSER_RELEASE_STORE_PASSWORD: 'store-password',
+    PEARBROWSER_RELEASE_KEY_ALIAS: 'pearbrowser',
+    PEARBROWSER_RELEASE_KEY_PASSWORD: 'key-password',
     PEARBROWSER_TESTFLIGHT_VALIDATED: '1',
     PEARBROWSER_PLAY_CONSOLE_VALIDATED: '1',
     ...extras
