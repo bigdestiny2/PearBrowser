@@ -8,7 +8,7 @@
  * 3. Serves the catalog via HTTP gateway
  *
  * Run from hiverelay dir (has deps):
- *   node /Users/localllm/Desktop/PearBrowser/test/start-catalog-test.js
+ *   node ~/Desktop/PearBrowser/test/start-catalog-test.js
  */
 
 import Hyperswarm from 'hyperswarm'
@@ -19,8 +19,9 @@ import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, relative } from 'path'
 import { tmpdir } from 'os'
 import { randomBytes } from 'crypto'
+import { fileURLToPath } from 'url'
 
-const SAMPLE_APPS_DIR = '/Users/localllm/Desktop/PearBrowser/test/sample-apps'
+const SAMPLE_APPS_DIR = fileURLToPath(new URL('./sample-apps', import.meta.url))
 const storage = join(tmpdir(), 'pearbrowser-catalog-test-' + randomBytes(4).toString('hex'))
 
 function getAllFiles (dir) {

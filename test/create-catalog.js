@@ -5,7 +5,7 @@
  * Prints the catalog key for use in PearBrowser.
  *
  * Run from hiverelay dir:
- *   node /Users/localllm/Desktop/PearBrowser/test/create-catalog.js
+ *   node ~/Desktop/PearBrowser/test/create-catalog.js
  */
 
 import Hyperswarm from 'hyperswarm'

@@ -3,7 +3,7 @@
 Generated: 2026-06-23
 Loop candidate: `pearbrowser-status-audit`
 Autonomy level: Level 1 status artifact
-Source root: `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser`
+Source root: `~/pear-ecosystem/01-browser/PearBrowser`
 
 ## Executive Status
 
@@ -25,7 +25,7 @@ The most important current split:
 
 ## Validation Run
 
-Run from `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser`:
+Run from `~/pear-ecosystem/01-browser/PearBrowser`:
 
 ```sh
 npm test
@@ -132,13 +132,13 @@ Run a PearBrowser release-evidence cleanup pass:
 
 ## Source Evidence
 
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/package.json`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/README.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/docs/ARCHITECTURE_AND_CAPABILITIES.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/docs/MARKER-TRIAGE-2026-06-23.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/scripts/release-preflight.js`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/SECURITY_AUDIT.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/SECURITY_FIXES.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/SUBMISSION.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/docs/AUDIT_AND_SHIP_PLAN_2026-04-15.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/docs/HOLEPUNCH_ALIGNMENT_PLAN.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/package.json`
+- `~/pear-ecosystem/01-browser/PearBrowser/README.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/docs/ARCHITECTURE_AND_CAPABILITIES.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/docs/MARKER-TRIAGE-2026-06-23.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/scripts/release-preflight.js`
+- `~/pear-ecosystem/01-browser/PearBrowser/SECURITY_AUDIT.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/SECURITY_FIXES.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/SUBMISSION.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/docs/AUDIT_AND_SHIP_PLAN_2026-04-15.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/docs/HOLEPUNCH_ALIGNMENT_PLAN.md`

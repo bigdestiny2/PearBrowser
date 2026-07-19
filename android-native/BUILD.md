@@ -54,7 +54,7 @@ The Kotlin shell reuses `backend/` unchanged. Produce the canonical
 `.bundle` output at the repo root:
 
 ```bash
-cd /Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser
+cd ~/pear-ecosystem/01-browser/PearBrowser
 npm install                                    # if not already
 npm run bundle-backend-native-android
 npm run barekit:fetch:android
@@ -72,11 +72,11 @@ If this checkout does not include `android-native/gradlew`, substitute the
 sibling wrapper with `-p`:
 
 ```bash
-/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/android/gradlew -p /Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/android-native <task>
+~/pear-ecosystem/01-browser/PearBrowser/android/gradlew -p ~/pear-ecosystem/01-browser/PearBrowser/android-native <task>
 ```
 
 ```bash
-cd /Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/android-native
+cd ~/pear-ecosystem/01-browser/PearBrowser/android-native
 
 # First build (downloads gradle wrapper distribution)
 ./gradlew --version
@@ -186,10 +186,10 @@ Drivers:
 **Android Binder RPC smoke check:**
 
 ```bash
-cd /Users/localllm/Desktop/PearBrowser/android-native
+cd ~/Desktop/PearBrowser/android-native
 ./gradlew :app:compileDebugKotlin
 # If ./gradlew is absent:
-/Users/localllm/Desktop/PearBrowser/android/gradlew -p /Users/localllm/Desktop/PearBrowser/android-native :app:compileDebugKotlin
+~/Desktop/PearBrowser/android/gradlew -p ~/Desktop/PearBrowser/android-native :app:compileDebugKotlin
 ```
 
 Runtime smoke on a device/emulator:

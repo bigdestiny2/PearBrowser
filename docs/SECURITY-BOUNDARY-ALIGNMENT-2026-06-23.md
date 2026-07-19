@@ -3,7 +3,7 @@
 Generated: 2026-06-23
 Loop candidate: `pearbrowser-security-crosscheck`
 Autonomy level: Level 1 security/threat documentation artifact
-Source root: `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser`
+Source root: `~/pear-ecosystem/01-browser/PearBrowser`
 
 ## Executive Status
 
@@ -11,9 +11,10 @@ PearBrowser's April security documents are useful provenance, but they are not
 the current security source of truth. The current source tree has stronger and
 more explicit boundaries than those historical files show: strict localhost
 origin parsing, in-memory bridge tokens, origin-scoped HTTPS session tokens,
-drive-scoped sync namespaces, strict CSP on proxied HTML, signed catalog bee
-verification, recursive prototype-pollution scrubbing, trusted-origin injection
-controls, and consent/rate-limited `swarm.v1` channels.
+one-time EventSource tickets, drive-scoped sync namespaces, strict CSP on
+proxied HTML, signed catalog bee verification, recursive prototype-pollution
+scrubbing, trusted-origin injection controls, and consent/rate-limited
+`swarm.v1` channels.
 
 The biggest remaining architectural caveat is also now explicit in source:
 proxied `hyper://` and installed app content share one loopback origin,
@@ -49,11 +50,12 @@ Current source: `backend/hyper-proxy.js`.
   `http://127.0.0.1` or `http://localhost`.
 - `normaliseOrigin(origin)` canonicalizes `http(s)://host[:port]` origins and
   strips path, query, fragment, and default ports.
-- Non-loopback `http(s)` origins are only reflected in
-  `Access-Control-Allow-Origin` when the request presents a valid origin-scoped
-  token issued for that exact origin.
-- Arbitrary unauthenticated HTTPS origins are not echoed; they fall back to the
-  loopback default and the browser blocks cross-origin reads.
+- Non-loopback `http(s)` origins are reflected on unauthenticated CORS
+  preflights only; real API responses still require a valid origin-scoped
+  token or an origin-scoped one-time SSE ticket issued for that exact origin.
+- Arbitrary unauthenticated HTTPS origins on real API requests are not echoed;
+  they fall back to the loopback default and the browser blocks cross-origin
+  reads.
 - API tokens are random 32-byte hex strings, held in memory, and expired after
   10 minutes.
 
@@ -76,14 +78,21 @@ Current source: `backend/hyper-proxy.js`.
 Current source: `backend/http-bridge.js`, `backend/pear-bridge.js`.
 
 - Every `/api/*` privileged endpoint requires an `X-Pear-Token`, except
-  EventSource streams may pass the same token through `?token=` because
-  EventSource cannot set custom headers.
+  EventSource streams consume a one-time `ticket` query parameter minted by the
+  header-authenticated `/api/swarm/ticket` endpoint because EventSource cannot
+  set custom headers.
+- SSE tickets are in-memory, short-lived, bound to `channelId`, origin-scoped
+  when minted from an origin-scoped token, peeked without consumption for CORS
+  reflection, and deleted on first consume attempt.
+- The old EventSource `?token=` bearer fallback is rejected.
 - Origin-scoped tokens are rejected unless the request's `Origin` header exactly
   matches the origin that minted the token.
 - Sync app IDs are restricted to 1-64 characters of alphanumeric, hyphen, and
   underscore, with reserved names rejected.
-- Sync namespaces are scoped by `driveKeyHex:appId`, so two apps using the same
-  app ID under different drives do not share a backend namespace.
+- Sync namespaces are scoped by `sha256(driveKeyHex:appId)` and passed to
+  PearBridge as `app_<32 hex chars>`, so user-visible app IDs stay short while
+  two apps using the same app ID under different drives do not share a backend
+  namespace.
 - Invite keys must be 64 hex characters.
 - POST bodies are capped at 1 MB and sync operations are capped at 100 KB.
 - List/range calls clamp page sizes to 1000 items and count scans cap at
@@ -148,24 +157,31 @@ Current source: `backend/swarm-bridge.js`, `backend/http-bridge.js`,
 
 1. Browser-level per-app origin isolation is not solved. All proxied apps still
    share one loopback origin, cookies/storage, and same-origin fetch reach.
-2. EventSource query-token fallback is an accepted leak-risk tradeoff. The next
-   hardening step is a one-time SSE ticket minted through a header-authenticated
-   request and consumed by the stream.
-3. Trusted origins default to `all`. Users who want injection minimization need
+2. Trusted origins default to `all`. Users who want injection minimization need
    allowlist mode, and release notes/settings UX should make that choice clear.
-4. Tier A `swarm.v1` topics are public-deriveable from public drive keys. Apps
+3. Tier A `swarm.v1` topics are public-deriveable from public drive keys. Apps
    that need peer authentication must run their own handshake on top.
-5. Current production-release proof is still blocked by signing and store
+4. Current production-release proof is still blocked by signing and store
    validation evidence, as captured in
    `docs/CURRENT_STATUS_AUDIT_2026-06-23.md`.
-6. `npm audit --audit-level=high` is green, but moderate inherited
+5. `npm audit --audit-level=high` is green, but moderate inherited
    Expo/React Native advisories remain and require framework-level upgrade
    planning rather than a safe local force-fix.
+
+## Recently Closed Caveats
+
+- 2026-07-02: EventSource query-token fallback was replaced with one-time SSE
+  tickets. `test/http-bridge-origin-sse.test.js` now proves old `?token=`
+  bearer URLs reject, `/api/swarm/ticket` requires `X-Pear-Token`, tickets are
+  single-use, channel-bound, and origin-scoped, and `test/swarm-v1-parity.test.js`
+  proves the backend-injected, web, iOS, and Android bridge templates use
+  `ticket=`.
 
 ## Focused Test Coverage To Preserve
 
 - `test/origin-token.test.js` for per-origin token derivation and validation.
-- `test/http-bridge-origin-sse.test.js` for origin-scoped SSE token matching.
+- `test/http-bridge-origin-sse.test.js` for origin-scoped one-time SSE ticket
+  matching, replay rejection, channel binding, and old bearer-query rejection.
 - `test/trusted-origins.test.js` for trusted-origin mode and native screen
   parity.
 - `test/catalog-normalizer.test.js` and `test/catalog-bee.test.js` for catalog
@@ -181,22 +197,23 @@ Run the release-evidence cleanup pass from the current status audit:
 
 - Capture `npm run release:preflight -- --json` into a dated proof artifact.
 - Keep signing/store blockers explicit unless real credentials are present.
-- Then harden the EventSource token path by replacing query-token fallback with
-  a one-time SSE ticket flow and covering it with `http-bridge-origin-sse`
-  tests.
+- Preserve the SSE ticket tests during any future bridge or native template
+  changes.
+- Then choose the next security-boundary slice: browser-level per-app origin
+  isolation design, or a trusted-origin allowlist UX/release note pass.
 
 ## Source Evidence
 
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/backend/hyper-proxy.js`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/backend/http-bridge.js`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/backend/pear-bridge.js`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/backend/swarm-bridge.js`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/backend/trusted-origins.js`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/backend/catalog-manager.js`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/backend/index.js`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/docs/CURRENT_STATUS_AUDIT_2026-06-23.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/docs/HOLEPUNCH_ALIGNMENT_PLAN.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/docs/SWARM-V1.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/SECURITY_AUDIT.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/SECURITY_FIXES.md`
-- `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser/SUBMISSION.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/backend/hyper-proxy.js`
+- `~/pear-ecosystem/01-browser/PearBrowser/backend/http-bridge.js`
+- `~/pear-ecosystem/01-browser/PearBrowser/backend/pear-bridge.js`
+- `~/pear-ecosystem/01-browser/PearBrowser/backend/swarm-bridge.js`
+- `~/pear-ecosystem/01-browser/PearBrowser/backend/trusted-origins.js`
+- `~/pear-ecosystem/01-browser/PearBrowser/backend/catalog-manager.js`
+- `~/pear-ecosystem/01-browser/PearBrowser/backend/index.js`
+- `~/pear-ecosystem/01-browser/PearBrowser/docs/CURRENT_STATUS_AUDIT_2026-06-23.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/docs/HOLEPUNCH_ALIGNMENT_PLAN.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/docs/SWARM-V1.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/SECURITY_AUDIT.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/SECURITY_FIXES.md`
+- `~/pear-ecosystem/01-browser/PearBrowser/SUBMISSION.md`

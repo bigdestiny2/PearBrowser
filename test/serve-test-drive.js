@@ -7,7 +7,7 @@
  * The hyper:// key is printed so you can browse it in PearBrowser.
  *
  * Run from hiverelay dir (has all deps):
- *   NODE_PATH=/Users/localllm/hiverelay/node_modules node test/serve-test-drive.js
+ *   NODE_PATH=~/hiverelay/node_modules node test/serve-test-drive.js
  */
 
 import Hyperswarm from 'hyperswarm'

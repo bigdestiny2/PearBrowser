@@ -371,13 +371,13 @@ multiplexed connections.
 
 ## Critical Files Referenced
 
-- `/Users/localllm/Desktop/PearBrowser/docs/ARCHITECTURE_REVIEW_HOLEPUNCH_ALIGNMENT.md` — parent doc
-- `/Users/localllm/Desktop/PearBrowser/docs/RELAY_CATALOG_POPULATION.md` — prerequisite for Phase 1 catalog work
-- `/Users/localllm/Desktop/PearBrowser/backend/index.js` — hardcoded RelayClient at line 368 (Phase 0 ticket 2)
-- `/Users/localllm/Desktop/PearBrowser/app/lib/storage.ts` — storage interface target (Phase 0 ticket 1)
-- `/Users/localllm/Desktop/PearBrowser/app/lib/bridge-inject.ts` — source for `pear-bridge-spec.ts` extraction (Phase 0 ticket 3)
-- `/Users/localllm/Desktop/PearBrowser/backend/catalog-manager.js` — Hyperbee subscription target (Phase 1)
-- `/Users/localllm/Desktop/PearBrowser/app/lib/rpc.ts` — reference for `PearRpc.kt` and `PearRPC.swift` (Phases 2, 3)
+- `~/Desktop/PearBrowser/docs/ARCHITECTURE_REVIEW_HOLEPUNCH_ALIGNMENT.md` — parent doc
+- `~/Desktop/PearBrowser/docs/RELAY_CATALOG_POPULATION.md` — prerequisite for Phase 1 catalog work
+- `~/Desktop/PearBrowser/backend/index.js` — hardcoded RelayClient at line 368 (Phase 0 ticket 2)
+- `~/Desktop/PearBrowser/app/lib/storage.ts` — storage interface target (Phase 0 ticket 1)
+- `~/Desktop/PearBrowser/app/lib/bridge-inject.ts` — source for `pear-bridge-spec.ts` extraction (Phase 0 ticket 3)
+- `~/Desktop/PearBrowser/backend/catalog-manager.js` — Hyperbee subscription target (Phase 1)
+- `~/Desktop/PearBrowser/app/lib/rpc.ts` — reference for `PearRpc.kt` and `PearRPC.swift` (Phases 2, 3)
 - Reference repo: `github.com/holepunchto/bare-android` — template for Phase 2
 - Reference repo: `github.com/holepunchto/bare-ios` — template for Phase 3
 

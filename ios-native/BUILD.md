@@ -34,7 +34,7 @@ Pure Swift + SwiftUI + `BareKit` shell, reusing `backend/` verbatim.
 
 ```bash
 # Bundle the backend worklet for iOS
-cd /Users/localllm/Desktop/PearBrowser
+cd ~/Desktop/PearBrowser
 npm run bundle-backend-native-ios
 # → backend/dist/backend.ios.bundle (~2.1 MB)
 
