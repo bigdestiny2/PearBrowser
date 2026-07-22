@@ -3,6 +3,8 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 
+require('./_stubs')
+
 const root = path.join(__dirname, '..')
 
 function read (rel) {
@@ -50,10 +52,23 @@ test('all injected bridge templates expose window.pear.swarm.v1', () => {
   for (const rel of files) {
     const source = read(rel)
     assert.match(source, /\/api\/swarm\/join/, `${rel}: join endpoint missing`)
+    assert.match(source, /\/api\/swarm\/ticket/, `${rel}: SSE ticket endpoint missing`)
     assert.match(source, /\/api\/swarm\/events/, `${rel}: events endpoint missing`)
+    assert.match(source, /&ticket=/, `${rel}: EventSource must use a one-time SSE ticket`)
+    assert.doesNotMatch(source, /\/api\/swarm\/events\?channelId=[\s\S]{0,200}&token=/, `${rel}: EventSource must not put bearer tokens in the URL`)
     assert.match(source, /EventSource/, `${rel}: EventSource stream missing`)
     assert.match(source, /swarm:\s*\{[\s\S]*v1:/, `${rel}: window.pear.swarm.v1 missing`)
   }
+})
+
+test('backend-injected swarm shim uses one-time SSE tickets', () => {
+  const source = read('backend/pear-bridge.js')
+  assert.match(source, /PEAR_SWARM_V1_SHIM/, 'backend swarm shim missing')
+  assert.match(source, /\/api\/swarm\/ticket/, 'backend shim ticket endpoint missing')
+  assert.match(source, /&ticket=/, 'backend shim EventSource must use a one-time SSE ticket')
+  assert.doesNotMatch(source, /\/api\/swarm\/events\?channelId=[\s\S]{0,200}&token=/,
+    'backend shim must not put bearer tokens in the EventSource URL')
+  assert.match(source, /window\.pear\.swarm\.v1/, 'backend shim does not expose window.pear.swarm.v1')
 })
 
 test('echo-peer fixture covers the drive-derived swarm.v1 join shape', () => {
@@ -75,6 +90,38 @@ test('hyper proxy injects per-response bridge token and swarm shim for HTML', ()
   assert.match(source, /setPearSwarmShim/, 'setPearSwarmShim missing')
   assert.match(source, /pear-api-token/, 'api token meta injection missing')
   assert.match(source, /_serveHtmlWithBridge/, 'HTML bridge injection helper missing')
+})
+
+test('hyper proxy base href matches the loopback request host', () => {
+  const { HyperProxy } = require('../backend/hyper-proxy')
+  const key = 'a'.repeat(64)
+
+  function render (host) {
+    const proxy = Object.create(HyperProxy.prototype)
+    proxy._port = 9876
+    proxy._pearSwarmShim = ''
+    proxy.issueApiToken = () => 't'.repeat(64)
+    const res = {
+      headers: {},
+      statusCode: 0,
+      body: '',
+      setHeader (name, value) { this.headers[name] = value },
+      end (buf) { this.body = Buffer.from(buf).toString('utf8') }
+    }
+    proxy._serveHtmlWithBridge(
+      { headers: { host } },
+      res,
+      `/hyper/${key}/`,
+      key,
+      Buffer.from('<!doctype html><html><head></head><body>ok</body></html>')
+    )
+    return res.body
+  }
+
+  assert.match(render('127.0.0.1:9876'), new RegExp(`<base href="http://127\\.0\\.0\\.1:9876/hyper/${key}/">`))
+  assert.match(render('localhost:9876'), new RegExp(`<base href="http://localhost:9876/hyper/${key}/">`))
+  assert.match(render('localhost.evil.test:9876'), new RegExp(`<base href="http://127\\.0\\.0\\.1:9876/hyper/${key}/">`))
+  assert.match(render('127.0.0.1:9999'), new RegExp(`<base href="http://127\\.0\\.0\\.1:9876/hyper/${key}/">`))
 })
 
 test('mobile shells surface and resolve swarm consent requests', () => {

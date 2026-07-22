@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>headless tab</title>
+  <script src="/htmx.min.js"></script>
+  <script src="/pear-request-client.bundle.js"></script>
+  <style>body{background:#0b0e14;margin:0;color:#e6e6e6}#boot{font:15px system-ui;color:#7a8;margin:40px auto;max-width:560px}</style>
+</head>
+<body>
+  <div id="boot">connecting to headless worker…</div>
+  <script>
+  (function () {
+    // tabId is the last path segment; the worker-bridge WS port is ?ws=
+    var tabId = location.pathname.split('/').filter(Boolean).pop()
+    var wsPort = new URLSearchParams(location.search).get('ws')
+    var ws = new WebSocket('ws://127.0.0.1:' + wsPort)
+    ws.binaryType = 'arraybuffer'
+
+    // A pipe shim over the WebSocket. WS preserves message boundaries, which is
+    // the framing the pear-request client/router already assume.
+    var listeners = {}
+    function on (ev, cb) { (listeners[ev] || (listeners[ev] = [])).push(cb) }
+    var pipe = {
+      write: function (buf) { ws.send(buf); return true },
+      on: on,
+      once: function (ev, cb) { var w = function () { var i = listeners[ev].indexOf(w); if (i >= 0) listeners[ev].splice(i, 1); cb.apply(null, arguments) }; on(ev, w) }
+    }
+    ws.onmessage = function (e) {
+      var data = globalThis.Buffer.from(e.data)
+      ;(listeners.data || []).forEach(function (cb) { cb(data) })
+    }
+    ws.onerror = function () { var b = document.getElementById('boot'); if (b) b.textContent = 'worker pipe error' }
+    ws.onclose = function () { var b = document.getElementById('boot'); if (b) b.textContent = 'worker disconnected' }
+    ws.onopen = function () {
+      ws.send(tabId) // FIRST frame: announce which tab/worker this is
+      // swap in the stream-backed XMLHttpRequest, then let htmx pull the app's
+      // root UI (GET /) from the worker into <body>. From here it's all htmx.
+      globalThis.XMLHttpRequest = globalThis.createPearRequest(pipe)
+      window.__PEAR_TAB_READY = true
+      htmx.ajax('GET', '/', { target: 'body', swap: 'innerHTML' })
+    }
+  })()
+  </script>
+</body>
+</html>

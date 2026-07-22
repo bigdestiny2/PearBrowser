@@ -196,6 +196,14 @@ actor PearRPC {
         return (res?["valid"] as? Bool) ?? false
     }
 
+    func deviceLinkCreateInvite() async throws -> [String: Any] {
+        try (await request(Cmd.DEVICE_LINK_CREATE_INVITE) as? [String: Any]) ?? [:]
+    }
+
+    func deviceLinkJoin(invite: String, device: String = "this device") async throws -> [String: Any] {
+        try (await request(Cmd.DEVICE_LINK_JOIN, data: ["invite": invite, "device": device], timeoutMs: 120_000) as? [String: Any]) ?? [:]
+    }
+
     func getIdentity() async throws -> [String: Any] {
         try (await request(Cmd.GET_IDENTITY) as? [String: Any]) ?? [:]
     }

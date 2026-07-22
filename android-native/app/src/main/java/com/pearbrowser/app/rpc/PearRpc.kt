@@ -119,11 +119,43 @@ class PearRpc(
     suspend fun loadCatalogBee(keyHex: String): JsonObject =
         request(Cmd.LOAD_CATALOG_BEE, buildJsonObject { put("keyHex", keyHex) }, timeoutMs = 60_000).jsonObject
 
+    suspend fun installApp(id: String, driveKey: String, name: String, version: String? = null): JsonObject =
+        request(Cmd.INSTALL_APP, buildJsonObject {
+            put("id", id)
+            put("driveKey", driveKey)
+            put("name", name)
+            version?.let { put("version", it) }
+        }, timeoutMs = 120_000).jsonObject
+
+    // Backend handler reads `data.id` (backend/index.js CMD_LAUNCH_APP) —
+    // keep the payload key aligned with app/lib/rpc.ts `launchApp(id)`.
     suspend fun launchApp(appId: String): JsonObject =
-        request(Cmd.LAUNCH_APP, buildJsonObject { put("appId", appId) }).jsonObject
+        request(Cmd.LAUNCH_APP, buildJsonObject { put("id", appId) }, timeoutMs = 60_000).jsonObject
+
+    suspend fun listInstalled(): JsonArray =
+        request(Cmd.LIST_INSTALLED).jsonArray
 
     suspend fun listSites(): JsonArray =
         request(Cmd.LIST_SITES).jsonArray
+
+    suspend fun createSite(name: String): JsonObject =
+        request(Cmd.CREATE_SITE, buildJsonObject { put("name", name) }).jsonObject
+
+    suspend fun updateSite(siteId: String, blocks: JsonArray, theme: JsonObject): JsonElement =
+        request(Cmd.UPDATE_SITE, buildJsonObject {
+            put("siteId", siteId)
+            put("blocks", blocks)
+            put("theme", theme)
+        }, timeoutMs = 60_000)
+
+    suspend fun publishSite(siteId: String): JsonObject =
+        request(Cmd.PUBLISH_SITE, buildJsonObject { put("siteId", siteId) }, timeoutMs = 60_000).jsonObject
+
+    suspend fun unpublishSite(siteId: String): JsonElement =
+        request(Cmd.UNPUBLISH_SITE, buildJsonObject { put("siteId", siteId) })
+
+    suspend fun deleteSite(siteId: String): JsonElement =
+        request(Cmd.DELETE_SITE, buildJsonObject { put("siteId", siteId) })
 
     suspend fun getIdentity(): JsonObject =
         request(Cmd.GET_IDENTITY).jsonObject
@@ -169,6 +201,35 @@ class PearRpc(
     suspend fun setSettings(updates: JsonObject): JsonElement =
         request(Cmd.USERDATA_SET_SETTINGS, buildJsonObject { put("updates", updates) })
 
+    // Mirrors app/lib/rpc.ts userDataGetSession/userDataSaveSession.
+    suspend fun getSession(): JsonObject =
+        request(Cmd.USERDATA_GET_SESSION).jsonObject["session"]?.jsonObject ?: JsonObject(emptyMap())
+
+    suspend fun saveSession(state: JsonObject): JsonElement =
+        request(Cmd.USERDATA_SAVE_SESSION, buildJsonObject { put("state", state) })
+
+    suspend fun profileGet(): JsonObject =
+        request(Cmd.PROFILE_GET).jsonObject["profile"]?.jsonObject ?: JsonObject(emptyMap())
+
+    suspend fun profileUpdate(updates: JsonObject): JsonObject =
+        request(Cmd.PROFILE_UPDATE, buildJsonObject { put("updates", updates) })
+            .jsonObject["profile"]?.jsonObject ?: JsonObject(emptyMap())
+
+    suspend fun profileClear(): JsonElement =
+        request(Cmd.PROFILE_CLEAR)
+
+    suspend fun trustedOriginsList(): JsonObject =
+        request(Cmd.TRUSTED_ORIGINS_LIST).jsonObject
+
+    suspend fun trustedOriginsAdd(origin: String): JsonElement =
+        request(Cmd.TRUSTED_ORIGINS_ADD, buildJsonObject { put("origin", origin) })
+
+    suspend fun trustedOriginsRemove(origin: String): JsonElement =
+        request(Cmd.TRUSTED_ORIGINS_REMOVE, buildJsonObject { put("origin", origin) })
+
+    suspend fun trustedOriginsSetMode(mode: String): JsonElement =
+        request(Cmd.TRUSTED_ORIGINS_SET_MODE, buildJsonObject { put("mode", mode) })
+
     suspend fun exportPhrase(): String =
         request(Cmd.IDENTITY_EXPORT_PHRASE).jsonObject["mnemonic"]!!.jsonPrimitive.content
 
@@ -178,6 +239,19 @@ class PearRpc(
     suspend fun validatePhrase(mnemonic: String): Boolean =
         request(Cmd.IDENTITY_VALIDATE_PHRASE, buildJsonObject { put("mnemonic", mnemonic) })
             .jsonObject["valid"]!!.jsonPrimitive.boolean
+
+    suspend fun deviceLinkCreateInvite(): JsonObject =
+        request(Cmd.DEVICE_LINK_CREATE_INVITE).jsonObject
+
+    suspend fun deviceLinkJoin(invite: String, device: String = "this device"): JsonObject =
+        request(
+            Cmd.DEVICE_LINK_JOIN,
+            buildJsonObject {
+                put("invite", invite)
+                put("device", device)
+            },
+            timeoutMs = 120_000,
+        ).jsonObject
 
     suspend fun loginResolve(
         requestId: String,
@@ -222,6 +296,91 @@ class PearRpc(
 
     suspend fun swarmRevokeAllForApp(driveKey: String): JsonElement =
         request(Cmd.SWARM_REVOKE_ALL_FOR_APP, buildJsonObject { put("driveKey", driveKey) })
+
+    // --- Content Shield (mirrors PearRpcClient + backend/constants.js) ---
+
+    suspend fun getShieldStatus(driveKey: String? = null): JsonObject =
+        request(Cmd.SHIELD_STATUS, buildJsonObject {
+            driveKey?.let { put("driveKey", it) }
+        }).jsonObject
+
+    suspend fun setShieldAllow(driveKey: String, allow: Boolean): JsonElement =
+        request(Cmd.SHIELD_SET_ALLOW, buildJsonObject {
+            put("driveKey", driveKey)
+            put("allow", allow)
+        })
+
+    suspend fun setShieldStrict(driveKey: String, strict: Boolean): JsonElement =
+        request(Cmd.SHIELD_SET_STRICT, buildJsonObject {
+            put("driveKey", driveKey)
+            put("strict", strict)
+        })
+
+    suspend fun subscribeList(driveKey: String): JsonObject =
+        request(Cmd.SHIELD_SUBSCRIBE_LIST, buildJsonObject { put("driveKey", driveKey) }, timeoutMs = 60_000).jsonObject
+
+    suspend fun unsubscribeList(driveKey: String): JsonObject =
+        request(Cmd.SHIELD_UNSUBSCRIBE_LIST, buildJsonObject { put("driveKey", driveKey) }).jsonObject
+
+    suspend fun refreshLists(driveKey: String? = null, force: Boolean = false): JsonObject =
+        request(Cmd.SHIELD_REFRESH_LISTS, buildJsonObject {
+            driveKey?.let { put("driveKey", it) }
+            if (force) put("force", true)
+        }, timeoutMs = 60_000).jsonObject
+
+    // --- Pear Plugins (Mission B4a — mirrors PearRpcClient + backend/constants.js) ---
+
+    suspend fun pluginList(): JsonObject =
+        request(Cmd.PLUGIN_LIST).jsonObject
+
+    suspend fun pluginSetEnabled(id: String, enabled: Boolean): JsonObject =
+        request(Cmd.PLUGIN_SET_ENABLED, buildJsonObject {
+            put("id", id)
+            put("enabled", enabled)
+        }).jsonObject
+
+    /** Two-step consent: preview with just [driveKey]; accept by echoing
+     *  [granted] + [reviewedFingerprint] from the preview reply. */
+    suspend fun pluginInstallDrive(
+        driveKey: String,
+        granted: List<String>? = null,
+        reviewedFingerprint: String? = null,
+    ): JsonObject =
+        request(Cmd.PLUGIN_INSTALL_DRIVE, buildJsonObject {
+            put("driveKey", driveKey)
+            granted?.let { caps -> putJsonArray("granted") { caps.forEach { add(it) } } }
+            reviewedFingerprint?.let { put("reviewedFingerprint", it) }
+        }, timeoutMs = 60_000).jsonObject
+
+    /** Escalation guard: an update requesting new capabilities auto-disables
+     *  the plugin; accept by echoing the reply's capabilities + fingerprint. */
+    suspend fun pluginUpdateDrive(
+        driveKey: String,
+        granted: List<String>? = null,
+        reviewedFingerprint: String? = null,
+    ): JsonObject =
+        request(Cmd.PLUGIN_UPDATE_DRIVE, buildJsonObject {
+            put("driveKey", driveKey)
+            granted?.let { caps -> putJsonArray("granted") { caps.forEach { add(it) } } }
+            reviewedFingerprint?.let { put("reviewedFingerprint", it) }
+        }, timeoutMs = 60_000).jsonObject
+
+    suspend fun pluginUninstall(driveKey: String): JsonObject =
+        request(Cmd.PLUGIN_UNINSTALL, buildJsonObject { put("driveKey", driveKey) }).jsonObject
+
+    suspend fun pluginCatalog(): JsonObject =
+        request(Cmd.PLUGIN_CATALOG).jsonObject
+
+    suspend fun pluginCatalogLoadDrive(driveKey: String): JsonObject =
+        request(Cmd.PLUGIN_CATALOG_LOAD_DRIVE, buildJsonObject { put("driveKey", driveKey) }, timeoutMs = 60_000).jsonObject
+
+    suspend fun pluginCatalogRemoveSource(driveKey: String): JsonObject =
+        request(Cmd.PLUGIN_CATALOG_REMOVE_SOURCE, buildJsonObject { put("driveKey", driveKey) }).jsonObject
+
+    // --- Clearnet & privacy (Mission B2) ---
+
+    suspend fun getPrivacyStatus(): JsonObject =
+        request(Cmd.PRIVACY_STATUS).jsonObject
 
     // ---------- Internal framing ----------
     //

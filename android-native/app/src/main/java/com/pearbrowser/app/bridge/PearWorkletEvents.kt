@@ -9,6 +9,7 @@ object PearWorkletEvents {
     const val ACTION_LOGIN_REQUEST = "com.pearbrowser.app.action.LOGIN_REQUEST"
     const val ACTION_SWARM_REQUEST = "com.pearbrowser.app.action.SWARM_REQUEST"
     const val ACTION_CATALOG_UPDATED = "com.pearbrowser.app.action.CATALOG_UPDATED"
+    const val ACTION_SEARCH_FEDERATED = "com.pearbrowser.app.action.SEARCH_FEDERATED"
     const val ACTION_RESOLVE_LOGIN = "com.pearbrowser.app.action.RESOLVE_LOGIN"
     const val ACTION_RESOLVE_SWARM = "com.pearbrowser.app.action.RESOLVE_SWARM"
 
@@ -22,4 +23,6 @@ object PearWorkletEvents {
     const val EXTRA_APPROVED = "approved"
     const val EXTRA_CATALOG_KEY = "catalogKey"
     const val EXTRA_CATALOG_JSON = "catalogJson"
+    /** Full EVT_SEARCH_FEDERATED payload JSON (queryId-correlated enriched results). */
+    const val EXTRA_SEARCH_PAYLOAD = "searchPayload"
 }

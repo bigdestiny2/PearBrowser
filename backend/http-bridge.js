@@ -12,6 +12,8 @@
  * All endpoints are under /api/* on the same port as the hyper proxy.
  */
 
+const crypto = require('bare-crypto')
+
 class HttpBridge {
   constructor (pearBridge, swarm, getDriveFn, opts = {}) {
     this._bridge = pearBridge
@@ -22,9 +24,12 @@ class HttpBridge {
     this._identity = opts.identity || null
     this._profile = opts.profile || null
     this._contacts = opts.contacts || null
-    this._requestLogin = opts.requestLogin || null  // async (args) => attestation
+    this._requestLogin = opts.requestLogin || null // async (args) => attestation
     this._swarmBridge = opts.swarmBridge || null
     this._rateLimiter = new Map() // Simple rate limiting per IP
+    this._sseTickets = new Map()
+    this._sseTicketTtlMs = opts.sseTicketTtlMs || 30000
+    this._maxSseTickets = opts.maxSseTickets || 4096
   }
 
   // Simple rate limit check
@@ -76,28 +81,52 @@ class HttpBridge {
   }
 
   _scopeAppId (driveKeyHex, appId) {
-    return `${driveKeyHex}:${appId}`
+    const digest = crypto.createHash('sha256')
+      .update(`${driveKeyHex}:${appId}`)
+      .digest('hex')
+    return `app_${digest.slice(0, 32)}`
   }
 
-  _requireToken (req, res, urlObj) {
-    const rawToken = req.headers['x-pear-token']
-    let token = Array.isArray(rawToken) ? rawToken[0] : rawToken
-    // EventSource cannot set custom headers, so the SSE endpoint accepts
-    // the same in-memory capability token as a query parameter.
-    //
-    // TRADEOFF: a token in the query string can leak into access logs,
-    // browser history, and Referer headers. We accept this only because the
-    // tokens here are (a) in-memory only — never persisted to disk, dropped
-    // on worklet restart; (b) origin-scoped — an `origin` token is rejected
-    // unless the request's Origin header matches the issuing origin (see
-    // below), so a leaked token cannot be replayed from another page; and
-    // (c) short-lived — issued per pear.session() and revoked on teardown.
-    // The proper fix is a one-time SSE ticket (header-set token exchanged
-    // for a single-use stream id), which the EventSource handshake in
-    // hyper-proxy would have to mint — tracked as a cross-file follow-up.
-    if (!token && urlObj && urlObj.searchParams) {
-      token = urlObj.searchParams.get('token') || null
+  _requireOriginMatch (entry, req, res) {
+    if (entry.kind === 'origin' && entry.origin) {
+      const reqOrigin = req.headers.origin
+      // WKWebView always supplies Origin on cross-origin localhost
+      // fetches. Same-origin same-scheme fetches MAY omit it (a regular
+      // <https> page fetching localhost is by definition cross-origin
+      // so Origin will be set).
+      if (typeof reqOrigin !== 'string' || reqOrigin !== entry.origin) {
+        this._jsonError(res,
+          `Origin mismatch — token issued for ${entry.origin}, request from ${reqOrigin || '(none)'}`,
+          403)
+        return false
+      }
     }
+    return true
+  }
+
+  allowsSseTicketCors (req, urlObj) {
+    if (!urlObj || urlObj.pathname !== '/api/swarm/events') return false
+    const origin = req && req.headers ? req.headers.origin : null
+    if (typeof origin !== 'string') return false
+
+    const channelId = urlObj.searchParams.get('channelId')
+    const ticket = urlObj.searchParams.get('ticket')
+    if (!channelId || !ticket) return false
+
+    this._pruneSseTickets()
+    const entry = this._sseTickets.get(ticket)
+    if (!entry) return false
+    if (entry.channelId !== channelId) return false
+
+    // Only origin-scoped tickets can authorize non-loopback CORS reflection.
+    // Drive-scoped tickets are for loopback pages, where CORS is already same
+    // origin and a leaked ticket must not open reads to arbitrary HTTPS pages.
+    return entry.kind === 'origin' && entry.origin === origin
+  }
+
+  _requireToken (req, res) {
+    const rawToken = req.headers['x-pear-token']
+    const token = Array.isArray(rawToken) ? rawToken[0] : rawToken
     const entry = this._validateToken(token)
     if (!entry) {
       this._jsonError(res, 'Unauthorized', 401)
@@ -113,20 +142,66 @@ class HttpBridge {
     // require the request's Origin header to match the token's recorded
     // origin. This prevents a malicious page from stealing another site's
     // token and replaying it under its own origin.
-    if (entry.kind === 'origin' && entry.origin) {
-      const reqOrigin = req.headers.origin
-      // WKWebView always supplies Origin on cross-origin localhost
-      // fetches. Same-origin same-scheme fetches MAY omit it (a regular
-      // <https> page fetching localhost is by definition cross-origin
-      // so Origin will be set).
-      if (typeof reqOrigin !== 'string' || reqOrigin !== entry.origin) {
-        this._jsonError(res,
-          `Origin mismatch — token issued for ${entry.origin}, request from ${reqOrigin || '(none)'}`,
-          403)
-        return null
-      }
-    }
+    if (!this._requireOriginMatch(entry, req, res)) return null
     return { driveKeyHex: entry.driveKeyHex, token, origin: entry.origin, kind: entry.kind }
+  }
+
+  _pruneSseTickets (now = Date.now()) {
+    for (const [ticket, entry] of this._sseTickets) {
+      if (entry.expiresAt <= now) this._sseTickets.delete(ticket)
+    }
+    while (this._sseTickets.size > this._maxSseTickets) {
+      const oldest = this._sseTickets.keys().next().value
+      if (!oldest) break
+      this._sseTickets.delete(oldest)
+    }
+  }
+
+  _mintSseTicket (auth, channelId) {
+    const now = Date.now()
+    this._pruneSseTickets(now)
+    let ticket
+    do {
+      ticket = crypto.randomBytes(32).toString('hex')
+    } while (this._sseTickets.has(ticket))
+    const expiresAt = now + this._sseTicketTtlMs
+    this._sseTickets.set(ticket, {
+      driveKeyHex: auth.driveKeyHex,
+      origin: auth.origin,
+      kind: auth.kind,
+      channelId,
+      expiresAt
+    })
+    return { ticket, expiresInMs: this._sseTicketTtlMs }
+  }
+
+  _consumeSseTicket (req, res, urlObj, channelId) {
+    const ticket = urlObj.searchParams.get('ticket')
+    if (!ticket) {
+      this._jsonError(res, 'SSE ticket required', 401)
+      return null
+    }
+    const entry = this._sseTickets.get(ticket)
+    if (!entry) {
+      this._jsonError(res, 'Invalid SSE ticket', 401)
+      return null
+    }
+    this._sseTickets.delete(ticket)
+    if (entry.expiresAt <= Date.now()) {
+      this._jsonError(res, 'Expired SSE ticket', 401)
+      return null
+    }
+    if (entry.channelId !== channelId) {
+      this._jsonError(res, 'SSE ticket channel mismatch', 403)
+      return null
+    }
+    if (!this._requireOriginMatch(entry, req, res)) return null
+    return {
+      driveKeyHex: entry.driveKeyHex,
+      token: ticket,
+      origin: entry.origin,
+      kind: entry.kind
+    }
   }
 
   /**
@@ -264,7 +339,7 @@ class HttpBridge {
           lte: url.searchParams.get('lte') || undefined,
           lt: url.searchParams.get('lt') || undefined,
           reverse: url.searchParams.get('reverse') === '1' || url.searchParams.get('reverse') === 'true',
-          limit: parseInt(url.searchParams.get('limit') || '100') || 100,
+          limit: parseInt(url.searchParams.get('limit') || '100') || 100
         }
         const scopedAppId = this._scopeAppId(auth.driveKeyHex, appId)
         const result = await this._bridge.range(scopedAppId, opts)
@@ -307,13 +382,12 @@ class HttpBridge {
         // different pubkeys for the same user — privacy by default.
         let appPubkey = null
         if (this._identity) {
-          try { appPubkey = this._identity.getAppKeypair(auth.driveKeyHex).publicKey.toString('hex') }
-          catch { /* demo mode */ }
+          try { appPubkey = this._identity.getAppKeypair(auth.driveKeyHex).publicKey.toString('hex') } catch { /* demo mode */ }
         }
         return this._json(res, {
-          publicKey: appPubkey,           // per-app sub-key
+          publicKey: appPubkey, // per-app sub-key
           driveKey: auth.driveKeyHex,
-          algorithm: 'ed25519',
+          algorithm: 'ed25519'
         })
       }
 
@@ -357,7 +431,7 @@ class HttpBridge {
         const reason = typeof body.reason === 'string' ? body.reason.slice(0, 512) : null
         try {
           const attestation = await this._requestLogin({
-            driveKeyHex: auth.driveKeyHex, scopes, appName, reason,
+            driveKeyHex: auth.driveKeyHex, scopes, appName, reason
           })
           // Attach the visible profile fields the app is allowed to see.
           let profileFields = null
@@ -387,7 +461,7 @@ class HttpBridge {
           appPubkey,
           scopes: grant.scopes,
           expiresAt: grant.expiresAt,
-          profile: profileFields,
+          profile: profileFields
         })
       }
 
@@ -476,49 +550,12 @@ class HttpBridge {
         if (!this._swarmBridge) {
           return this._jsonError(res, 'swarm bridge not available', 503)
         }
-        const auth = this._requireToken(req, res, url)
-        if (!auth) return true
-
-        if (req.method === 'POST' && path === '/api/swarm/join') {
-          try {
-            const result = await this._swarmBridge.join({
-              driveKeyHex: auth.driveKeyHex,
-              appName: body?.appName || null,
-              reason: body?.reason || null,
-              topicHex: body?.topicHex || null,
-              subtopic: body?.subtopic === undefined ? null : body.subtopic,
-              protocol: body?.protocol || 'pear.swarm.v1',
-              version: body?.version || 1,
-              server: !!body?.server,
-              client: body?.client !== false
-            })
-            return this._json(res, result)
-          } catch (err) {
-            return this._jsonError(res, err.message, 400)
-          }
-        }
-
-        if (req.method === 'POST' && path === '/api/swarm/send') {
-          try {
-            this._swarmBridge.send(body?.channelId, body?.peerId, body?.data)
-            return this._json(res, { ok: true })
-          } catch (err) {
-            return this._jsonError(res, err.message, 400)
-          }
-        }
-
-        if (req.method === 'POST' && path === '/api/swarm/leave') {
-          try {
-            await this._swarmBridge.leave(body?.channelId)
-            return this._json(res, { ok: true })
-          } catch (err) {
-            return this._jsonError(res, err.message, 400)
-          }
-        }
 
         if (req.method === 'GET' && path === '/api/swarm/events') {
           const channelId = url.searchParams.get('channelId')
           if (!channelId) return this._jsonError(res, 'channelId required', 400)
+          const auth = this._consumeSseTicket(req, res, url, channelId)
+          if (!auth) return true
           res.statusCode = 200
           res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
           res.setHeader('Cache-Control', 'no-cache, no-transform')
@@ -642,6 +679,57 @@ class HttpBridge {
           return true
         }
 
+        const auth = this._requireToken(req, res)
+        if (!auth) return true
+
+        if (req.method === 'POST' && path === '/api/swarm/ticket') {
+          const channelId = body?.channelId
+          if (typeof channelId !== 'string' || channelId.length === 0) {
+            return this._jsonError(res, 'channelId required', 400)
+          }
+          if (channelId.length > 256) {
+            return this._jsonError(res, 'channelId too long', 400)
+          }
+          return this._json(res, this._mintSseTicket(auth, channelId))
+        }
+
+        if (req.method === 'POST' && path === '/api/swarm/join') {
+          try {
+            const result = await this._swarmBridge.join({
+              driveKeyHex: auth.driveKeyHex,
+              appName: body?.appName || null,
+              reason: body?.reason || null,
+              topicHex: body?.topicHex || null,
+              subtopic: body?.subtopic === undefined ? null : body.subtopic,
+              protocol: body?.protocol || 'pear.swarm.v1',
+              version: body?.version || 1,
+              server: !!body?.server,
+              client: body?.client !== false
+            })
+            return this._json(res, result)
+          } catch (err) {
+            return this._jsonError(res, err.message, 400)
+          }
+        }
+
+        if (req.method === 'POST' && path === '/api/swarm/send') {
+          try {
+            this._swarmBridge.send(body?.channelId, body?.peerId, body?.data)
+            return this._json(res, { ok: true })
+          } catch (err) {
+            return this._jsonError(res, err.message, 400)
+          }
+        }
+
+        if (req.method === 'POST' && path === '/api/swarm/leave') {
+          try {
+            await this._swarmBridge.leave(body?.channelId)
+            return this._json(res, { ok: true })
+          } catch (err) {
+            return this._jsonError(res, err.message, 400)
+          }
+        }
+
         return this._jsonError(res, 'Unknown swarm endpoint', 404)
       }
 
@@ -663,7 +751,6 @@ class HttpBridge {
       res.statusCode = 404
       res.end(JSON.stringify({ error: 'Unknown API endpoint: ' + path }))
       return true
-
     } catch (err) {
       res.statusCode = 500
       res.end(JSON.stringify({ error: err.message }))
@@ -701,7 +788,8 @@ class HttpBridge {
           const parsed = data ? JSON.parse(data) : {}
           // SECURITY: Prevent prototype pollution
           if (parsed && typeof parsed === 'object') {
-            delete parsed.__proto__
+            const protoKey = '__proto__'
+            delete parsed[protoKey]
             delete parsed.constructor
           }
           resolve(parsed)

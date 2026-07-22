@@ -53,7 +53,11 @@ import kotlinx.coroutines.delay
  * simple for now: search bar + synced bookmark quick access.
  */
 @Composable
-fun HomeScreen(onNavigate: (String) -> Unit, status: PearRpcStatus?) {
+fun HomeScreen(
+    onNavigate: (String) -> Unit,
+    status: PearRpcStatus?,
+    onOpenQR: (() -> Unit)? = null,
+) {
     var input by remember { mutableStateOf("") }
     var bookmarks by remember { mutableStateOf<List<PearBookmark>>(emptyList()) }
     var bookmarksLoading by remember { mutableStateOf(false) }
@@ -92,10 +96,13 @@ fun HomeScreen(onNavigate: (String) -> Unit, status: PearRpcStatus?) {
     }
 
     fun go() {
-        var url = input.trim()
+        // Mission B3: pass the raw input through — CMD_NAVIGATE resolves
+        // bare-word names (petnames / N5 registry / curated aliases), bare
+        // drive keys (→ hyper://), and bare clearnet hosts (→ https proxy)
+        // itself. The old shell prefixed everything non-URL with hyper://,
+        // which made name resolution unreachable from the URL bar.
+        val url = input.trim()
         if (url.isEmpty()) return
-        if (Regex("^[a-f0-9]{52,64}$", RegexOption.IGNORE_CASE).matches(url)) url = "hyper://$url"
-        else if (!url.contains("://")) url = "hyper://$url"
         input = ""
         onNavigate(url)
     }
@@ -154,6 +161,9 @@ fun HomeScreen(onNavigate: (String) -> Unit, status: PearRpcStatus?) {
             Box(
                 Modifier
                     .background(PearColors.SurfaceElevated, RoundedCornerShape(8.dp))
+                    .then(
+                        if (onOpenQR != null) Modifier.clickable { onOpenQR() } else Modifier,
+                    )
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
                 Text("QR", color = PearColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)

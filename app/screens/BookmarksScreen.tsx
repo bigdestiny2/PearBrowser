@@ -36,7 +36,7 @@ export function BookmarksScreen({ onOpen, onBack }: Props) {
             <Text style={styles.emptyIcon}>*</Text>
             <Text style={styles.emptyTitle}>No bookmarks yet</Text>
             <Text style={styles.emptyText}>
-              Bookmark sites while browsing by tapping the share button.
+              Save the current site from Page actions while browsing.
             </Text>
           </View>
         )}

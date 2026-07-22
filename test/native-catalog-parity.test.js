@@ -118,3 +118,57 @@ test('Android native Browse screen wires pear.share to the system share sheet', 
     'Intent.createChooser(shareIntent, "Share link")'
   ])
 })
+
+test('native Browse screens expose find-in-page and reload controls', () => {
+  const ios = read('ios-native/PearBrowser/Sources/UI/Screens/BrowseScreen.swift')
+  const android = read('android-native/app/src/main/java/com/pearbrowser/app/ui/screens/BrowseScreen.kt')
+
+  includesAll(ios, [
+    'FindInPageBar(',
+    'WKFindConfiguration()',
+    'configuration.wraps = true',
+    'webView.find(command.query',
+    'webView.reload()',
+    '.accessibilityLabel("Find in page")',
+    '.accessibilityLabel("Reload page")'
+  ])
+
+  includesAll(android, [
+    'FindInPageBar(',
+    'findAllAsync(query)',
+    'findNext(false)',
+    'findNext(true)',
+    'clearMatches()',
+    'browserWebView?.reload()',
+    'Text("Find in Page")',
+    'Text("Reload"'
+  ])
+})
+
+test('iOS native app routes only hyper deep links into BrowseScreen', () => {
+  const app = read('ios-native/PearBrowser/Sources/App/PearBrowserApp.swift')
+  const main = read('ios-native/PearBrowser/Sources/App/MainView.swift')
+  const plist = read('ios-native/PearBrowser/Info.plist')
+
+  includesAll(app, [
+    '.onOpenURL',
+    'postHyperURL(url)',
+    'url.scheme?.lowercased() == "hyper"',
+    '.pearBrowserOpenHyperURL',
+    '#if DEBUG',
+    '--open-hyper-url',
+    'postDebugLaunchHyperURLIfNeeded()'
+  ])
+
+  includesAll(main, [
+    '.onReceive(NotificationCenter.default.publisher(for: .pearBrowserOpenHyperURL))',
+    'url.scheme?.lowercased() == "hyper"',
+    'navigateTo(url.absoluteString)'
+  ])
+
+  includesAll(plist, [
+    '<key>CFBundleURLTypes</key>',
+    '<string>com.pearbrowser.app.hyper</string>',
+    '<string>hyper</string>'
+  ])
+})

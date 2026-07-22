@@ -1,5 +1,10 @@
 # PearBrowser — Design Document
 
+> Next-release visual language: Pear UI Light now lives in `docs/PEAR_UI_STYLE.md`
+> and the workspace-level `design-system/` tokens. This document still captures
+> the original mobile IA and product thinking; treat the dark palette below as
+> historical unless a screen explicitly remains on the legacy dark theme.
+
 ## Product Vision
 
 PearBrowser is an iOS app that makes the decentralized web feel as polished as the regular one. Users discover P2P apps, build personal websites, and browse hyper:// content — all from their phone as a real peer in the Holepunch network.
@@ -186,9 +191,9 @@ Hex keys are the enemy of mobile UX. Strategy:
 6. **Deep links** — `pearbrowser://hyper/KEY` opens the app
 7. **Share sheet** — "Share" generates QR + copyable key + share via iOS
 
-## Color Palette
+## Legacy Color Palette
 
-Dark theme (matches Pear/Holepunch aesthetic):
+Historical dark theme (matches the first mobile shell):
 
 ```
 Background:       #0a0a0a

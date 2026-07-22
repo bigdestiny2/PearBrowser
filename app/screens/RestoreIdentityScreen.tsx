@@ -1,5 +1,5 @@
 /**
- * RestoreIdentityScreen — restore an identity from a 12-word phrase.
+ * RestoreIdentityScreen — restore an identity from a BIP-39 phrase.
  *
  * Phase 1 ticket 3. Warns that the current identity and any local data
  * tied to it will be effectively replaced — data under the current seed
@@ -29,7 +29,7 @@ export function RestoreIdentityScreen({ rpc, onBack, onRestored }: Props) {
   const handleCheck = useCallback(async (value: string) => {
     setInput(value)
     setValid(null)
-    // Only validate when we have 12+ whitespace-separated words
+    // Fresh identities are 24 words; legacy 12-word BIP-39 phrases are accepted.
     const words = value.trim().split(/\s+/).filter(Boolean)
     if (words.length !== 12 && words.length !== 24) return
     if (!rpc) return
@@ -50,7 +50,7 @@ export function RestoreIdentityScreen({ rpc, onBack, onRestored }: Props) {
       return
     }
     if (!valid) {
-      Alert.alert('Invalid phrase', 'Check that every word is spelled correctly and the phrase is 12 or 24 words.')
+      Alert.alert('Invalid phrase', 'Check that every word is spelled correctly and the phrase is 24 words, or a legacy 12-word phrase.')
       return
     }
     Alert.alert(
@@ -92,7 +92,7 @@ export function RestoreIdentityScreen({ rpc, onBack, onRestored }: Props) {
 
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
         <Text style={styles.hint}>
-          Enter your 12-word backup phrase. Words separated by single spaces. Case doesn't matter.
+          Enter your 24-word backup phrase. Legacy 12-word BIP-39 phrases are also accepted.
         </Text>
 
         <TextInput
@@ -119,7 +119,7 @@ export function RestoreIdentityScreen({ rpc, onBack, onRestored }: Props) {
           )}
           {!validating && valid === null && input.length > 0 && (
             <Text style={[styles.status, { color: colors.textMuted }]}>
-              Enter 12 or 24 words to validate
+              Enter 24 words, or a legacy 12-word phrase, to validate
             </Text>
           )}
         </View>

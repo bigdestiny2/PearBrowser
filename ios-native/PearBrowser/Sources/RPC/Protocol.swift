@@ -57,6 +57,8 @@ enum Cmd {
     static let IDENTITY_ROTATE = 72
     static let IDENTITY_VALIDATE_PHRASE = 73
     static let IDENTITY_SIGN = 74
+    static let DEVICE_LINK_CREATE_INVITE = 76
+    static let DEVICE_LINK_JOIN = 77
 
     // Profile + login grants (Identity Plan Phases B + C + F)
     static let PROFILE_GET = 80

@@ -219,6 +219,18 @@ class PearWorkletService : Service() {
             })
         }
 
+        // Federated-search enrichment (Mission B3): the whole queryId-correlated
+        // payload rides one broadcast, exactly like the catalog update above —
+        // the Search screen filters by queryId so a stale enrichment never
+        // overwrites fresher results (backend/search-handler.js).
+        client.on(Evt.SEARCH_FEDERATED) { payload ->
+            val obj = payload as? JsonObject ?: return@on
+            sendBroadcast(Intent(PearWorkletEvents.ACTION_SEARCH_FEDERATED).apply {
+                setPackage(packageName)
+                putExtra(PearWorkletEvents.EXTRA_SEARCH_PAYLOAD, obj.toString())
+            })
+        }
+
         client.on(Evt.LOGIN_REQUEST) { payload ->
             val obj = payload as? JsonObject ?: return@on
             val requestId = obj.string("requestId") ?: return@on

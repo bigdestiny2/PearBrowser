@@ -54,7 +54,7 @@ struct BookmarksScreen: View {
         VStack(spacing: 12) {
             Text("*").font(.system(size: 36)).foregroundStyle(PearColors.accent)
             Text("No bookmarks yet").font(.system(size: 18, weight: .semibold)).foregroundStyle(PearColors.textPrimary)
-            Text("Bookmark sites while browsing by tapping the share button.")
+            Text("Save the current site from Page actions while browsing.")
                 .font(.system(size: 13))
                 .foregroundStyle(PearColors.textSecondary)
                 .multilineTextAlignment(.center)

@@ -1,0 +1,36 @@
+{
+  "name": "Pear Plugins",
+  "description": "The browser-curated plugin catalogue. Publish this directory as a Hyperdrive (scripts/publish-and-pin.js catalogues/pear-plugins --name pear-plugins-catalog) and subscribers hot-load it from Settings. Entries with an empty driveKey are placeholders: publish the plugin drive first, paste its key here, bump nothing else, and re-publish this catalogue.",
+  "plugins": [
+    {
+      "id": "anongpt",
+      "kind": "app",
+      "driveKey": "e3cf8b6fae6260608cbfcdf6b82d985c65f5ad1b9c85e777e296e7c521213abc",
+      "name": "anonGPT",
+      "description": "Private AI chat as a P2P app. Uses the window.pear.anongpt bridge; PearBrowser verifies the app's no-prompt-storage privacy manifest before the bridge is injected, and only on this drive.",
+      "author": "anonGPT",
+      "capabilities": ["pear.anongpt.infer"],
+      "verified": true
+    },
+    {
+      "id": "pear-dark-reader",
+      "kind": "plugin",
+      "driveKey": "bbde8330169798dc5e0d08f8909b407cea2f8fec7e31d6241f479c714ad42082",
+      "name": "Pear Dark Reader",
+      "description": "Dark, high-contrast theme for every hyper:// page. Styles only — no scripts, no network rules. Source: examples/plugins/dark-reader.",
+      "author": "PearBrowser examples",
+      "capabilities": ["pear.content.styles"],
+      "verified": true
+    },
+    {
+      "id": "peerit-enhancer",
+      "kind": "plugin",
+      "driveKey": "1b21d8a6960bdcdfb76da94b80dae0d1a28247516de87e6839ea2f87bb609e10",
+      "name": "peerit Enhancer",
+      "description": "Compact rows, reading-width cap, and j/k keyboard navigation for peerit. Scoped to the peerit drive only. Source: examples/plugins/peerit-enhancer.",
+      "author": "PearBrowser examples",
+      "capabilities": ["pear.content.styles", "pear.content.scripts", "pear.net.filter"],
+      "verified": true
+    }
+  ]
+}

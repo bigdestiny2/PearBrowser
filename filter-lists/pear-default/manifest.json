@@ -1,0 +1,8 @@
+{
+  "name": "pear-default",
+  "version": "1",
+  "filters": "/filters.txt",
+  "sha256": "40894dd043fd10c10775fd190957d96468cb6b442d36059730e924e2ade6b07c",
+  "rules": 64,
+  "builtAt": "2026-07-16T08:57:14.950Z"
+}

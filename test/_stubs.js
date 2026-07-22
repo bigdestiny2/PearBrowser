@@ -16,9 +16,13 @@ const stubDir = path.join(__dirname, '.stubs')
 // created the dir between our check and this call — safe under parallel runs.
 fs.mkdirSync(stubDir, { recursive: true })
 
+const HTTP_STUB = 'module.exports = { request: () => ({ on: () => {}, write: () => {}, end: () => {}, destroy: () => {} }), get: () => ({ on: () => {}, destroy: () => {} }) }'
+
 const STUB_SOURCES = {
-  'bare-http1': 'module.exports = { request: () => ({ end: () => {} }) }',
+  'bare-http1': HTTP_STUB,
+  'bare-https': HTTP_STUB,
   'bare-crypto': 'module.exports = require("node:crypto")',
+  'bare-dns': 'module.exports = { ADDRCONFIG: 0, V4MAPPED: 0, lookup: (host, opts, cb) => { if (typeof opts === "function") { cb = opts; opts = {} } const family = opts && opts.family === 6 ? 6 : 4; const address = family === 6 ? "::1" : "127.0.0.1"; if (cb) return process.nextTick(() => cb(null, address, family)); return Promise.resolve({ address, family }) } }',
   'bare-fs': 'module.exports = require("node:fs")',
   'bare-path': 'module.exports = require("node:path")',
   // Real b4a works fine under plain Node — just forward to the real

@@ -1,0 +1,81 @@
+! PearBrowser default shield list (pear-default)
+! Published as a Hyperdrive; see filter-lists/README.md.
+! Syntax: Content Shield subset of Adblock Plus + hosts lines
+! (||host^, substrings, @@ exceptions, ##selector, host##selector,
+!  ##+js(scriptlet, args), 0.0.0.0 host).
+
+! --- Core ad networks ---
+||doubleclick.net^
+||googlesyndication.com^
+||googleadservices.com^
+||adservice.google.com^
+||amazon-adsystem.com^
+||adsystem.com^
+||adnxs.com^
+||rubiconproject.com^
+||pubmatic.com^
+||openx.net^
+||criteo.com^
+||criteo.net^
+||taboola.com^
+||outbrain.com^
+||moatads.com^
+||adroll.com^
+||adform.net^
+||smartadserver.com^
+||yieldmo.com^
+||sharethrough.com^
+||spotxchange.com^
+||teads.tv^
+||media.net^
+||bidswitch.net^
+||casalemedia.com^
+||33across.com^
+||gumgum.com^
+||sonobi.com^
+||triplelift.com^
+
+! --- Analytics and session recording ---
+||googletagmanager.com^
+||google-analytics.com^
+||hotjar.com^
+||mixpanel.com^
+||segment.io^
+||segment.com/v1^
+||fullstory.com^
+||mouseflow.com^
+||clarity.ms^
+||chartbeat.com^
+||scorecardresearch.com^
+||quantserve.com^
+||amplitude.com/2/httpapi^
+||newrelic.com/nr-data^
+||mc.yandex.ru^
+||yandex.ru/metrika^
+||matomo.cloud^
+||plausible.io/api/event^
+
+! --- Social trackers ---
+||connect.facebook.net^
+||facebook.com/tr^
+||ads-twitter.com^
+||static.ads-twitter.com^
+||analytics.tiktok.com^
+||snap.licdn.com^
+||px.ads.linkedin.com^
+
+! --- Generic path rules ---
+/adsbygoogle.
+/pagead/js/
+/ads/banner/
+/pixel/track
+
+! --- Cosmetic ---
+##.adsbygoogle
+##.ad-banner
+##.sponsored-content
+##[id^="google_ads_iframe"]
+##iframe[src*="doubleclick.net"]
+
+! --- Exceptions (first-party widgets that break without these) ---
+@@||maps.googleapis.com^

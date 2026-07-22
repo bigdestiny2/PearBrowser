@@ -1,5 +1,5 @@
 /**
- * BackupPhraseScreen — display the user's 12-word BIP-39 seed phrase.
+ * BackupPhraseScreen — display the user's 24-word BIP-39 seed phrase.
  *
  * Phase 1 ticket 3 of the Holepunch alignment plan.
  * Matches the Keet-style identity backup flow.
@@ -68,7 +68,7 @@ export function BackupPhraseScreen({ rpc, onBack }: Props) {
         <View style={styles.warningCard}>
           <Text style={styles.warningTitle}>Write this down. Keep it private.</Text>
           <Text style={styles.warningText}>
-            This 12-word phrase is the master key to your PearBrowser identity. Anyone with these
+            This 24-word phrase is the master key to your PearBrowser identity. Anyone with these
             words can impersonate you on the P2P network and read any synced data.
           </Text>
           <Text style={styles.warningText}>
