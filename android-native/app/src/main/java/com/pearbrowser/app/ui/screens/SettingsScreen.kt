@@ -1803,7 +1803,7 @@ private fun SettingsTextField(
         ),
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.None,
-            autoCorrect = false,
+            autoCorrectEnabled = false,
         ),
         colors = TextFieldDefaults.colors(
             focusedContainerColor = PearColors.SurfaceElevated,

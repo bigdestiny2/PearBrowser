@@ -589,7 +589,7 @@ private fun EditorTextField(
         ),
         keyboardOptions = KeyboardOptions(
             capitalization = if (noCapitalize) KeyboardCapitalization.None else KeyboardCapitalization.Sentences,
-            autoCorrect = false,
+            autoCorrectEnabled = false,
         ),
         colors = TextFieldDefaults.colors(
             focusedContainerColor = PearColors.Surface,

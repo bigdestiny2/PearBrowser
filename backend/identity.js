@@ -138,7 +138,7 @@ class Identity {
     return entropyToMnemonic(this._entropy)
   }
 
-  /** Public key derived from seed (placeholder — actual pubkey comes from Corestore). */
+  /** Corestore primary key, with a deterministic legacy fallback for older stores. */
   getPublicKeyHex (corestore) {
     if (corestore && corestore.primaryKey) {
       return b4a.toString(corestore.primaryKey, 'hex')

@@ -9,9 +9,12 @@ App identity: `com.pearbrowser.app` · version `0.1.0` (bump in `app.json`).
 
 ## Android
 
-`android/app/build.gradle` signs the release build from four environment
-variables. If any is unset it silently falls back to the **debug** key, so set
-all four. `scripts/release-preflight.js` checks these exact names.
+Both `android/app/build.gradle` (generated Expo shell) and
+`android-native/app/build.gradle.kts` (native Kotlin shell) use the same four
+environment variables. If any is unset, the generated shell falls back to the
+**debug** key and the native shell leaves the release artifact unsigned, so set
+all four. `scripts/release-preflight.js` checks the values and guards the native
+Gradle contract against naming drift.
 
 ### 1. Generate the upload/release keystore (you hold this — back it up)
 
@@ -107,3 +110,8 @@ node scripts/release-preflight.js
 Green when: backend bundles present, BareKit native worklets present, Android
 signing env set (the four `PEARBROWSER_RELEASE_*` vars above), iOS team set, EAS
 project identity filled, and store-validation markers recorded.
+
+For GitHub Actions, configure the matching repository secrets plus
+`PEARBROWSER_RELEASE_KEYSTORE_BASE64`, containing the base64-encoded keystore.
+The workflow materializes it under the runner's temporary directory and exports
+the absolute path as `PEARBROWSER_RELEASE_STORE_FILE`.

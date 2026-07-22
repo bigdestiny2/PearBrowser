@@ -4,9 +4,9 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
-// These must match the names android/app/build.gradle actually reads to sign
-// the release build, or a "configured" preflight could still produce a build
-// signed with the debug key.
+// These names are shared by the generated Expo shell, the native Kotlin shell,
+// CI, and release documentation. A drift between any of them can turn a green
+// preflight into an unsigned or debug-signed release artifact.
 const ANDROID_SIGNING_ENV = [
   'PEARBROWSER_RELEASE_STORE_FILE',
   'PEARBROWSER_RELEASE_STORE_PASSWORD',
@@ -106,6 +106,13 @@ function collectPreflight (root = process.cwd(), options = {}) {
     add('fail', 'android-gradle', 'Android Gradle config readable', err.message)
   }
 
+  const missingSigningVars = ANDROID_SIGNING_ENV.filter((name) => !gradle.includes(`environmentVariable("${name}")`))
+  if (gradle && missingSigningVars.length === 0) {
+    add('pass', 'android-signing-contract', 'Android native signing contract is aligned', ANDROID_SIGNING_ENV.join(', '))
+  } else {
+    add('fail', 'android-signing-contract', 'Android native signing contract is aligned', `missing ${missingSigningVars.join(', ') || 'Gradle configuration'}`, 'Make android-native/app/build.gradle.kts consume the canonical PEARBROWSER_RELEASE_* signing variables used by CI and the generated Expo shell.')
+  }
+
   try {
     project = readText(root, 'ios-native/project.yml')
     add('pass', 'ios-project', 'iOS XcodeGen config readable', 'ios-native/project.yml')
@@ -188,7 +195,7 @@ function collectPreflight (root = process.cwd(), options = {}) {
   const missingAndroidSigning = ANDROID_SIGNING_ENV.filter((name) => !String(env[name] || '').trim())
   const androidKeystore = String(env.PEARBROWSER_RELEASE_STORE_FILE || '').trim()
   if (missingAndroidSigning.length > 0) {
-    add('fail', 'android-release-signing', 'Android production signing env is configured', `missing ${missingAndroidSigning.join(', ')}`, 'Set PEARBROWSER_RELEASE_STORE_FILE, PEARBROWSER_RELEASE_STORE_PASSWORD, PEARBROWSER_RELEASE_KEY_ALIAS, and PEARBROWSER_RELEASE_KEY_PASSWORD for the real release keystore (the names android/app/build.gradle reads).')
+    add('fail', 'android-release-signing', 'Android production signing env is configured', `missing ${missingAndroidSigning.join(', ')}`, 'Set PEARBROWSER_RELEASE_STORE_FILE, PEARBROWSER_RELEASE_STORE_PASSWORD, PEARBROWSER_RELEASE_KEY_ALIAS, and PEARBROWSER_RELEASE_KEY_PASSWORD for the real release keystore used by both Android shells.')
   } else if (!path.isAbsolute(androidKeystore)) {
     add('fail', 'android-release-signing', 'Android production signing env is configured', 'PEARBROWSER_RELEASE_STORE_FILE must be an absolute path', 'Use an absolute path so Gradle signs the intended keystore.')
   } else if (!fs.existsSync(androidKeystore)) {

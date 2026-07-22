@@ -1,5 +1,8 @@
 # PearBrowser Test Command Matrix - 2026-06-23
 
+> Historical command snapshot. Current commands and results are recorded in
+> [RELEASE_EVIDENCE_2026-07-22.md](RELEASE_EVIDENCE_2026-07-22.md).
+
 Purpose: give future agents exact commands, scopes, and exclusions for
 PearBrowser. Source status is summarized in
 `docs/CURRENT_STATUS_AUDIT_2026-06-23.md`; release evidence is summarized in

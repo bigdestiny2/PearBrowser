@@ -461,7 +461,7 @@ private fun IdentityTextField(
         ),
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.None,
-            autoCorrect = false,
+            autoCorrectEnabled = false,
         ),
         colors = TextFieldDefaults.colors(
             focusedContainerColor = PearColors.SurfaceElevated,

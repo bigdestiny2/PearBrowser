@@ -2,11 +2,12 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-DESTINATION=${IOS_SIMULATOR_DESTINATION:-"generic/platform=iOS Simulator"}
+SDK=${IOS_SDK:-iphonesimulator}
+DESTINATION=${IOS_DESTINATION:-${IOS_SIMULATOR_DESTINATION:-"generic/platform=iOS Simulator"}}
 DERIVED_DATA_PATH=${DERIVED_DATA_PATH:-"/private/tmp/pearbrowser-generated-ios-release-dd"}
 HERMES_CLI_PATH_VALUE=${HERMES_CLI_PATH:-"$ROOT/ios/Pods/hermes-engine/destroot/bin/hermesc"}
 
-if [ ! -d "$ROOT/ios/PearBrowser.xcworkspace" ]; then
+if [ ! -f "$ROOT/ios/PearBrowser.xcworkspace/contents.xcworkspacedata" ]; then
   echo "Generated Expo iOS workspace not found. Run: npx expo prebuild --platform ios --no-install && cd ios && pod install" >&2
   exit 1
 fi
@@ -20,7 +21,7 @@ exec xcodebuild \
   -workspace "$ROOT/ios/PearBrowser.xcworkspace" \
   -scheme PearBrowser \
   -configuration Release \
-  -sdk iphonesimulator \
+  -sdk "$SDK" \
   -destination "$DESTINATION" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
   CODE_SIGNING_ALLOWED="${CODE_SIGNING_ALLOWED:-NO}" \

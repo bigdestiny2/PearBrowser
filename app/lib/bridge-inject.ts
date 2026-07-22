@@ -24,5 +24,5 @@ export function createBridgeScript(port: number, apiToken = ''): string {
   return create({ port, apiToken })
 }
 
-/** Legacy placeholder export (always returns an uninitialized script). */
+/** @deprecated Compatibility constant; use createBridgeScript with live connection values. */
 export const BRIDGE_INJECT_JS: string = createBridgeScript(0, '')

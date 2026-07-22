@@ -48,7 +48,7 @@ than half-built. The standout follow-up — **full Protomux multiplexing for
 `swarm.v1`** (many logical channels muxed over one connection per peer, framed by
 `(protocol, topic)` — the primitive hypercore replication muxes over) — is now
 **implemented**, so the browser handles concurrent channels the way a real one
-handles concurrent connections. **88/88 tests green** (`npm test`, run
+handles concurrent connections. **566/566 tests green** (`npm test`, run
 concurrently). Details: the *Review hardening pass* in
 [`docs/HOLEPUNCH_ALIGNMENT_PLAN.md`](docs/HOLEPUNCH_ALIGNMENT_PLAN.md).
 

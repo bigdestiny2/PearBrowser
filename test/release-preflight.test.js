@@ -6,6 +6,14 @@ const path = require('node:path')
 
 const { collectPreflight } = require('../scripts/release-preflight')
 
+const REPO_ROOT = path.join(__dirname, '..')
+const CANONICAL_ANDROID_SIGNING_ENV = [
+  'PEARBROWSER_RELEASE_STORE_FILE',
+  'PEARBROWSER_RELEASE_STORE_PASSWORD',
+  'PEARBROWSER_RELEASE_KEY_ALIAS',
+  'PEARBROWSER_RELEASE_KEY_PASSWORD'
+]
+
 function write (root, rel, content) {
   const full = path.join(root, rel)
   fs.mkdirSync(path.dirname(full), { recursive: true })
@@ -43,6 +51,10 @@ function makeFixture (opts = {}) {
     }
   }, null, 2))
   write(root, 'android-native/app/build.gradle.kts', `
+val releaseKeystorePath = providers.environmentVariable("${opts.signingStoreFileEnv || 'PEARBROWSER_RELEASE_STORE_FILE'}").orNull
+val releaseStorePassword = providers.environmentVariable("PEARBROWSER_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("PEARBROWSER_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("PEARBROWSER_RELEASE_KEY_PASSWORD").orNull
 android {
     namespace = "${androidId}"
     compileSdk = 35
@@ -129,4 +141,30 @@ test('release preflight detects native identity and artifact drift', () => {
   assert.ok(ids.has('android-worklet-bundle'))
   assert.ok(ids.has('ios-barekit'))
   assert.ok(ids.has('android-barekit'))
+})
+
+test('release preflight blocks Android signing contract drift', () => {
+  const { root, keystore } = makeFixture({ signingStoreFileEnv: 'PEARBROWSER_ANDROID_KEYSTORE' })
+  const report = collectPreflight(root, { env: envFor(keystore) })
+  assert.equal(report.ok, false)
+  assert.ok(report.blockers.some((check) => check.id === 'android-signing-contract'))
+})
+
+test('Android signing names stay aligned across Gradle, CI, and release docs', () => {
+  const files = [
+    'android-native/app/build.gradle.kts',
+    '.github/workflows/mobile-release-preflight.yml',
+    'docs/RELEASE_SIGNING.md'
+  ].map((rel) => [rel, fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8')])
+
+  for (const [rel, source] of files) {
+    for (const name of CANONICAL_ANDROID_SIGNING_ENV) {
+      assert.match(source, new RegExp(name), `${rel} must use ${name}`)
+    }
+    assert.doesNotMatch(source, /PEARBROWSER_ANDROID_(?:KEYSTORE|STORE_PASSWORD|KEY_ALIAS|KEY_PASSWORD)/, `${rel} still uses the retired signing prefix`)
+  }
+
+  const workflow = files.find(([rel]) => rel.startsWith('.github/'))[1]
+  assert.match(workflow, /PEARBROWSER_RELEASE_KEYSTORE_BASE64/, 'CI must import the encoded release keystore')
+  assert.match(workflow, /echo "PEARBROWSER_RELEASE_STORE_FILE=\$keystore"/, 'CI must expose the decoded keystore at the canonical path variable')
 })
