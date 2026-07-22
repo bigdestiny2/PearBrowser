@@ -957,7 +957,7 @@ test('BrowseScreen routes hyper URLs through rpc.navigate and opens untrusted HT
   assert.equal(navigateCalls.at(-1), 'hyper://' + 'b'.repeat(64))
 })
 
-test('ExploreScreen loads an HTTP catalog, renders cards, and visits valid drive keys', async () => {
+test('ExploreScreen opens Hyperdrive rows and presents legacy Pear links as migration records', async () => {
   const harness = createReactHarness()
   const rn = createReactNativeStub()
   const visits = []
@@ -977,6 +977,7 @@ test('ExploreScreen loads an HTTP catalog, renders cards, and visits valid drive
             apps: [
               { id: 'alpha', name: 'Alpha App', description: 'First app', driveKey: keyHex },
               { id: 'pear', name: 'Pear Link', description: 'Standalone app', link: 'PEAR://keet' },
+              { id: 'native', name: 'Desktop Tool', description: 'Native app', driveKey: keyHex, generation: 3, targets: ['desktop'] },
               { id: 'bad', name: 'Broken App', description: 'No key', driveKey: 'bad' }
             ]
           }
@@ -997,7 +998,15 @@ test('ExploreScreen loads an HTTP catalog, renders cards, and visits valid drive
   findTouchableWithText(tree, 'Alpha App').props.onPress()
   assert.deepEqual(visits, ['hyper://' + keyHex])
   findTouchableWithText(tree, 'Pear Link').props.onPress()
-  assert.deepEqual(visits, ['hyper://' + keyHex, 'pear://keet'])
+  assert.deepEqual(visits, ['hyper://' + keyHex])
+  tree = harness.render(ExploreScreen, { rpc: null, onVisit: (url) => visits.push(url) })
+  assert.match(textContent(tree), /Migration required/)
+  assert.match(textContent(tree), /legacy Pear v2 app/i)
+  findTouchableWithText(tree, 'Desktop Tool').props.onPress()
+  assert.deepEqual(visits, ['hyper://' + keyHex])
+  tree = harness.render(ExploreScreen, { rpc: null, onVisit: (url) => visits.push(url) })
+  assert.match(textContent(tree), /Desktop only/)
+  assert.match(textContent(tree), /desktop v3 package/i)
 })
 
 test('SettingsScreen updates catalog, relay, privacy, cache, and identity navigation controls', async () => {

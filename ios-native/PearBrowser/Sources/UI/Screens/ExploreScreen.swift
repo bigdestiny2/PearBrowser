@@ -13,6 +13,7 @@ struct SiteInfo: Identifiable, Codable, Hashable {
     let description: String
     let driveKey: String?
     let link: String?
+    let desktopPackage: Bool
 }
 
 struct ExploreScreen: View {
@@ -61,10 +62,14 @@ struct ExploreScreen: View {
     }
 
     private func visit(_ site: SiteInfo) {
-        if let link = site.link {
+        if site.desktopPackage {
+            errorMessage = "\(site.name) is a desktop v3 package. Open this catalogue on desktop to install its verified native release."
+        } else if let link = site.link, link.lowercased().hasPrefix("hyper://") {
             onVisit(link)
         } else if let driveKey = site.driveKey {
             onVisit("hyper://\(driveKey)")
+        } else if let link = site.link, link.lowercased().hasPrefix("pear://") || link.lowercased().hasPrefix("file://") {
+            errorMessage = "\(site.name) is a legacy Pear v2 app. Migrate it to a native v3 package on desktop."
         }
     }
 
@@ -118,10 +123,19 @@ struct ExploreScreen: View {
                 name: (app["name"] as? String) ?? "Untitled",
                 description: (app["description"] as? String) ?? "",
                 driveKey: driveKey,
-                link: link
+                link: link,
+                desktopPackage: isDesktopPackage(app)
             )
         }
     }
+}
+
+private func isDesktopPackage(_ app: [String: Any]) -> Bool {
+    let generation = (app["generation"] as? Int) == 3 || (app["pearGeneration"] as? Int) == 3
+    let delivery = ((app["delivery"] as? String) ?? (app["packageType"] as? String) ?? (app["kind"] as? String) ?? "").lowercased()
+    let isPackage = generation || delivery.contains("native") || delivery.contains("desktop") || delivery.contains("package")
+    let targets = (app["platforms"] as? [String]) ?? (app["targets"] as? [String]) ?? []
+    return isPackage && targets.contains { ["darwin", "linux", "win32", "desktop"].contains($0.lowercased()) }
 }
 
 private func normalizeDriveKey(_ raw: Any?) -> String? {
@@ -139,7 +153,7 @@ private func normalizeCatalogLink(_ raw: Any?) -> String? {
     switch scheme {
     case "hyper":
         return normalizeHyperLink(trimmed)
-    case "pear", "file":
+    case "pear", "file": // Retain as a migration record; never pass to onVisit.
         return "\(scheme)://\(trimmed[schemeRange.upperBound...])"
     default:
         return nil
@@ -172,6 +186,12 @@ struct SiteCard: View {
     let site: SiteInfo
     let onVisit: () -> Void
 
+    private var actionLabel: String {
+        if site.desktopPackage { return "Desktop only" }
+        guard let link = site.link else { return "Open" }
+        return link.lowercased().hasPrefix("hyper://") ? "Open" : "Migration required"
+    }
+
     var body: some View {
         Button(action: onVisit) {
             HStack(alignment: .top, spacing: 12) {
@@ -187,7 +207,7 @@ struct SiteCard: View {
                     }
                 }
                 Spacer()
-                Text("Visit")
+                Text(actionLabel)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(PearColors.accent)
             }
