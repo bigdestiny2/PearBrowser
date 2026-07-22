@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -33,14 +34,17 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.pearbrowser.app.bridge.PearWorkletEvents
 import com.pearbrowser.app.rpc.LocalPearRpc
+import com.pearbrowser.app.rpc.PearInstalledApp
 import com.pearbrowser.app.rpc.PearRpcClient
 import com.pearbrowser.app.rpc.PearSettings
 import com.pearbrowser.app.ui.theme.PearColors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -54,20 +58,90 @@ import java.net.URL
  * catalogs are fetched via HttpURLConnection; if a relay advertises a signed
  * catalog bee, the worklet verifies and streams that P2P catalog instead.
  *
+ * Catalog entries with a driveKey can be installed (CMD_INSTALL_APP) for
+ * offline caching; installed apps open through CMD_LAUNCH_APP, which loads
+ * the app drive into the local proxy and hands back its driveKey — the app
+ * then opens in the Browse tab like any hyper:// site. An "Installed Apps"
+ * section on top lists CMD_LIST_INSTALLED results.
+ *
  * Phase 2 ticket — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
  */
 @Composable
 fun ExploreScreen(onVisit: (String) -> Unit, settings: PearSettings? = null) {
     val context = LocalContext.current
     val rpc = LocalPearRpc.current
+    val scope = rememberCoroutineScope()
     var sites by remember { mutableStateOf<List<Site>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var sourceUrl by remember { mutableStateOf(settings?.catalogUrl ?: "https://relay-us.p2phiverelay.xyz") }
     var activeBeeKey by remember { mutableStateOf<String?>(null) }
 
+    // Install/launch state — sourced from CMD_LIST_INSTALLED.
+    var installed by remember { mutableStateOf<List<PearInstalledApp>>(emptyList()) }
+    var busyAppIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var actionError by remember { mutableStateOf<String?>(null) }
+
+    suspend fun refreshInstalled() {
+        val client = rpc ?: return
+        try {
+            installed = client.listInstalled()
+        } catch (_: Throwable) {
+            // Offline / engine busy — the catalog still works without it.
+        }
+    }
+
+    fun installedAppFor(site: Site): PearInstalledApp? =
+        installed.firstOrNull {
+            it.id == site.id || (site.driveKey != null && it.driveKey == site.driveKey)
+        }
+
+    fun install(site: Site) {
+        val client = rpc ?: return
+        val driveKey = site.driveKey ?: return
+        busyAppIds = busyAppIds + site.id
+        actionError = null
+        scope.launch {
+            try {
+                client.installApp(site.id, driveKey, site.name, site.version)
+                refreshInstalled()
+            } catch (e: Throwable) {
+                actionError = "Install failed: ${e.message ?: "unknown error"}"
+            } finally {
+                busyAppIds = busyAppIds - site.id
+            }
+        }
+    }
+
+    fun open(appId: String, fallbackDriveKey: String?) {
+        val client = rpc ?: return
+        busyAppIds = busyAppIds + appId
+        actionError = null
+        scope.launch {
+            try {
+                // LAUNCH_APP ensures the drive is loaded in the local proxy.
+                // Open via hyper://<driveKey> (mirrors app/App.tsx
+                // handleLaunchApp) so Browse re-navigates through CMD_NAVIGATE
+                // and gets a fresh bridge token; localUrl is the fallback.
+                val result = client.launchApp(appId)
+                val driveKey = result["driveKey"]?.jsonPrimitive?.contentOrNull ?: fallbackDriveKey
+                val localUrl = result["localUrl"]?.jsonPrimitive?.contentOrNull
+                val target = driveKey?.let { "hyper://$it" } ?: localUrl
+                if (target != null) onVisit(target)
+            } catch (e: Throwable) {
+                actionError = "Open failed: ${e.message ?: "unknown error"}"
+            } finally {
+                busyAppIds = busyAppIds - appId
+            }
+        }
+    }
+
     LaunchedEffect(settings?.catalogUrl) {
         settings?.catalogUrl?.takeIf { it.isNotBlank() }?.let { sourceUrl = it }
+    }
+
+    LaunchedEffect(rpc) {
+        refreshInstalled()
     }
 
     LaunchedEffect(sourceUrl, rpc) {
@@ -140,6 +214,54 @@ fun ExploreScreen(onVisit: (String) -> Unit, settings: PearSettings? = null) {
         )
         Spacer(Modifier.height(16.dp))
 
+        if (installed.isNotEmpty()) {
+            Text(
+                "Installed Apps",
+                color = PearColors.TextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(8.dp))
+            installed.forEach { app ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .background(PearColors.Surface, RoundedCornerShape(12.dp))
+                        .padding(14.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            app.name,
+                            color = PearColors.TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "v${app.version} · hyper://${app.driveKey.take(8)}…",
+                            color = PearColors.TextMuted,
+                            fontSize = 11.sp,
+                        )
+                    }
+                    Text(
+                        if (busyAppIds.contains(app.id)) "Opening…" else "Open",
+                        color = PearColors.Accent,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clickable(enabled = !busyAppIds.contains(app.id)) {
+                            open(app.id, app.driveKey)
+                        },
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+
+        actionError?.let {
+            Text(it, color = PearColors.Error, fontSize = 13.sp)
+            Spacer(Modifier.height(8.dp))
+        }
+
         when {
             loading -> CircularProgressIndicator(color = PearColors.Accent)
             error != null -> Text(
@@ -153,17 +275,34 @@ fun ExploreScreen(onVisit: (String) -> Unit, settings: PearSettings? = null) {
                 fontSize = 13.sp,
             )
             else -> sites.forEach { site ->
-                SiteCard(site = site, onVisit = {
-                    val target = site.link ?: site.driveKey?.let { "hyper://$it" }
-                    if (target != null) onVisit(target)
-                })
+                val installedApp = installedAppFor(site)
+                SiteCard(
+                    site = site,
+                    installedApp = installedApp,
+                    busy = busyAppIds.contains(site.id),
+                    canInstall = rpc != null && site.driveKey != null,
+                    onVisit = {
+                        val target = site.link ?: site.driveKey?.let { "hyper://$it" }
+                        if (target != null) onVisit(target)
+                    },
+                    onInstall = { install(site) },
+                    onOpen = { open(site.id, site.driveKey) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun SiteCard(site: Site, onVisit: () -> Unit) {
+private fun SiteCard(
+    site: Site,
+    installedApp: PearInstalledApp?,
+    busy: Boolean,
+    canInstall: Boolean,
+    onVisit: () -> Unit,
+    onInstall: () -> Unit,
+    onOpen: () -> Unit,
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -183,13 +322,47 @@ private fun SiteCard(site: Site, onVisit: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Text(site.description, color = PearColors.TextSecondary, fontSize = 12.sp)
             }
+            when {
+                installedApp != null -> Text(
+                    "Installed · v${installedApp.version}",
+                    color = PearColors.Success,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                site.driveKey != null && !canInstall -> Text(
+                    "Install needs the P2P engine",
+                    color = PearColors.TextMuted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
         }
-        Text(
-            "Visit",
-            color = PearColors.Accent,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
+        when {
+            installedApp != null -> Text(
+                if (busy) "Opening…" else "Open",
+                color = PearColors.Accent,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clickable(enabled = !busy) { onOpen() }
+                    .padding(start = 12.dp),
+            )
+            canInstall -> Text(
+                if (busy) "Installing…" else "Install",
+                color = PearColors.Accent,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clickable(enabled = !busy) { onInstall() }
+                    .padding(start = 12.dp),
+            )
+            else -> Text(
+                "Visit",
+                color = PearColors.Accent,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }
 
@@ -199,6 +372,7 @@ private data class Site(
     val description: String,
     val driveKey: String?,
     val link: String?,
+    val version: String?,
 )
 
 private data class CatalogLoadResult(
@@ -271,6 +445,7 @@ private fun sitesFromCatalog(root: JsonObject): List<Site> {
             description = obj.stringAt("description") ?: "",
             driveKey = driveKey,
             link = link,
+            version = obj.stringAt("version"),
         )
     }
 }

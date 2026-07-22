@@ -101,59 +101,34 @@ privileged bridge.
 
 The React Native shell remains the compatibility host. The SwiftUI and Jetpack
 Compose shells are tracked with source-contract tests that check protocol
-constants, bridge shape, catalogue safe-link behavior, and screen parity. The
-current 2026-06-23 release snapshot has the mobile test suite passing at 124
-tests, and `npm audit --audit-level=high` passing after the safe lockfile audit
-refresh. A full `npm audit` still reports 15 moderate inherited Expo/React
-Native toolchain advisories (`js-yaml` through React Native's Jest path and
-`uuid` through Expo's `xcode` path). npm's suggested fixes require breaking
-framework changes, so the high/critical gate is clear while the moderate
-toolchain advisories remain tracked follow-up.
+constants, bridge shape, catalogue safety, browser page actions, tab/session
+behavior, and screen parity. The 2026-07-22 candidate passes 566 tests and the
+high/critical dependency audit; the remaining nine moderate advisories are in
+Expo's transitive `uuid`/`xcode` build-tool path and have no non-breaking npm
+remediation.
 
-Release smoke note, 2026-06-23: native simulator/device smoke is partly cleared.
-The generated Expo iOS project launched far enough to expose
-`[runtime not ready]: Error: Cannot find native module 'ExpoLinking'`; the
-tracked fix adds `expo-linking@~55.0.15`, and Expo autolinking now resolves the
-`ExpoLinking` pod/module. A follow-up generated Expo iOS Debug simulator build
-now succeeds with signing disabled and DerivedData under `/private/tmp`, proving
-the CocoaPods autolink, BareKit xcframework copy, and generated Expo configure
-phases are no longer the immediate blocker. The generated Expo Release simulator
-build also succeeds when `HERMES_CLI_PATH` is passed as an Xcode build setting
-pointing at `ios/Pods/hermes-engine/destroot/bin/hermesc`; `npm run
-ios:generated:release` wraps that requirement. The earlier stall was isolated to
-Xcode invoking the `node_modules/hermes-compiler` binary from the generated
-bundle phase; the Pods compiler bytecodes the same 7.5 MB JS bundle in under a
-second. Treat the generated Expo shell as a compatibility host, while the
-tracked SwiftUI shell remains the iOS release path.
-
-The tracked SwiftUI `ios-native` shell now builds, installs, launches on the
-iPhone 17 simulator, and reaches the green "Connected" worklet state. That run
-also exposed and verified recovery from a stale root Corestore: if the root
-storage belongs to another Corestore, the backend now falls back to an
-identity-scoped Corestore subdirectory instead of failing boot. Android native
-Gradle task discovery, Kotlin/Java compile, and `:app:assembleDebug` pass with
-a verified JDK 17 distribution whose `jmod` completes Android Gradle Plugin's
-JDK image transform. The 2026-06-23 Android smoke installed the fresh debug APK
-onto a headless `pp_avd` emulator, launched `com.pearbrowser.app/.MainActivity`,
-loaded `libbare-kit.so`, extracted `backend.android.bundle`, opened the local
-proxy, and reached the green "Connected" Home screen. That run also exposed and
-fixed a first-launch Binder boot race where Home could briefly show bookmarks as
-unavailable before the worklet finished booting. Android native release builds
-now also clear `:app:assembleRelease` and `:app:bundleRelease` with R8/resource
-shrink enabled. Release signing is env-driven and verified with a disposable
-test keystore: the signed APK passes `apksigner verify --print-certs`, and the
-signed AAB passes `jarsigner -verify` with the expected self-signed test
-certificate warnings.
+The native Kotlin shell clears debug compilation, Android lint-vital, R8/resource
+shrinking, `assembleRelease`, and `bundleRelease`. Its release signing variables
+are identical to the generated Expo Android shell and CI, and preflight checks
+that contract. The native SwiftUI shell clears unsigned generic-device builds
+in both Debug and Release with BareKit plus 17 addon frameworks. The generated
+Expo compatibility shell also clears an unsigned `iphoneos` Release build across
+its 99-target CocoaPods graph. Production signing and store upload remain
+authority/evidence gates, not unverified source claims. Exact commands and
+results are in [RELEASE_EVIDENCE_2026-07-22.md](RELEASE_EVIDENCE_2026-07-22.md).
 
 ## Current Limits
 
-- Mobile has no desktop `Pear.worker.pipe()` hypersite host.
+- Mobile has no injected `Pear.worker.pipe()` host for `pear://` or `file://`
+  app workers. That path fails closed with a typed unavailable result; it does
+  not silently substitute demo behavior.
 - Mobile has no standalone Pear GUI window launcher.
 - A static Hyperdrive with root `/index.html` is required for a guaranteed
   in-WebView app experience.
+- Ask Browser/QVAC exposes an honest unavailable capability until a supported
+  on-device model runtime is injected.
 - Native mobile distribution still needs production Apple/Android signing,
   store/distribution validation, and broader real-device validation beyond the
   current simulator/emulator smoke passes.
-- Public Nostr, desktop federated search, and desktop petname/name registry are
-  desktop-side capabilities today; mobile documentation should link to the
-  desktop architecture when discussing those browser-wide systems.
+- The Expo toolchain retains nine moderate transitive `uuid` advisories; the
+  current npm force-fix would downgrade Expo and is intentionally rejected.

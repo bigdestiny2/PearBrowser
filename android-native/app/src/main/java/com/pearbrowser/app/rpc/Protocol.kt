@@ -56,6 +56,8 @@ object Cmd {
     const val IDENTITY_ROTATE = 72
     const val IDENTITY_VALIDATE_PHRASE = 73
     const val IDENTITY_SIGN = 74
+    const val DEVICE_LINK_CREATE_INVITE = 76
+    const val DEVICE_LINK_JOIN = 77
 
     // Profile + login grants (Identity Plan Phases B + C + F)
     const val PROFILE_GET = 80
@@ -91,8 +93,65 @@ object Cmd {
     // Bridge
     const val BRIDGE = 200
 
+    // TabRuntime + QVAC / Ask Browser (Mission B4b, mirrors
+    // backend/constants.js; same ids as pearbrowser-desktop so shells stay
+    // aligned). RUN_APP_IN_TAB runs the in-proc demo tab; pear:// worker tabs
+    // and the Ask Browser LLM runtime are gated on Android (no pear-run, and
+    // the llamacpp addon is not linked) and fail closed with typed errors.
+    const val RUN_APP_IN_TAB = 201
+    const val ASK_BROWSER_CAPABILITIES = 220
+    const val ASK_BROWSER_START = 221
+    const val ASK_BROWSER_CANCEL = 222
+
     // System
     const val STOP = 99
+
+    // Content Shield (mirrors backend/constants.js; same ids as
+    // pearbrowser-desktop so shells stay aligned).
+    const val SHIELD_STATUS = 230
+    const val SHIELD_LOAD_LIST = 231
+    const val SHIELD_REMOVE_LIST = 232
+    const val SHIELD_SET_ALLOW = 233
+    const val SHIELD_SET_STRICT = 234
+    // Pear Plugins (Mission B4a — drive-installed extensions; same ids as
+    // the desktop). PLUGIN_REGISTER stays backend-only (fixture path).
+    const val PLUGIN_LIST = 235
+    const val PLUGIN_SET_ENABLED = 236
+    const val PLUGIN_REGISTER = 237
+    const val PLUGIN_INSTALL_DRIVE = 242
+    const val PLUGIN_UPDATE_DRIVE = 243
+    const val PLUGIN_UNINSTALL = 244
+    const val PLUGIN_CATALOG = 245
+    const val PLUGIN_CATALOG_LOAD_DRIVE = 246
+    const val PLUGIN_CATALOG_REMOVE_SOURCE = 247
+    // Shield + privacy-ladder + clearnet session-bridge status (Mission B2).
+    // The desktop has no dedicated direct/proxied toggle command — the
+    // `clearnetMode` settings key via USERDATA_SET_SETTINGS is the toggle.
+    const val PRIVACY_STATUS = 238
+    const val SHIELD_SUBSCRIBE_LIST = 239
+    const val SHIELD_UNSUBSCRIBE_LIST = 240
+    const val SHIELD_REFRESH_LISTS = 241
+
+    // Lighthouse local-first P2P search (Mission B3, ported from
+    // pearbrowser-desktop — same numeric ids so shells stay aligned).
+    const val SEARCH = 177
+    const val SEARCH_INDEX = 178
+    const val IDENTITY_BINDING_PUBLISH = 260
+    const val IDENTITY_BINDING_RESOLVE = 261
+    const val SEARCH_FEDERATED = 262
+
+    // Names — petnames + the N5 multi-writer name registry (Mission B3).
+    const val NAME_RESOLVE = 250
+    const val NAME_PETNAME_LIST = 251
+    const val NAME_PETNAME_SET = 252
+    const val NAME_PETNAME_REMOVE = 253
+    const val NAMEREG_CLAIM = 264
+    const val NAMEREG_ROTATE = 265
+    const val NAMEREG_RELEASE = 266
+    const val NAMEREG_REVOKE = 267
+    const val NAMEREG_LIST = 268
+    const val NAMEREG_RESOLVE = 269
+    const val NAMEREG_STATUS = 270
 }
 
 object Evt {
@@ -108,4 +167,14 @@ object Evt {
     const val SWARM_REQUEST = 107
     /** A signed P2P catalog bee updated and re-verified successfully. */
     const val CATALOG_UPDATED = 108
+    /** Federated (trusted-peer) search enrichment for an earlier SEARCH.
+     *  Mobile deviation: the desktop uses 108 here, but 108 has been
+     *  CATALOG_UPDATED on mobile since the signed-catalog-bee work shipped
+     *  (app/lib/constants.ts) — mobile assigns 112/113. */
+    const val SEARCH_FEDERATED = 112
+    /** Our IdentityBinding was published/refreshed. */
+    const val IDENTITY_BINDING_PUBLISHED = 113
+    /** Ask Browser streaming events { streamId, requestId, event } (Mission B4b —
+     *  same numeric id as the desktop; 111 is unassigned on mobile). */
+    const val ASK_BROWSER_STREAM = 111
 }

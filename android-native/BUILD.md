@@ -17,15 +17,15 @@ reusing the `backend/` worklet from the RN project verbatim.
 | ExploreScreen | ✅ HTTP catalog fetch + Visit flow, seeded by synced settings |
 | BrowseScreen | ✅ native WebView + Pear bridge injection |
 | MoreScreen | ✅ connected-apps route + live status/settings summary |
-| BookmarksScreen, HistoryScreen, SettingsScreen, MySitesScreen, SiteEditorScreen, QRScannerScreen, TemplatePickerScreen | ⏳ stubs / pending port |
-| QR scanner (CameraX + ML Kit) | ⏳ dependencies added, screen TODO |
+| Bookmarks, History, Settings, My Sites, Site Editor, Search, Tab Switcher, Template Picker | ✅ native Compose screens wired to shared RPCs |
+| QR scanner (CameraX + ML Kit) | ✅ navigate and device-link modes with permission/error handling |
 | Gradle task discovery | ✅ passes |
 | Kotlin compile | ✅ `:app:compileDebugKotlin` passes |
 | Debug APK build | ✅ `:app:assembleDebug` passes with a verified JDK 17 (`jmod` support required) |
 | Emulator launch smoke | ✅ fresh install on headless `pp_avd` reaches green `Connected` without the first-launch bookmark error |
 | Release APK/AAB build | ✅ release APK/AAB builds pass with R8/resource shrink |
 | Release signing | ✅ env-driven signing config verified with a disposable test key; production keystore/distribution checks remain |
-| TestFlight-equivalent distribution | ⏳ Firebase App Distribution config TODO |
+| Production distribution validation | ⏳ requires the real release key and Play Console or Firebase acceptance evidence |
 
 ## Prerequisites
 
@@ -102,10 +102,10 @@ Release signing is intentionally driven by environment variables so secrets do
 not enter git:
 
 ```bash
-export PEARBROWSER_ANDROID_KEYSTORE=/absolute/path/to/release.keystore
-export PEARBROWSER_ANDROID_STORE_PASSWORD=...
-export PEARBROWSER_ANDROID_KEY_ALIAS=pearbrowser
-export PEARBROWSER_ANDROID_KEY_PASSWORD=... # optional; defaults to store password
+export PEARBROWSER_RELEASE_STORE_FILE=/absolute/path/to/release.keystore
+export PEARBROWSER_RELEASE_STORE_PASSWORD=...
+export PEARBROWSER_RELEASE_KEY_ALIAS=pearbrowser
+export PEARBROWSER_RELEASE_KEY_PASSWORD=...
 
 ./gradlew :app:assembleRelease :app:bundleRelease
 ```
@@ -127,7 +127,9 @@ npm run release:preflight
 ```
 
 The Android-specific blockers clear only when the production signing variables
-point at a real keystore and either `PEARBROWSER_PLAY_CONSOLE_VALIDATED=1` or
+point at a real keystore. These are the same four `PEARBROWSER_RELEASE_*`
+variables used by the generated Expo Android shell and CI. Either
+`PEARBROWSER_PLAY_CONSOLE_VALIDATED=1` or
 `PEARBROWSER_FIREBASE_APP_DISTRIBUTION_VALIDATED=1` records that the signed
 artifact was accepted by the chosen distribution path.
 

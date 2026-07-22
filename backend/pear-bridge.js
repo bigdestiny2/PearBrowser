@@ -13,14 +13,60 @@
  */
 
 const Autobase = require('autobase')
+const ApplyState = require('autobase/lib/apply-state.js')
 const Hyperbee = require('hyperbee')
 const crypto = require('bare-crypto')
+
+installAutobaseTraceGuard()
+
+function installAutobaseTraceGuard () {
+  if (!ApplyState || !ApplyState.prototype || ApplyState.prototype._pearBridgeTraceGuarded) return
+
+  const viewsFor = (state) => Array.isArray(state && state.views) ? state.views : []
+  const start = (ref) => {
+    if (ref && ref.tracer && typeof ref.tracer.start === 'function') ref.tracer.start()
+  }
+  const end = (ref) => {
+    if (!ref || !ref.tracer || typeof ref.tracer.end !== 'function') return []
+    const blocks = ref.tracer.end()
+    return Array.isArray(blocks) ? blocks : []
+  }
+
+  ApplyState.prototype._startTrace = function () {
+    start(this && this.systemRef)
+    start(this && this.encryptionView && this.encryptionView.ref)
+    const views = viewsFor(this)
+    for (let i = 0; i < views.length; i++) start(views[i] && views[i].ref)
+  }
+
+  ApplyState.prototype._endTrace = function (node) {
+    const trace = {
+      system: end(this && this.systemRef),
+      encryption: end(this && this.encryptionView && this.encryptionView.ref),
+      user: []
+    }
+
+    const views = viewsFor(this)
+    for (let i = 0; i < views.length; i++) {
+      const blocks = end(views[i] && views[i].ref)
+      if (blocks.length) trace.user.push({ view: i, blocks })
+    }
+
+    if (node && (trace.system.length || trace.encryption.length || trace.user.length)) node.trace = trace
+  }
+
+  Object.defineProperty(ApplyState.prototype, '_pearBridgeTraceGuarded', {
+    value: true,
+    enumerable: false
+  })
+}
 
 class PearBridge {
   constructor (store, swarm) {
     this.store = store
     this.swarm = swarm
     this._syncGroups = new Map() // groupId → { base, swarm topic }
+    this._syncGroupOpens = new Map() // groupId → in-flight create/join promise
     this._appDrives = new Map() // appId → Hyperdrive
   }
 
@@ -48,36 +94,74 @@ class PearBridge {
   // Sync Groups (Autobase)
   // ---------------------------------------------------------------------------
 
+  _syncGroupInfo (appId, group) {
+    return {
+      inviteKey: group.inviteKey,
+      appId,
+      writerPublicKey: group.base.local.key.toString('hex')
+    }
+  }
+
+  async _openSyncGroupOnce (appId, open) {
+    const existing = this._syncGroups.get(appId)
+    if (existing) return this._syncGroupInfo(appId, existing)
+
+    const pending = this._syncGroupOpens.get(appId)
+    if (pending) return pending
+
+    const promise = (async () => {
+      try {
+        const again = this._syncGroups.get(appId)
+        if (again) return this._syncGroupInfo(appId, again)
+        return await open()
+      } finally {
+        this._syncGroupOpens.delete(appId)
+      }
+    })()
+    this._syncGroupOpens.set(appId, promise)
+    return promise
+  }
+
   /**
    * Create a new sync group — returns an invite key others can join with
    */
   async createSyncGroup (appId, applyFn) {
     // Validate appId
     this._validateAppId(appId)
-    const localWriter = this.store.get({ name: `pear-app-${appId}-writer` })
-    await localWriter.ready()
+    return this._openSyncGroupOnce(appId, async () => {
+      const localWriter = this.store.get({ name: `pear-app-${appId}-writer` })
+      await localWriter.ready()
 
-    const base = new Autobase(this.store, null, {
-      apply: applyFn || this._defaultApply,
-      open: (store) => new Hyperbee(store.get({ name: `pear-app-${appId}-view` }), {
-        keyEncoding: 'utf-8',
-        valueEncoding: 'binary',
-        extension: false
-      }),
-      valueEncoding: 'json'
+      // CRITICAL: give each sync group its OWN namespaced substore (keyed by the
+      // already-validated appId) rather than the raw store. base.close() runs
+      // store.close(); on the shared ROOT Corestore that tears down Hyperdrive/
+      // UserData/Names/replication for the WHOLE app. A namespace session's close()
+      // frees only that group's cores. A per-appId substore also stops two sync
+      // groups from colliding on the same Autobase local writer core on one store.
+      const baseStore = typeof this.store.namespace === 'function'
+        ? this.store.namespace(`pear-bridge-${appId}`) : this.store
+      const base = new Autobase(baseStore, null, {
+        apply: applyFn || this._defaultApply,
+        open: (store) => new Hyperbee(store.get({ name: `pear-app-${appId}-view` }), {
+          keyEncoding: 'utf-8',
+          valueEncoding: 'binary',
+          extension: false
+        }),
+        valueEncoding: 'json'
+      })
+
+      await base.ready()
+      const inviteKey = (base.key || base.local.key).toString('hex')
+      const writerPublicKey = base.local.key.toString('hex')
+
+      // Derive topic and join swarm
+      const topic = crypto.createHash('sha256').update(inviteKey).digest()
+      this.swarm.join(topic, { server: true, client: true })
+
+      this._syncGroups.set(appId, { base, topic, inviteKey })
+
+      return { inviteKey, appId, writerPublicKey }
     })
-
-    await base.ready()
-    const inviteKey = (base.key || base.local.key).toString('hex')
-    const writerPublicKey = base.local.key.toString('hex')
-
-    // Derive topic and join swarm
-    const topic = crypto.createHash('sha256').update(inviteKey).digest()
-    this.swarm.join(topic, { server: true, client: true })
-
-    this._syncGroups.set(appId, { base, topic, inviteKey })
-
-    return { inviteKey, appId, writerPublicKey }
   }
 
   /**
@@ -90,28 +174,41 @@ class PearBridge {
     if (!inviteKeyHex || !/^[0-9a-f]{64}$/i.test(inviteKeyHex)) {
       throw new Error('Invalid invite key format')
     }
-    const bootstrapKey = Buffer.from(inviteKeyHex, 'hex')
+    const existing = this._syncGroups.get(appId)
+    if (existing) {
+      if (existing.inviteKey !== inviteKeyHex) {
+        throw new Error('Sync group already open with a different invite key')
+      }
+      return this._syncGroupInfo(appId, existing)
+    }
+    return this._openSyncGroupOnce(appId, async () => {
+      const bootstrapKey = Buffer.from(inviteKeyHex, 'hex')
 
-    const base = new Autobase(this.store, bootstrapKey, {
-      apply: applyFn || this._defaultApply,
-      open: (store) => new Hyperbee(store.get({ name: `pear-app-${appId}-view` }), {
-        keyEncoding: 'utf-8',
-        valueEncoding: 'binary',
-        extension: false
-      }),
-      valueEncoding: 'json'
+      // Per-appId substore — see createSyncGroup: keeps each group's cores out of
+      // the raw root store so close() can't tear the whole app's storage down.
+      const baseStore = typeof this.store.namespace === 'function'
+        ? this.store.namespace(`pear-bridge-${appId}`) : this.store
+      const base = new Autobase(baseStore, bootstrapKey, {
+        apply: applyFn || this._defaultApply,
+        open: (store) => new Hyperbee(store.get({ name: `pear-app-${appId}-view` }), {
+          keyEncoding: 'utf-8',
+          valueEncoding: 'binary',
+          extension: false
+        }),
+        valueEncoding: 'json'
+      })
+
+      await base.ready()
+      await base.view.update()
+
+      const topic = crypto.createHash('sha256').update(inviteKeyHex).digest()
+      this.swarm.join(topic, { server: true, client: true })
+
+      this._syncGroups.set(appId, { base, topic, inviteKey: inviteKeyHex })
+
+      const writerPublicKey = base.local.key.toString('hex')
+      return { inviteKey: inviteKeyHex, appId, writerPublicKey }
     })
-
-    await base.ready()
-    await base.view.update()
-
-    const topic = crypto.createHash('sha256').update(inviteKeyHex).digest()
-    this.swarm.join(topic, { server: true, client: true })
-
-    this._syncGroups.set(appId, { base, topic, inviteKey: inviteKeyHex })
-
-    const writerPublicKey = base.local.key.toString('hex')
-    return { inviteKey: inviteKeyHex, appId, writerPublicKey }
   }
 
   /**
@@ -491,6 +588,9 @@ class PearBridge {
       try { await this.swarm.leave(group.topic) } catch (err) {
         console.error('Failed to leave topic:', err.message)
       }
+      try { if (group.base) await group.base.close() } catch (err) {
+        console.error('Failed to close sync group base:', err.message)
+      }
     }
     this._syncGroups.clear()
   }
@@ -501,9 +601,11 @@ class PearBridge {
  * HyperProxy. Adds `window.pear.swarm.v1` (and reserves `window.pear`
  * for future companion APIs).
  *
- * Talks to `/api/swarm/{join,send,leave,events}` over same-origin fetch
- * + EventSource. Token is read from a `<meta name="pear-api-token">`
- * tag the proxy injects alongside this script.
+   * Talks to `/api/swarm/{join,ticket,send,leave,events}` over same-origin
+   * fetch + EventSource. Token is read from a `<meta name="pear-api-token">`
+   * tag the proxy injects alongside this script. EventSource cannot set
+   * headers, so each stream first mints a one-time ticket through a normal
+   * header-authenticated request.
  *
  * Page authors should always feature-detect:
  *
@@ -575,9 +677,7 @@ const PEAR_SWARM_V1_SHIM = `<script>(function () {
         }
       }
     }
-    function attachStream () {
-      var url = '/api/swarm/events?channelId=' + encodeURIComponent(info.channelId)
-        + '&token=' + encodeURIComponent(readToken())
+    function openEventSource (url) {
       es = new EventSource(url)
       es.onmessage = function (ev) {
         var msg
@@ -603,6 +703,19 @@ const PEAR_SWARM_V1_SHIM = `<script>(function () {
       es.onerror = function () {
         if (!destroyed) { try { es.close() } catch (_) {} channel.destroy() }
       }
+    }
+    function attachStream () {
+      rpc('POST', '/api/swarm/ticket', { channelId: info.channelId }).then(function (result) {
+        if (destroyed) return
+        if (!result || !result.ticket) throw new Error('missing swarm stream ticket')
+        var url = '/api/swarm/events?channelId=' + encodeURIComponent(info.channelId)
+          + '&ticket=' + encodeURIComponent(result.ticket)
+        openEventSource(url)
+      }).catch(function (err) {
+        if (destroyed) return
+        emit('error', err)
+        channel.destroy()
+      })
     }
     var channel = {
       channelId: info.channelId,

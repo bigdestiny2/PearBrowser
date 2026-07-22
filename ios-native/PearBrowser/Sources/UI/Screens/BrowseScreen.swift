@@ -30,15 +30,93 @@ struct BrowseScreen: View {
     /// affordance so the user can opt in.
     @State private var untrustedOrigin: String?
     @State private var trustErrorMessage: String?
+    @State private var findVisible = false
+    @State private var findQuery = ""
+    @State private var findCommand: FindCommand?
+    @State private var findSequence = 0
+    @State private var findResult = ""
+    @State private var reloadSequence = 0
+    @State private var pageTitle = ""
+    @State private var bookmarked = false
+    @State private var desktopSiteRequested = false
+    @State private var shareItem: String?
 
     var body: some View {
         if let urlString = initialUrl {
             ZStack(alignment: .bottom) {
                 if let webViewUrl {
-                    WebViewContainer(
-                        url: webViewUrl,
-                        session: session
-                    )
+                    VStack(spacing: 0) {
+                        if findVisible {
+                            FindInPageBar(
+                                query: $findQuery,
+                                result: findResult,
+                                onPrevious: { runFind(backwards: true) },
+                                onNext: { runFind(backwards: false) },
+                                onClose: closeFind
+                            )
+                        }
+                        WebViewContainer(
+                            url: webViewUrl,
+                            session: session,
+                            findCommand: findCommand,
+                            reloadSequence: reloadSequence,
+                            desktopSiteRequested: desktopSiteRequested,
+                            onFindResult: { findResult = $0 },
+                            onTitleChange: { pageTitle = $0 },
+                            onShareRequested: { shareItem = $0 }
+                        )
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if !findVisible {
+                            Menu {
+                                Button {
+                                    shareItem = urlString
+                                } label: {
+                                    Label("Share", systemImage: "square.and.arrow.up")
+                                }
+                                Button {
+                                    UIPasteboard.general.string = urlString
+                                } label: {
+                                    Label("Copy Link", systemImage: "doc.on.doc")
+                                }
+                                Button {
+                                    toggleBookmark(urlString: urlString)
+                                } label: {
+                                    Label(
+                                        bookmarked ? "Remove Bookmark" : "Add Bookmark",
+                                        systemImage: bookmarked ? "bookmark.slash" : "bookmark"
+                                    )
+                                }
+                                Divider()
+                                Button {
+                                    reloadSequence += 1
+                                } label: {
+                                    Label("Reload", systemImage: "arrow.clockwise")
+                                }
+                                .accessibilityLabel("Reload page")
+                                Button {
+                                    findVisible = true
+                                } label: {
+                                    Label("Find in Page", systemImage: "magnifyingglass")
+                                }
+                                .accessibilityLabel("Find in page")
+                                Button {
+                                    desktopSiteRequested.toggle()
+                                } label: {
+                                    Label(
+                                        desktopSiteRequested ? "Request Mobile Site" : "Request Desktop Site",
+                                        systemImage: desktopSiteRequested ? "iphone" : "desktopcomputer"
+                                    )
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                                    .frame(width: 36, height: 36)
+                                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                            }
+                            .accessibilityLabel("Page actions")
+                            .padding(8)
+                        }
+                    }
                 } else {
                     loadingState
                 }
@@ -60,7 +138,16 @@ struct BrowseScreen: View {
                 }
             }
             .ignoresSafeArea(edges: .bottom)
-            .task(id: urlString) { await prepareNavigation(urlString: urlString) }
+            .task(id: navigationTaskID) { await prepareNavigation(urlString: urlString) }
+            .task(id: bookmarkTaskID(urlString: urlString)) { await loadBookmark(urlString: urlString) }
+            .sheet(isPresented: Binding(
+                get: { shareItem != nil },
+                set: { if !$0 { shareItem = nil } }
+            )) {
+                if let shareItem {
+                    ShareSheet(activityItems: [shareItem])
+                }
+            }
         } else {
             VStack(spacing: 12) {
                 Text("Browse")
@@ -90,6 +177,65 @@ struct BrowseScreen: View {
         .background(PearColors.bg)
     }
 
+    private var navigationTaskID: String {
+        "\(initialUrl ?? "")|\(host.isReady)|\(host.proxyPort)"
+    }
+
+    private func runFind(backwards: Bool) {
+        let query = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        findSequence += 1
+        findCommand = FindCommand(query: query, backwards: backwards, sequence: findSequence)
+    }
+
+    private func closeFind() {
+        findVisible = false
+        findQuery = ""
+        findResult = ""
+        findSequence += 1
+        findCommand = FindCommand(query: "", backwards: false, sequence: findSequence)
+    }
+
+    private func bookmarkTaskID(urlString: String) -> String {
+        "\(urlString)|\(host.isReady)"
+    }
+
+    private func loadBookmark(urlString: String) async {
+        guard host.isReady else {
+            bookmarked = false
+            return
+        }
+        do {
+            let items = try await host.rpc.listBookmarks()
+            bookmarked = items.contains { ($0["url"] as? String) == urlString }
+        } catch {
+            bookmarked = false
+        }
+    }
+
+    private func toggleBookmark(urlString: String) {
+        guard host.isReady else {
+            loadError = "P2P engine is not ready yet."
+            return
+        }
+        Task {
+            do {
+                if bookmarked {
+                    try await host.rpc.removeBookmark(url: urlString)
+                    bookmarked = false
+                } else {
+                    try await host.rpc.addBookmark(
+                        url: urlString,
+                        title: pageTitle.isEmpty ? urlString : pageTitle
+                    )
+                    bookmarked = true
+                }
+            } catch {
+                loadError = "Could not update bookmark: \(error.localizedDescription)"
+            }
+        }
+    }
+
     private func prepareNavigation(urlString: String?) async {
         guard let urlString, let original = URL(string: urlString) else {
             webViewUrl = nil
@@ -101,6 +247,11 @@ struct BrowseScreen: View {
         let scheme = original.scheme?.lowercased()
 
         if scheme == "hyper" {
+            guard host.isReady, host.proxyPort > 0 else {
+                session = nil
+                webViewUrl = nil
+                return
+            }
             do {
                 let result = try await host.rpc.navigate(url: urlString)
                 guard let localUrl = result["localUrl"] as? String,
@@ -219,9 +370,21 @@ struct BridgeSession: Equatable {
     let token: String
 }
 
+struct FindCommand: Equatable {
+    let query: String
+    let backwards: Bool
+    let sequence: Int
+}
+
 struct WebViewContainer: UIViewRepresentable {
     let url: URL
     let session: BridgeSession?
+    let findCommand: FindCommand?
+    let reloadSequence: Int
+    let desktopSiteRequested: Bool
+    let onFindResult: (String) -> Void
+    let onTitleChange: (String) -> Void
+    let onShareRequested: (String) -> Void
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -232,8 +395,10 @@ struct WebViewContainer: UIViewRepresentable {
         // Pages can capture audio/video only with explicit user gesture.
         config.mediaTypesRequiringUserActionForPlayback = .all
         config.allowsInlineMediaPlayback = true
+        config.defaultWebpagePreferences.preferredContentMode = desktopSiteRequested ? .desktop : .mobile
 
         let webView = WKWebView(frame: .zero, configuration: config)
+        webView.customUserAgent = desktopSiteRequested ? pearDesktopUserAgent : nil
         webView.navigationDelegate = context.coordinator
         webView.backgroundColor = UIColor.black
         webView.isOpaque = false
@@ -242,6 +407,9 @@ struct WebViewContainer: UIViewRepresentable {
         // can re-inject when the session changes.
         context.coordinator.webView = webView
         context.coordinator.session = session
+        context.coordinator.findCommand = findCommand
+        context.coordinator.reloadSequence = reloadSequence
+        context.coordinator.desktopSiteRequested = desktopSiteRequested
         installBridge(in: webView, session: session)
         return webView
     }
@@ -256,9 +424,25 @@ struct WebViewContainer: UIViewRepresentable {
         if webView.url != url {
             webView.load(URLRequest(url: url))
         }
+        if context.coordinator.findCommand != findCommand {
+            context.coordinator.findCommand = findCommand
+            applyFind(findCommand, in: webView)
+        }
+        if context.coordinator.reloadSequence != reloadSequence {
+            context.coordinator.reloadSequence = reloadSequence
+            webView.reload()
+        }
+        if context.coordinator.desktopSiteRequested != desktopSiteRequested {
+            context.coordinator.desktopSiteRequested = desktopSiteRequested
+            webView.configuration.defaultWebpagePreferences.preferredContentMode = desktopSiteRequested ? .desktop : .mobile
+            webView.customUserAgent = desktopSiteRequested ? pearDesktopUserAgent : nil
+            webView.reload()
+        }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTitleChange: onTitleChange, onShareRequested: onShareRequested)
+    }
 
     /// Replace the user-content-controller's userScripts with a fresh
     /// bridge built from the current session. Called on every session
@@ -276,12 +460,37 @@ struct WebViewContainer: UIViewRepresentable {
         webView.configuration.userContentController.addUserScript(userScript)
     }
 
+    private func applyFind(_ command: FindCommand?, in webView: WKWebView) {
+        guard let command else { return }
+        let configuration = WKFindConfiguration()
+        configuration.backwards = command.backwards
+        configuration.wraps = true
+        webView.find(command.query, configuration: configuration) { result in
+            onFindResult(command.query.isEmpty ? "" : (result.matchFound ? "Match" : "No match"))
+        }
+    }
+
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var session: BridgeSession?
+        var findCommand: FindCommand?
+        var reloadSequence = 0
+        var desktopSiteRequested = false
+        let onTitleChange: (String) -> Void
+        let onShareRequested: (String) -> Void
+
+        init(onTitleChange: @escaping (String) -> Void,
+             onShareRequested: @escaping (String) -> Void) {
+            self.onTitleChange = onTitleChange
+            self.onShareRequested = onShareRequested
+        }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             NSLog("[BrowseScreen] navigation error: \(error.localizedDescription)")
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            onTitleChange(webView.title ?? "")
         }
 
         func userContentController(_ userContentController: WKUserContentController,
@@ -292,11 +501,57 @@ struct WebViewContainer: UIViewRepresentable {
             case "pear-navigate":
                 NSLog("[BrowseScreen] pear-navigate → \(body["url"] ?? "")")
             case "pear-share":
-                NSLog("[BrowseScreen] pear-share → \(body["url"] ?? "")")
+                if let url = body["url"] as? String, !url.isEmpty {
+                    onShareRequested(url)
+                }
             default:
                 break
             }
         }
+    }
+}
+
+private let pearDesktopUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 PearBrowser/0.1 Safari/605.1.15"
+
+private struct FindInPageBar: View {
+    @Binding var query: String
+    let result: String
+    let onPrevious: () -> Void
+    let onNext: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField("Find in page", text: $query)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .onSubmit(onNext)
+                .textFieldStyle(.roundedBorder)
+            if !result.isEmpty {
+                Text(result)
+                    .font(.system(size: 11))
+                    .foregroundStyle(PearColors.textSecondary)
+                    .fixedSize()
+            }
+            Button(action: onPrevious) {
+                Image(systemName: "chevron.up")
+                    .frame(width: 28, height: 28)
+            }
+            .accessibilityLabel("Previous match")
+            Button(action: onNext) {
+                Image(systemName: "chevron.down")
+                    .frame(width: 28, height: 28)
+            }
+            .accessibilityLabel("Next match")
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .frame(width: 28, height: 28)
+            }
+            .accessibilityLabel("Close find")
+        }
+        .padding(8)
+        .background(PearColors.surface)
     }
 }
 

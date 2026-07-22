@@ -88,9 +88,7 @@ enum PearBridgeScript {
         }
       };
     }
-    function attachStream() {
-      var url = BASE + '/api/swarm/events?channelId=' + encodeURIComponent(info.channelId)
-        + '&token=' + encodeURIComponent(TOKEN);
+    function openEventSource(url) {
       es = new EventSource(url);
       es.onmessage = function(ev) {
         var msg;
@@ -116,6 +114,19 @@ enum PearBridgeScript {
       es.onerror = function() {
         if (!destroyed) { try { es.close(); } catch (_) {} channel.destroy(); }
       };
+    }
+    function attachStream() {
+      apiPost('/api/swarm/ticket', { channelId: info.channelId }).then(function(result) {
+        if (destroyed) return;
+        if (!result || !result.ticket) throw new Error('missing swarm stream ticket');
+        var url = BASE + '/api/swarm/events?channelId=' + encodeURIComponent(info.channelId)
+          + '&ticket=' + encodeURIComponent(result.ticket);
+        openEventSource(url);
+      }).catch(function(err) {
+        if (destroyed) return;
+        emit('error', err);
+        channel.destroy();
+      });
     }
     var channel = {
       channelId: info.channelId,

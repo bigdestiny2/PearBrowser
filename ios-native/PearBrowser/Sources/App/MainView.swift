@@ -129,6 +129,11 @@ struct MainView: View {
                 }
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: .pearBrowserOpenHyperURL)) { note in
+            guard let url = note.object as? URL,
+                  url.scheme?.lowercased() == "hyper" else { return }
+            navigateTo(url.absoluteString)
+        }
     }
 
     // MARK: - Navigation

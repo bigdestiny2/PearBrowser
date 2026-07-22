@@ -252,6 +252,14 @@ export class PearRPC {
     return this.request(CMD.IDENTITY_VALIDATE_PHRASE, { mnemonic })
   }
 
+  deviceLinkCreateInvite(): Promise<{ invite: string; discoveryKey: string }> {
+    return this.request(CMD.DEVICE_LINK_CREATE_INVITE, {}, 30000)
+  }
+
+  deviceLinkJoin(invite: string, device = 'this device'): Promise<{ ok: true; restartRequired: boolean }> {
+    return this.request(CMD.DEVICE_LINK_JOIN, { invite, device }, 120000)
+  }
+
   // --- Login + swarm consent resolution ---
 
   loginResolve(requestId: string, approved: boolean, scopes?: string[], ttlMs?: number) {

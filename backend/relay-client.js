@@ -1,21 +1,87 @@
 /**
  * Relay Client — HTTP fast-path for Hyperdrive content
  *
- * Uses bare-http1 for HTTP requests (fetch() doesn't exist in Bare).
+ * Uses bare-http1/bare-https for HTTP requests (fetch() doesn't exist in Bare).
  * Fetches content from HiveRelay gateway endpoints.
  */
 
 const http = require('bare-http1')
+const https = require('bare-https')
 const b4a = require('b4a')
 const { getUserFriendlyError } = require('./hyper-proxy')
+
+const DEFAULT_RELAYS = ['http://127.0.0.1:9100']
 
 // Bare exposes env via Bare.env; fall back to process.env when running under Node.
 const ENV = (typeof Bare !== 'undefined' && Bare.env) ||
   (typeof process !== 'undefined' && process.env) || {}
 
+function relayDefaultPort (parsed) {
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`unsupported relay URL protocol: ${parsed.protocol}`)
+  }
+  return parsed.protocol === 'https:' ? 443 : 80
+}
+
+function relayTransportForUrl (parsed) {
+  if (parsed.protocol === 'http:') return http
+  if (parsed.protocol === 'https:') return https
+  throw new Error(`unsupported relay URL protocol: ${parsed.protocol}`)
+}
+
+function relayRequestOptions (parsed, headers) {
+  const opts = {
+    hostname: parsed.hostname,
+    port: parsed.port ? parseInt(parsed.port, 10) : relayDefaultPort(parsed),
+    path: parsed.pathname + parsed.search
+  }
+  if (headers) opts.headers = headers
+  return opts
+}
+
+function normalizeRelayUrl (url) {
+  if (typeof url !== 'string') return null
+  const clean = url.trim()
+  if (!clean) return null
+
+  let parsed
+  try {
+    parsed = new URL(clean)
+    relayDefaultPort(parsed)
+  } catch {
+    return null
+  }
+
+  if (!parsed.hostname) return null
+  if (parsed.username || parsed.password) return null
+  if (parsed.search || parsed.hash) return null
+
+  return clean.replace(/\/+$/, '')
+}
+
+function normalizeRelayList (relays) {
+  const valid = []
+  for (const url of relays) {
+    const clean = normalizeRelayUrl(url)
+    if (clean && !valid.includes(clean)) valid.push(clean)
+  }
+  return valid
+}
+
+function closeRelayRequest (req) {
+  if (!req) return
+  if (typeof req.destroy === 'function') req.destroy()
+  else if (typeof req.abort === 'function') req.abort()
+}
+
+function hasHeader (headers, name) {
+  const wanted = name.toLowerCase()
+  return Object.keys(headers).some(header => header.toLowerCase() === wanted)
+}
+
 class RelayClient {
   constructor (opts = {}) {
-    this.relays = opts.relays || ['http://127.0.0.1:9100']
+    this.relays = Array.isArray(opts.relays) ? normalizeRelayList(opts.relays) : [...DEFAULT_RELAYS]
     this.timeout = opts.timeout || 5000
     this.enabled = opts.enabled !== false // default on; explicit false disables hybrid fetch
     // Optional API key for relays that require auth on the /seed endpoint.
@@ -35,15 +101,7 @@ class RelayClient {
    */
   setRelays (relays) {
     if (!Array.isArray(relays)) throw new TypeError('relays must be an array')
-    const valid = []
-    for (const url of relays) {
-      if (typeof url !== 'string') continue
-      const clean = url.trim()
-      if (!clean) continue
-      // Accept http(s) only
-      if (!/^https?:\/\//i.test(clean)) continue
-      valid.push(clean.replace(/\/+$/, ''))
-    }
+    const valid = normalizeRelayList(relays)
     if (valid.length === 0) {
       console.warn('[RelayClient] setRelays called with no valid urls; keeping current list')
       return false
@@ -262,84 +320,116 @@ class RelayClient {
   }
 
   /**
-   * HTTP GET using bare-http1
+   * HTTP GET using bare-http1/bare-https.
    */
   _httpGet (url, timeout) {
     return new Promise((resolve, reject) => {
       const parsed = new URL(url)
-      const timer = setTimeout(() => reject(new Error(getUserFriendlyError('Timeout'))), timeout)
+      const transport = relayTransportForUrl(parsed)
+      let settled = false
+      let req = null
 
-      const req = http.get({
-        hostname: parsed.hostname,
-        port: parseInt(parsed.port) || 80,
-        path: parsed.pathname + parsed.search
-      }, (res) => {
-        const chunks = []
-        res.on('data', (chunk) => chunks.push(chunk))
-        res.on('end', () => {
-          clearTimeout(timer)
-          resolve({
-            status: res.statusCode,
-            contentType: res.headers['content-type'] || 'application/octet-stream',
-            body: b4a.concat(chunks)
-          })
-        })
-        res.on('error', (err) => {
-          clearTimeout(timer)
-          reject(err)
-        })
-      })
-
-      req.on('error', (err) => {
+      const fail = (err) => {
+        if (settled) return
+        settled = true
         clearTimeout(timer)
         reject(err)
-      })
+      }
+
+      const done = (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      }
+
+      const timer = setTimeout(() => {
+        closeRelayRequest(req)
+        fail(new Error(getUserFriendlyError('Timeout')))
+      }, timeout)
+
+      try {
+        req = transport.get(relayRequestOptions(parsed), (res) => {
+          const chunks = []
+          res.on('data', (chunk) => chunks.push(chunk))
+          res.on('end', () => {
+            done({
+              status: res.statusCode,
+              contentType: (res.headers && res.headers['content-type']) || 'application/octet-stream',
+              body: b4a.concat(chunks)
+            })
+          })
+          res.on('error', fail)
+        })
+        req.on('error', fail)
+      } catch (err) {
+        fail(err)
+      }
     })
   }
 
   /**
-   * HTTP POST using bare-http1
+   * HTTP POST using bare-http1/bare-https.
    */
   _httpPost (url, body, timeout, headers = {}) {
     return new Promise((resolve, reject) => {
       const parsed = new URL(url)
-      const isHttps = parsed.protocol === 'https:'
-      const timer = setTimeout(() => reject(new Error(getUserFriendlyError('Timeout'))), timeout)
+      const transport = relayTransportForUrl(parsed)
+      const requestHeaders = { 'Content-Type': 'application/json', ...headers }
+      if (!hasHeader(requestHeaders, 'content-length')) {
+        requestHeaders['Content-Length'] = String(b4a.byteLength(body))
+      }
+      let settled = false
+      let req = null
 
-      const req = http.request({
-        method: 'POST',
-        hostname: parsed.hostname,
-        port: parseInt(parsed.port) || (isHttps ? 443 : 80),
-        path: parsed.pathname + parsed.search,
-        headers: { 'Content-Type': 'application/json', ...headers }
-      }, (res) => {
-        const chunks = []
-        res.on('data', (chunk) => chunks.push(chunk))
-        res.on('end', () => {
-          clearTimeout(timer)
-          resolve({
-            status: res.statusCode,
-            body: b4a.concat(chunks)
-          })
-        })
-        res.on('error', (err) => {
-          clearTimeout(timer)
-          reject(err)
-        })
-      })
-
-      req.on('error', (err) => {
+      const fail = (err) => {
+        if (settled) return
+        settled = true
         clearTimeout(timer)
         reject(err)
-      })
+      }
 
-      req.write(body)
-      req.end()
+      const done = (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      }
+
+      const timer = setTimeout(() => {
+        closeRelayRequest(req)
+        fail(new Error(getUserFriendlyError('Timeout')))
+      }, timeout)
+
+      try {
+        req = transport.request({
+          method: 'POST',
+          ...relayRequestOptions(parsed, requestHeaders)
+        }, (res) => {
+          const chunks = []
+          res.on('data', (chunk) => chunks.push(chunk))
+          res.on('end', () => {
+            done({
+              status: res.statusCode,
+              body: b4a.concat(chunks)
+            })
+          })
+          res.on('error', fail)
+        })
+        req.on('error', fail)
+        req.write(body)
+        req.end()
+      } catch (err) {
+        fail(err)
+      }
     })
   }
 
   addRelay (url) {
-    if (!this.relays.includes(url)) this.relays.push(url)
+    const clean = normalizeRelayUrl(url)
+    if (!clean) return false
+    if (!this.relays.includes(clean)) this.relays.push(clean)
+    return true
   }
 
   getStats () {
@@ -359,4 +449,4 @@ class RelayClient {
   }
 }
 
-module.exports = { RelayClient }
+module.exports = { RelayClient, relayRequestOptions }

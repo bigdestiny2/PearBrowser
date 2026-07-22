@@ -871,13 +871,17 @@ test('BrowseScreen routes hyper URLs through rpc.navigate and opens untrusted HT
   const harness = createReactHarness()
   const rn = createReactNativeStub()
   const navigateCalls = []
+  const bookmarkCalls = []
   const { BrowseScreen } = loadTsxModule('app/screens/BrowseScreen.tsx', {
     ...makeBaseStubs(harness, rn),
     ...makeComponentStubs(harness),
     'react-native-webview': { WebView: 'WebView' },
     '../lib/storage': {
       getSettings: async () => ({ privateMode: true }),
-      addToHistory: async () => {}
+      addToHistory: async () => {},
+      getBookmarks: async () => [],
+      addBookmark: async (url, title) => { bookmarkCalls.push(['add', url, title]) },
+      removeBookmark: async (url) => { bookmarkCalls.push(['remove', url]) }
     },
     '../lib/bridge-inject': {
       createBridgeScript: (port, token) => `bridge:${port}:${token}`
@@ -897,6 +901,49 @@ test('BrowseScreen routes hyper URLs through rpc.navigate and opens untrusted HT
   let webView = findAll(tree, (node) => node.type === 'WebView')[0]
   assert.equal(webView.props.source.uri, 'http://127.0.0.1:9876/hyper/' + keyHex + '/')
   assert.equal(webView.props.injectedJavaScriptBeforeContentLoaded, 'bridge:9876:token-1')
+
+  const browserCommands = []
+  webView.props.ref.current = {
+    injectJavaScript: (script) => browserCommands.push(['injectJavaScript', script]),
+    reload: () => browserCommands.push(['reload'])
+  }
+  const openPageActions = () => {
+    findByProp(tree, 'TouchableOpacity', 'accessibilityLabel', 'Page actions').props.onPress()
+    tree = harness.render(BrowseScreen, { rpc, proxyPort: 9876, peerCount: 3, status: 'connected', initialUrl: 'hyper://' + keyHex })
+  }
+
+  openPageActions()
+  findByProp(tree, 'TouchableOpacity', 'accessibilityLabel', 'Reload page').props.onPress()
+  assert.deepEqual(browserCommands, [['reload']])
+
+  openPageActions()
+  findByProp(tree, 'TouchableOpacity', 'accessibilityLabel', 'Find in page').props.onPress()
+  tree = harness.render(BrowseScreen, { rpc, proxyPort: 9876, peerCount: 3, status: 'connected', initialUrl: 'hyper://' + keyHex })
+  findByProp(tree, 'TextInput', 'placeholder', 'Find in page').props.onChangeText('Pear Browser')
+  tree = harness.render(BrowseScreen, { rpc, proxyPort: 9876, peerCount: 3, status: 'connected', initialUrl: 'hyper://' + keyHex })
+  findByProp(tree, 'TouchableOpacity', 'accessibilityLabel', 'Next match').props.onPress()
+  findByProp(tree, 'TouchableOpacity', 'accessibilityLabel', 'Previous match').props.onPress()
+  assert.match(browserCommands[1][1], /window\.find\("Pear Browser", false, false/)
+  assert.match(browserCommands[2][1], /window\.find\("Pear Browser", false, true/)
+
+  openPageActions()
+  await findByProp(tree, 'TouchableOpacity', 'accessibilityLabel', 'Share current page').props.onPress()
+  assert.equal(rn.shared[0].url, 'hyper://' + keyHex)
+
+  openPageActions()
+  findByProp(tree, 'TouchableOpacity', 'accessibilityLabel', 'Copy current page link').props.onPress()
+  assert.equal(rn.clipboard.value, 'hyper://' + keyHex)
+
+  openPageActions()
+  await findByProp(tree, 'TouchableOpacity', 'accessibilityLabel', 'Add bookmark').props.onPress()
+  assert.deepEqual(bookmarkCalls, [['add', 'hyper://' + keyHex, 'hyper://' + keyHex]])
+
+  openPageActions()
+  findByProp(tree, 'TouchableOpacity', 'accessibilityLabel', 'Request desktop site').props.onPress()
+  tree = harness.render(BrowseScreen, { rpc, proxyPort: 9876, peerCount: 3, status: 'connected', initialUrl: 'hyper://' + keyHex })
+  webView = findAll(tree, (node) => node.type === 'WebView')[0]
+  assert.match(webView.props.userAgent, /Macintosh/)
+  assert.deepEqual(browserCommands.at(-1), ['reload'])
 
   assert.equal(webView.props.onShouldStartLoadWithRequest({ url: 'https://example.com/page' }), false)
   assert.deepEqual(rn.module.Linking.opened, ['https://example.com/page'])
@@ -982,6 +1029,14 @@ test('SettingsScreen updates catalog, relay, privacy, cache, and identity naviga
     },
     async clearCache () {
       calls.push('clearCache')
+    },
+    async deviceLinkCreateInvite () {
+      calls.push(['deviceLinkCreateInvite'])
+      return { invite: 'f'.repeat(64), discoveryKey: 'd'.repeat(64) }
+    },
+    async deviceLinkJoin (invite, device) {
+      calls.push(['deviceLinkJoin', invite, device])
+      return { ok: true, restartRequired: true }
     }
   }
   const { SettingsScreen } = loadTsxModule('app/screens/SettingsScreen.tsx', {
@@ -1023,6 +1078,8 @@ test('SettingsScreen updates catalog, relay, privacy, cache, and identity naviga
   tree = harness.render(SettingsScreen, props)
   assert.match(textContent(tree), /Settings/)
   assert.match(textContent(tree), /storage:256\/1024/)
+  assert.match(textContent(tree), /24-word BIP-39 seed phrase/)
+  assert.match(textContent(tree), /Link a Device/)
 
   findByProp(tree, 'TextInput', 'value', 'https://relay-us.p2phiverelay.xyz').props.onChangeText('https://relay-new.example.com')
   tree = harness.render(SettingsScreen, props)
@@ -1048,6 +1105,22 @@ test('SettingsScreen updates catalog, relay, privacy, cache, and identity naviga
   findTouchableWithText(tree, 'Restore from Phrase').props.onPress()
   assert.deepEqual(opened, ['backup', 'restore'])
 
+  await findTouchableWithText(tree, 'Invite').props.onPress()
+  await flushMicrotasks()
+  assert.deepEqual(calls.at(-1), ['deviceLinkCreateInvite'])
+  tree = harness.render(SettingsScreen, props)
+  assert.match(textContent(tree), /Invite created/)
+  findTouchableWithText(tree, 'Copy Invite').props.onPress()
+  assert.equal(rn.clipboard.value, 'f'.repeat(64))
+
+  findByProp(tree, 'TextInput', 'placeholder', 'Paste invite from your other device').props.onChangeText('abc123')
+  tree = harness.render(SettingsScreen, props)
+  findTouchableWithText(tree, 'Link This Device').props.onPress()
+  assert.equal(rn.alerts.at(-1)[0], 'Replace this identity?')
+  await rn.alerts.at(-1)[2][1].onPress()
+  await flushMicrotasks()
+  assert.deepEqual(calls.at(-1), ['deviceLinkJoin', 'abc123', 'iPhone'])
+
   findTouchableWithText(tree, 'Clear All Browser Data').props.onPress()
   await rn.alerts.at(-1)[2][1].onPress()
   await flushMicrotasks()
@@ -1058,7 +1131,7 @@ test('BackupPhraseScreen reveals, copies, confirms, and closes only after acknow
   const harness = createReactHarness()
   const rn = createReactNativeStub()
   const backs = []
-  const mnemonic = 'abandon ability able about above absent absorb abstract absurd abuse access accident'
+  const mnemonic = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art'
   const { BackupPhraseScreen } = loadTsxModule('app/screens/BackupPhraseScreen.tsx', makeBaseStubs(harness, rn))
 
   let tree = harness.render(BackupPhraseScreen, {
@@ -1071,6 +1144,7 @@ test('BackupPhraseScreen reveals, copies, confirms, and closes only after acknow
     onBack: () => backs.push(true)
   })
   assert.match(textContent(tree), /••••••/)
+  assert.match(textContent(tree), /24-word phrase/)
   findTouchableWithText(tree, 'Tap to reveal').props.onPress()
   tree = harness.render(BackupPhraseScreen, {
     rpc: { identityExportPhrase: async () => ({ mnemonic }) },
@@ -1098,7 +1172,7 @@ test('RestoreIdentityScreen validates phrases and restores through double confir
   const rn = createReactNativeStub()
   const calls = []
   const restored = []
-  const phrase = 'abandon ability able about above absent absorb abstract absurd abuse access accident'
+  const phrase = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art'
   const rpc = {
     async identityValidatePhrase (value) {
       calls.push(['validate', value])
@@ -1112,6 +1186,7 @@ test('RestoreIdentityScreen validates phrases and restores through double confir
   const { RestoreIdentityScreen } = loadTsxModule('app/screens/RestoreIdentityScreen.tsx', makeBaseStubs(harness, rn))
 
   let tree = harness.render(RestoreIdentityScreen, { rpc, onBack: () => {}, onRestored: () => restored.push(true) })
+  assert.match(textContent(tree), /24-word backup phrase/)
   await findByProp(tree, 'TextInput', 'placeholder', 'abandon ability able above ...').props.onChangeText(phrase.toUpperCase())
   await flushMicrotasks()
   tree = harness.render(RestoreIdentityScreen, { rpc, onBack: () => {}, onRestored: () => restored.push(true) })

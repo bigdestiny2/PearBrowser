@@ -2,12 +2,15 @@ import React, { useRef, useState, useCallback } from 'react'
 import {
   View, Text, TextInput, StyleSheet, TouchableOpacity,
   Linking, ActivityIndicator, KeyboardAvoidingView, Platform,
+  Share, Clipboard, Modal,
 } from 'react-native'
 import { WebView } from 'react-native-webview'
 import { colors } from '../lib/theme'
 import { StatusDot } from '../components/StatusDot'
 import { OfflineIndicator } from '../components/OfflineIndicator'
-import { addToHistory, addBookmark, getSettings } from '../lib/storage'
+import {
+  addToHistory, addBookmark, getBookmarks, getSettings, removeBookmark,
+} from '../lib/storage'
 import { createBridgeScript } from '../lib/bridge-inject'
 import type { PearRPC } from '../lib/rpc'
 
@@ -19,6 +22,8 @@ type Props = {
   initialUrl?: string | null
   isOffline?: boolean
 }
+
+const DESKTOP_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 PearBrowser/0.1 Safari/605.1.15'
 
 function isTrustedRelayAppUrl (url: string) {
   try {
@@ -43,11 +48,44 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
   const [webViewUrl, setWebViewUrl] = useState<string | null>(null)
   const [bridgeToken, setBridgeToken] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [findVisible, setFindVisible] = useState(false)
+  const [findText, setFindText] = useState('')
+  const [pageTitle, setPageTitle] = useState('')
+  const [pageActionsVisible, setPageActionsVisible] = useState(false)
+  const [bookmarked, setBookmarked] = useState(false)
+  const [desktopSiteRequested, setDesktopSiteRequested] = useState(false)
+  const desktopModeReady = useRef(false)
 
   // Navigate on initial URL
   React.useEffect(() => {
     if (initialUrl) handleNavigate(initialUrl)
   }, [initialUrl])
+
+  React.useEffect(() => {
+    let cancelled = false
+    if (!currentUrl) {
+      setBookmarked(false)
+      return () => { cancelled = true }
+    }
+    getBookmarks()
+      .then(items => {
+        if (!cancelled) setBookmarked(items.some(item => item.url === currentUrl))
+      })
+      .catch(() => {
+        if (!cancelled) setBookmarked(false)
+      })
+    return () => { cancelled = true }
+  }, [currentUrl])
+
+  // React Native WebView applies the new userAgent prop on re-render. Reload
+  // after that render so the request and responsive layout both use it.
+  React.useEffect(() => {
+    if (!desktopModeReady.current) {
+      desktopModeReady.current = true
+      return
+    }
+    webViewRef.current?.reload()
+  }, [desktopSiteRequested])
 
   const handleNavigate = useCallback(async (url: string) => {
     setLoading(true)
@@ -103,8 +141,69 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
     setInputFocused(false)
   }, [inputText, handleNavigate])
 
+  const findInPage = useCallback((forward = true) => {
+    const query = findText.trim()
+    if (!query) return
+    webViewRef.current?.injectJavaScript(`
+      (() => {
+        try {
+          window.find(${JSON.stringify(query)}, false, ${forward ? 'false' : 'true'}, true, false, true, false)
+        } catch (_) {}
+      })();
+      true;
+    `)
+  }, [findText])
+
+  const closeFind = useCallback(() => {
+    setFindVisible(false)
+    setFindText('')
+    webViewRef.current?.injectJavaScript(`
+      try { window.getSelection()?.removeAllRanges() } catch (_) {}
+      true;
+    `)
+  }, [])
+
+  const showFind = useCallback(() => {
+    setPageActionsVisible(false)
+    setFindVisible(true)
+  }, [])
+
+  const reloadPage = useCallback(() => {
+    setPageActionsVisible(false)
+    webViewRef.current?.reload()
+  }, [])
+
+  const sharePage = useCallback(async () => {
+    setPageActionsVisible(false)
+    if (!currentUrl) return
+    await Share.share({ message: currentUrl, url: currentUrl })
+  }, [currentUrl])
+
+  const copyPageLink = useCallback(() => {
+    setPageActionsVisible(false)
+    if (currentUrl) Clipboard.setString(currentUrl)
+  }, [currentUrl])
+
+  const toggleBookmark = useCallback(async () => {
+    setPageActionsVisible(false)
+    if (!currentUrl) return
+    if (bookmarked) {
+      await removeBookmark(currentUrl)
+      setBookmarked(false)
+    } else {
+      await addBookmark(currentUrl, pageTitle || currentUrl)
+      setBookmarked(true)
+    }
+  }, [bookmarked, currentUrl, pageTitle])
+
+  const toggleDesktopSite = useCallback(() => {
+    setPageActionsVisible(false)
+    setDesktopSiteRequested(value => !value)
+  }, [])
+
   const handleWebViewNav = useCallback((navState: any) => {
     setLoading(navState.loading)
+    if (navState.title) setPageTitle(navState.title)
     // Track history when page finishes loading (skip in private mode)
     if (!navState.loading && navState.url && currentUrl) {
       getSettings().then(s => {
@@ -118,7 +217,7 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
       const match = navState.url.match(/\/app\/([^/]+)(.*)/)
       if (match) setCurrentUrl(`app://${match[1]}${match[2]}`)
     }
-  }, [])
+  }, [currentUrl])
 
   const handleShouldLoad = useCallback((event: any) => {
     const url = event.url || ''
@@ -172,6 +271,7 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
         <WebView
           ref={webViewRef}
           source={{ uri: webViewUrl }}
+          userAgent={desktopSiteRequested ? DESKTOP_USER_AGENT : undefined}
           style={styles.webview}
           onNavigationStateChange={handleWebViewNav}
           onShouldStartLoadWithRequest={handleShouldLoad}
@@ -206,12 +306,52 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={80}
       >
+        {findVisible && (
+          <View style={styles.findBar}>
+            <TextInput
+              style={styles.findInput}
+              value={findText}
+              onChangeText={setFindText}
+              onSubmitEditing={() => findInPage(true)}
+              placeholder="Find in page"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+              autoFocus
+            />
+            <TouchableOpacity
+              accessibilityLabel="Previous match"
+              onPress={() => findInPage(false)}
+              style={styles.findBtn}
+            >
+              <Text style={styles.findBtnText}>{'↑'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityLabel="Next match"
+              onPress={() => findInPage(true)}
+              style={styles.findBtn}
+            >
+              <Text style={styles.findBtnText}>{'↓'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity accessibilityLabel="Close find" onPress={closeFind} style={styles.findBtn}>
+              <Text style={styles.findBtnText}>{'×'}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         <View style={styles.bottomBar}>
           <TouchableOpacity onPress={() => webViewRef.current?.goBack()} style={styles.navBtn}>
             <Text style={styles.navBtnText}>{'<'}</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => webViewRef.current?.goForward()} style={styles.navBtn}>
             <Text style={styles.navBtnText}>{'>'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            accessibilityLabel="Page actions"
+            onPress={() => setPageActionsVisible(true)}
+            style={styles.navBtn}
+          >
+            <Text style={styles.navBtnText}>{'•••'}</Text>
           </TouchableOpacity>
 
           <View style={styles.urlContainer}>
@@ -235,9 +375,56 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
           <StatusDot status={status} peerCount={peerCount} />
         </View>
       </KeyboardAvoidingView>
+
+      {pageActionsVisible && (
+        <Modal
+          visible
+          transparent
+          animationType="fade"
+          onRequestClose={() => setPageActionsVisible(false)}
+        >
+          <View style={styles.actionsBackdrop}>
+            <TouchableOpacity
+              accessibilityLabel="Close page actions"
+              activeOpacity={1}
+              onPress={() => setPageActionsVisible(false)}
+              style={StyleSheet.absoluteFillObject}
+            />
+            <View style={styles.actionsSheet}>
+              <Text style={styles.actionsTitle}>Page actions</Text>
+              <PageAction label="Share" accessibilityLabel="Share current page" onPress={sharePage} />
+              <PageAction label="Copy Link" accessibilityLabel="Copy current page link" onPress={copyPageLink} />
+              <PageAction
+                label={bookmarked ? 'Remove Bookmark' : 'Add Bookmark'}
+                accessibilityLabel={bookmarked ? 'Remove bookmark' : 'Add bookmark'}
+                onPress={toggleBookmark}
+              />
+              <PageAction label="Reload" accessibilityLabel="Reload page" onPress={reloadPage} />
+              <PageAction label="Find in Page" accessibilityLabel="Find in page" onPress={showFind} />
+              <PageAction
+                label={desktopSiteRequested ? 'Request Mobile Site' : 'Request Desktop Site'}
+                accessibilityLabel={desktopSiteRequested ? 'Request mobile site' : 'Request desktop site'}
+                onPress={toggleDesktopSite}
+              />
+            </View>
+          </View>
+        </Modal>
+      )}
     </View>
   )
 })
+
+function PageAction ({ label, accessibilityLabel, onPress }: {
+  label: string
+  accessibilityLabel: string
+  onPress: () => void
+}) {
+  return (
+    <TouchableOpacity accessibilityLabel={accessibilityLabel} onPress={onPress} style={styles.actionRow}>
+      <Text style={styles.actionText}>{label}</Text>
+    </TouchableOpacity>
+  )
+}
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
@@ -251,6 +438,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bg,
   },
   loadingText: { color: colors.textSecondary, fontSize: 14, marginTop: 12 },
+  findBar: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 8, paddingVertical: 6,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1, borderTopColor: colors.border,
+  },
+  findInput: {
+    flex: 1, height: 34, paddingHorizontal: 10,
+    color: colors.textPrimary, backgroundColor: colors.surfaceElevated,
+    borderRadius: 6, fontSize: 13,
+  },
+  findBtn: {
+    width: 34, height: 34, justifyContent: 'center', alignItems: 'center',
+    marginLeft: 4,
+  },
+  findBtnText: { color: colors.textSecondary, fontSize: 18, fontWeight: '600' },
   bottomBar: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 8, paddingVertical: 8,
@@ -270,4 +473,20 @@ const styles = StyleSheet.create({
   urlInput: {
     flex: 1, color: colors.textPrimary, fontSize: 13, fontFamily: 'monospace',
   },
+  actionsBackdrop: {
+    flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.55)',
+  },
+  actionsSheet: {
+    backgroundColor: colors.surface, borderTopLeftRadius: 18, borderTopRightRadius: 18,
+    borderTopWidth: 1, borderColor: colors.border, padding: 12, paddingBottom: 28,
+  },
+  actionsTitle: {
+    color: colors.textMuted, fontSize: 12, fontWeight: '700', textTransform: 'uppercase',
+    paddingHorizontal: 12, paddingVertical: 8,
+  },
+  actionRow: {
+    minHeight: 46, justifyContent: 'center', paddingHorizontal: 12,
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border,
+  },
+  actionText: { color: colors.textPrimary, fontSize: 16, fontWeight: '500' },
 })

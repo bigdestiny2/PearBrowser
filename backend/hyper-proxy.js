@@ -4,6 +4,9 @@
  * URL mapping:
  *   localhost:PORT/hyper/KEY/path → fetches from Hyperdrive
  *   localhost:PORT/app/APP_ID/path → fetches from installed app's drive
+ *   localhost:PORT/clearnet/BASE64URL → fetches the encoded http(s) URL
+ *     through the browser-owned clearnet proxy (shield + privacy ladder;
+ *     Mission B2, ported from pearbrowser-desktop)
  *
  * Injects <base> tags for relative link resolution in HTML.
  */
@@ -11,6 +14,7 @@
 const http = require('bare-http1')
 const crypto = require('bare-crypto')
 const b4a = require('b4a')
+const { escapeStyleText } = require('./html-raw-text.cjs')
 
 const USER_FRIENDLY_ERRORS = {
   'Invalid drive key': 'This link appears to be broken or incomplete',
@@ -132,6 +136,62 @@ function escapeHtml (str) {
     .replace(/`/g, '&#96;')
 }
 
+/**
+ * Compute the base64 SHA-256 hash of the body of an inline-script
+ * shim string of the form `<script>BODY</script>` (the exact form
+ * PEAR_SWARM_V1_SHIM uses). The browser computes the CSP `'sha256-…'`
+ * hash over the literal text between the opening `>` of `<script>` and
+ * the closing `<` of `</script>`, so we strip the tags before hashing.
+ * Returns '' if the input doesn't look like an inline-script block
+ * (e.g. empty shim or someone passed a `<script src=…>` tag).
+ *
+ * Mirrors pearbrowser-desktop hyper-proxy.js — Content Shield scriptlets
+ * and the swarm shim are hash-authorized instead of 'unsafe-inline'.
+ */
+function sha256ScriptBody (shimHtml) {
+  if (!shimHtml || typeof shimHtml !== 'string') return ''
+  const m = shimHtml.match(/^\s*<script\b[^>]*>([\s\S]*?)<\/script>\s*$/i)
+  if (!m) return ''
+  return crypto.createHash('sha256').update(m[1], 'utf8').digest('base64')
+}
+
+/**
+ * Modify a page's Content-Security-Policy meta tag to authorize the
+ * inline shim scripts we inject. We add `'sha256-…'` tokens to the
+ * `script-src` directive — narrowly authorizing the exact bytes we
+ * insert, without weakening the page's protection against XSS (no
+ * `'unsafe-inline'`).
+ *
+ * Three cases:
+ *   1. CSP has explicit `script-src` → append hashes to it.
+ *   2. CSP has `default-src` but no `script-src` → add a fresh
+ *      `script-src 'self' '<hashes>'` so hashes apply (CSP3 doesn't
+ *      let `'sha256-…'` tokens inherit from `default-src`).
+ *   3. CSP has neither → append `script-src 'self' '<hashes>'`.
+ *   4. No CSP meta tag in the document → no-op (page never set one).
+ *
+ * Idempotent: re-running with the same hash string yields the same
+ * policy. Ported from pearbrowser-desktop hyper-proxy.js.
+ */
+function injectCspShimHashes (html, hashesB64) {
+  if (!hashesB64 || hashesB64.length === 0) return html
+  const hashTokens = hashesB64.map((h) => `'sha256-${h}'`).join(' ')
+  // Match the meta CSP tag in either attribute order; allow single or
+  // double quotes around the content attribute value.
+  const re = /<meta\s+[^>]*?http-equiv\s*=\s*["']Content-Security-Policy["'][^>]*?content\s*=\s*(["'])([\s\S]*?)\1[^>]*>/i
+  return html.replace(re, (full, q, policy) => {
+    let newPolicy = policy
+    if (/script-src\b/i.test(newPolicy)) {
+      newPolicy = newPolicy.replace(/script-src([^;]*)/i, (m, rest) => `script-src${rest} ${hashTokens}`)
+    } else if (/default-src\b/i.test(newPolicy)) {
+      newPolicy = newPolicy.replace(/(default-src[^;]*)(;|$)/i, (m, ds, end) => `${ds}; script-src 'self' ${hashTokens}${end}`)
+    } else {
+      newPolicy = newPolicy + (newPolicy.endsWith(';') ? ' ' : '; ') + `script-src 'self' ${hashTokens}`
+    }
+    return full.replace(`${q}${policy}${q}`, `${q}${newPolicy}${q}`)
+  })
+}
+
 class HyperProxy {
   constructor (getDrive, onError, relayClient) {
     this._getDrive = getDrive // async (keyHex) => Hyperdrive
@@ -151,14 +211,73 @@ class HyperProxy {
     this._apiTokens = new Map() // token -> { driveKeyHex, issuedAt }
     this._apiTokenTtlMs = 10 * 60 * 1000 // 10 minutes
     this._pearSwarmShim = ''
+    this._pearSwarmShimHash = ''
+    /**
+     * Content Shield (ported from pearbrowser-desktop — Phases 1–3). When
+     * set, every /hyper//app request is evaluated before any cache/P2P/relay
+     * work; HTML responses receive cosmetic CSS, optional strict-mode CSP,
+     * and scriptlets. Null preserves the exact pre-shield behavior.
+     */
+    this._contentShield = null
+    /**
+     * Privacy ladder settings for clearnet (/clearnet/*) handling.
+     * Updated live from user-data via setPrivacySettings().
+     * (Ported from pearbrowser-desktop — Mission B2.)
+     */
+    this._privacySettings = null
+    this._clearnetHandler = null
+    /**
+     * Local-first search indexing hook (Mission B3). When set, every HTML
+     * page served on a /hyper/ path (browse chokepoint — cache hit AND miss)
+     * is reported fire-and-forget as { driveKeyHex, filePath, html } (raw,
+     * pre-injection). The callback owns the privacy gate
+     * (searchIndexEnabled, opt-in default OFF) and must never throw into the
+     * serve path. Null preserves the exact pre-B3 behavior.
+     */
+    this._pageIndexer = null
   }
 
   setHttpBridge (bridge) {
     this._httpBridge = bridge
   }
 
+  setPrivacySettings (settings) {
+    this._privacySettings = settings || null
+  }
+
+  /**
+   * Optional injection of clearnet request handler (from clearnet-proxy.cjs).
+   * Defaults to requiring the module on first /clearnet/ hit.
+   */
+  setClearnetHandler (handler) {
+    this._clearnetHandler = typeof handler === 'function' ? handler : null
+  }
+
   setPearSwarmShim (shimHtml) {
     this._pearSwarmShim = String(shimHtml || '')
+    this._pearSwarmShimHash = sha256ScriptBody(this._pearSwarmShim)
+  }
+
+  setContentShield (shield) {
+    this._contentShield = shield || null
+  }
+
+  /**
+   * Wire the local search page indexer (Mission B3). `fn({ driveKeyHex,
+   * filePath, html })` is invoked fire-and-forget for HTML pages served on
+   * /hyper/ paths only (browsing — installed /app/ pages are not indexed,
+   * mirroring the desktop, which only indexes browsed hyper:// tabs).
+   */
+  setPageIndexer (fn) {
+    this._pageIndexer = typeof fn === 'function' ? fn : null
+  }
+
+  _reportPageForIndex (driveKeyHex, filePath, content) {
+    const indexer = this._pageIndexer
+    if (!indexer) return
+    try {
+      indexer({ driveKeyHex, filePath, html: b4a.toString(content, 'utf-8') })
+    } catch { /* indexing is best-effort and must never break serving */ }
   }
 
   get port () { return this._port }
@@ -203,30 +322,34 @@ class HyperProxy {
     // for an origin we can affirmatively trust:
     //   - loopback origins (http://127.0.0.1, http://localhost), OR
     //   - a non-loopback http(s) origin that presents a valid, unexpired
-    //     origin-scoped token (X-Pear-Token header, or `token` query param
-    //     for EventSource which cannot set headers) issued for THAT exact
-    //     origin.
-    // The token is validated BEFORE the echo decision. An arbitrary,
-    // unauthenticated https origin is NEVER echoed — it falls back to the
-    // loopback default, so the browser denies the cross-origin read.
+    //     origin-scoped token (X-Pear-Token header) issued for THAT exact
+    //     origin, OR
+    //   - an EventSource stream URL carrying a valid origin-scoped one-time
+    //     SSE ticket for that exact origin. The ticket is only peeked here;
+    //     http-bridge consumes it once when the stream is accepted.
+    // Browser preflights are allowed for canonical http(s) origins because
+    // they cannot carry X-Pear-Token; the actual request is still token/ticket
+    // gated before any privileged response is readable.
+    const isPreflight = req.method === 'OPTIONS'
     let allowOrigin = 'http://127.0.0.1'
     if (origin && isLoopbackOrigin(origin)) {
       allowOrigin = origin
+    } else if (origin && isPreflight && isCanonicalHttpOrigin(origin)) {
+      allowOrigin = origin
     } else if (origin) {
       const rawToken = req.headers['x-pear-token']
-      let token = Array.isArray(rawToken) ? rawToken[0] : rawToken
-      if (!token) {
-        // EventSource fallback — token may ride in the query string.
-        try {
-          token = new URL(req.url, `http://localhost:${this._port}`)
-            .searchParams.get('token') || null
-        } catch {
-          token = null
-        }
-      }
+      const token = Array.isArray(rawToken) ? rawToken[0] : rawToken
       const entry = token ? this.validateApiToken(token) : null
       if (entry && entry.kind === 'origin' && entry.origin === origin) {
         allowOrigin = origin
+      } else if (this._httpBridge && typeof this._httpBridge.allowsSseTicketCors === 'function') {
+        let corsUrl = null
+        try {
+          corsUrl = new URL(req.url, `http://localhost:${this._port}`)
+        } catch {}
+        if (corsUrl && this._httpBridge.allowsSseTicketCors(req, corsUrl)) {
+          allowOrigin = origin
+        }
       }
     }
 
@@ -241,7 +364,14 @@ class HyperProxy {
       return res.end()
     }
 
-    const url = new URL(req.url, `http://localhost:${this._port}`)
+    let url
+    try {
+      url = new URL(req.url, `http://localhost:${this._port}`)
+    } catch {
+      res.statusCode = 400
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+      return res.end('Bad request')
+    }
     const path = url.pathname
 
     // HTTP Bridge — direct API for WebView apps (bypasses RN relay)
@@ -255,6 +385,48 @@ class HyperProxy {
       res.statusCode = 200
       res.setHeader('Content-Type', 'application/json')
       return res.end(JSON.stringify({ ok: true }))
+    }
+
+    // Clearnet proxy (Mission B2, ported from pearbrowser-desktop Phase 4) —
+    // browser-owned https/http fetch with shield + privacy ladder. This is
+    // the ONLY shielded clearnet path on mobile: WKWebView/Android WebView
+    // cannot intercept subresource requests, so the shield sees clearnet
+    // traffic only because the page was navigated through this proxy.
+    if (path.startsWith('/clearnet/')) {
+      const clearnet = require('./clearnet-proxy.cjs')
+      const handle = this._clearnetHandler || clearnet.handleClearnetRequest
+      const proxyOrigin = this._requestOrigin(req)
+      return handle(req, res, url, {
+        contentShield: this._contentShield,
+        privacy: this._privacySettings,
+        proxyOrigin,
+        port: this._port,
+        documentKeyFor: (targetUrl) => this._documentKeyForClearnetUrl(targetUrl)
+      })
+    }
+
+    // Runtime-created root-relative publisher URLs (for example a script
+    // building `/media/...` at runtime) bypass the static HTML attribute
+    // rewrite. Recover their upstream origin from a valid proxied-page
+    // referer before the generic loopback 404 path runs.
+    {
+      const clearnet = require('./clearnet-proxy.cjs')
+      const proxyOrigin = this._requestOrigin(req)
+      const clearnetFallback = clearnet.resolveClearnetFallback(
+        req.headers.referer,
+        req.url,
+        proxyOrigin
+      )
+      if (clearnetFallback) {
+        const handle = this._clearnetHandler || clearnet.handleClearnetRequest
+        return handle(req, res, clearnetFallback, {
+          contentShield: this._contentShield,
+          privacy: this._privacySettings,
+          proxyOrigin,
+          port: this._port,
+          documentKeyFor: (targetUrl) => this._documentKeyForClearnetUrl(targetUrl)
+        })
+      }
     }
 
     try {
@@ -298,6 +470,26 @@ class HyperProxy {
         return res.end('Invalid file path')
       }
 
+      // Content Shield: decide before any cache/P2P/relay work so a blocked
+      // subresource never costs swarm bandwidth or leaks to a relay.
+      // Per-drive allowlist (documentKey) exempts the whole drive.
+      // (Same 403 X-Pear-Shield semantics as pearbrowser-desktop.)
+      if (this._contentShield) {
+        const verdict = this._contentShield.shouldBlockUrl(
+          `hyper://${driveKeyHex}${filePath}`,
+          { documentKey: driveKeyHex }
+        )
+        if (verdict.blocked) {
+          res.statusCode = 403
+          res.setHeader('Content-Type', 'text/plain')
+          res.setHeader('X-Pear-Shield', 'blocked')
+          return res.end('Blocked by PearBrowser Shield')
+        }
+        if (verdict.allowlisted) {
+          res.setHeader('X-Pear-Shield', 'allowlisted')
+        }
+      }
+
       this._stats.total++
 
       // Check if this is a directory request
@@ -321,7 +513,8 @@ class HyperProxy {
         res.setHeader('Content-Type', cached.contentType)
         res.setHeader('X-Cache', 'HIT')
         if (cached.contentType.includes('text/html')) {
-          return this._serveHtmlWithBridge(res, path, driveKeyHex, cached.content)
+          if (path.startsWith('/hyper/')) this._reportPageForIndex(driveKeyHex, filePath, cached.content)
+          return this._serveHtmlWithBridge(req, res, path, driveKeyHex, cached.content)
         }
         res.statusCode = 200
         return res.end(cached.content)
@@ -370,7 +563,8 @@ class HyperProxy {
       // shim for HTML responses. Pages get the shim "for free" — no
       // <script src> required from the author.
       if (contentType.includes('text/html')) {
-        return this._serveHtmlWithBridge(res, path, driveKeyHex, content)
+        if (path.startsWith('/hyper/')) this._reportPageForIndex(driveKeyHex, filePath, content)
+        return this._serveHtmlWithBridge(req, res, path, driveKeyHex, content)
       }
 
       // Range request support for buffered fallback (small files, or when
@@ -458,20 +652,42 @@ class HyperProxy {
    *
    * connect-src is pinned to the actual proxy port so the injected
    * window.pear.swarm.v1 shim can still reach /api/* on this server.
+   *
+   * Browser-owned inline scripts (the swarm shim, Content Shield
+   * scriptlets) are authorized by their exact `'sha256-…'` hash — the
+   * desktop hash-authorization model adapted to this proxy's
+   * response-header CSP. No 'unsafe-inline', ever.
    */
-  _contentSecurityPolicy () {
+  _contentSecurityPolicy (extraScriptHashes = []) {
     const self = `http://127.0.0.1:${this._port}`
     const selfLocalhost = `http://localhost:${this._port}`
+    const hashTokens = (extraScriptHashes || [])
+      .filter(Boolean)
+      .map((h) => `'sha256-${h}'`)
+      .join(' ')
+    const scriptSrc = hashTokens
+      ? `script-src 'self' ${hashTokens}`
+      : "script-src 'self'"
     return [
       "default-src 'self'",
-      "script-src 'self'",
+      scriptSrc,
       `connect-src 'self' ${self} ${selfLocalhost}`,
       "object-src 'none'",
       "base-uri 'self'"
     ].join('; ')
   }
 
-  _serveHtmlWithBridge (res, path, driveKeyHex, content) {
+  _requestOrigin (req) {
+    const host = req && req.headers && typeof req.headers.host === 'string'
+      ? req.headers.host.toLowerCase()
+      : ''
+    if (host === `127.0.0.1:${this._port}` || host === `localhost:${this._port}`) {
+      return `http://${host}`
+    }
+    return `http://127.0.0.1:${this._port}`
+  }
+
+  _serveHtmlWithBridge (req, res, path, driveKeyHex, content) {
     // KNOWN LIMITATION (browser-layer isolation): every drive/app is served
     // from the same single origin http://127.0.0.1:PORT, so there is NO
     // per-app origin isolation at the browser layer — one app's page can,
@@ -482,16 +698,87 @@ class HyperProxy {
     // the CSP below only narrows what a single shared-origin page may load.
     const html = b4a.toString(content, 'utf-8')
     const prefix = path.startsWith('/app/') ? '/app/' : '/hyper/'
-    const baseHref = `http://localhost:${this._port}${prefix}${driveKeyHex}/`
+    const baseHref = `${this._requestOrigin(req)}${prefix}${driveKeyHex}/`
     const apiToken = this.issueApiToken(driveKeyHex)
+
+    // Content Shield: cosmetic element hiding, scriptlets, plugin
+    // styles/scripts, and optional strict third-party CSP ride the same
+    // injection path as the swarm shim (mirrors pearbrowser-desktop
+    // _injectHtmlHead). Style blocks need no CSP script hash; scriptlets and
+    // plugin scripts are hash-authorized exactly like the shim.
+    const shieldOpts = { documentKey: driveKeyHex }
+    const shieldCss = this._contentShield
+      ? this._contentShield.cosmeticCssFor(driveKeyHex, shieldOpts)
+      : ''
+    const pluginCss = this._contentShield && typeof this._contentShield.pluginStylesFor === 'function'
+      ? this._contentShield.pluginStylesFor(driveKeyHex, shieldOpts)
+      : ''
+    const scriptlets = this._contentShield && typeof this._contentShield.scriptletsFor === 'function'
+      ? this._contentShield.scriptletsFor(driveKeyHex, shieldOpts)
+      : []
+    const pluginScripts = this._contentShield && typeof this._contentShield.pluginScriptsFor === 'function'
+      ? this._contentShield.pluginScriptsFor(driveKeyHex, shieldOpts)
+      : []
+
+    const scriptletTags = []
+    const scriptletHashes = []
+    for (const entry of scriptlets) {
+      const tag = `<script data-pear-scriptlet="${escapeHtml(entry.name || 'scriptlet')}">${entry.body}</script>`
+      const hash = sha256ScriptBody(tag)
+      if (hash) {
+        scriptletTags.push(tag)
+        scriptletHashes.push(hash)
+      }
+    }
+    const pluginScriptTags = []
+    const pluginScriptHashes = []
+    for (const entry of pluginScripts) {
+      const tag = `<script data-pear-plugin="${escapeHtml(entry.pluginId || 'plugin')}">${entry.body}</script>`
+      const hash = sha256ScriptBody(tag)
+      if (hash) {
+        pluginScriptTags.push(tag)
+        pluginScriptHashes.push(hash)
+      }
+    }
+
+    const strictMode = this._contentShield &&
+      typeof this._contentShield.isStrict === 'function' &&
+      this._contentShield.isStrict(driveKeyHex)
+    // Collect every script hash we inject so strict CSP, the page's own
+    // meta CSP, and the response-header CSP authorize exactly those bytes.
+    const swarmShimHash = this._pearSwarmShim
+      ? (this._pearSwarmShimHash || sha256ScriptBody(this._pearSwarmShim))
+      : ''
+    const hashesToAuthorize = []
+    if (swarmShimHash) hashesToAuthorize.push(swarmShimHash)
+    for (const h of scriptletHashes) hashesToAuthorize.push(h)
+    for (const h of pluginScriptHashes) hashesToAuthorize.push(h)
+
+    const strictMeta = strictMode
+      ? `<meta http-equiv="Content-Security-Policy" content="${this._contentShield.strictCspContent(hashesToAuthorize)}" data-pear-shield-strict="1">`
+      : ''
+
     const headInjection =
       `<base href="${baseHref}">` +
       `<meta name="pear-api-token" content="${apiToken}">` +
-      (this._pearSwarmShim || '')
-    const injected = html.includes('<head>')
+      strictMeta +
+      (this._pearSwarmShim || '') +
+      scriptletTags.join('') +
+      pluginScriptTags.join('') +
+      (shieldCss ? `<style data-pear-shield>${escapeStyleText(shieldCss)}</style>` : '') +
+      (pluginCss ? `<style data-pear-plugin-style>${escapeStyleText(pluginCss)}</style>` : '')
+    let injected = html.includes('<head>')
       ? html.replace('<head>', `<head>${headInjection}`)
       : html.replace(/<html>/i, `<html><head>${headInjection}</head>`)
-    res.setHeader('Content-Security-Policy', this._contentSecurityPolicy())
+
+    // A page may carry its own meta CSP that forbids inline scripts. Add
+    // only the exact hashes of the scripts we (the browser) injected —
+    // never 'unsafe-inline'. Same model as the desktop proxy.
+    if (hashesToAuthorize.length > 0) {
+      injected = injectCspShimHashes(injected, hashesToAuthorize)
+    }
+
+    res.setHeader('Content-Security-Policy', this._contentSecurityPolicy(hashesToAuthorize))
     res.statusCode = 200
     return res.end(b4a.from(injected))
   }
@@ -783,13 +1070,57 @@ class HyperProxy {
   }
 
   /**
+   * Deterministic pseudo-drive-key for an http(s) origin string:
+   *   sha256('pear.origin.v1:' + normaliseOrigin(origin)) → 64-hex.
+   *
+   * The origin acts as a pseudo-drive-key: the hash feeds the same identity
+   * sub-keypair derivation used for hyper:// drives, so the `pear.login()`
+   * ceremony, profile grants, and verify-login pipeline all work uniformly
+   * across hyper:// and HTTPS apps. It is ALSO the documentKey the Content
+   * Shield uses on proxied clearnet pages (Mission B2), so per-origin
+   * allowlist / strict-CSP entries keyed by this pseudo-key apply to both
+   * the clearnet proxy and the token pipeline.
+   *
+   * Same origin (same scheme + host + port) → same pseudo-driveKey
+   * forever → stable per-user-per-site sub-pubkey.
+   * Different origins → different pseudo-driveKeys → different sub-pubkeys.
+   *
+   * Phase E follow-up — the per-origin token security model. See
+   * docs/HOLEPUNCH_ALIGNMENT_PLAN.md and packages/verify-login/README.md.
+   */
+  originPseudoKey (originString) {
+    const origin = normaliseOrigin(originString)
+    if (!origin) return null
+    return crypto.createHash('sha256')
+      .update('pear.origin.v1:').update(origin)
+      .digest('hex')
+  }
+
+  /**
+   * The Content Shield documentKey for a clearnet document/subresource URL:
+   * the pseudo-key of the URL's origin (scheme + host + port). Returns null
+   * for non-http(s) or unparseable input so callers can fall back to
+   * key-less decisions (desktop behavior).
+   */
+  _documentKeyForClearnetUrl (url) {
+    if (typeof url !== 'string' || !url) return null
+    try {
+      const u = new URL(url)
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+      return this.originPseudoKey(`${u.protocol}//${u.host}`)
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * Issue a session token scoped to an HTTPS (or http) Origin string.
    *
    * The origin acts as a pseudo-drive-key: we hash it with a v1 domain
-   * separator to get a stable 64-hex pseudo-key. That feeds the same
-   * identity sub-keypair derivation used for hyper:// drives, so the
-   * `pear.login()` ceremony, profile grants, and verify-login pipeline
-   * all work uniformly across hyper:// and HTTPS apps.
+   * separator to get a stable 64-hex pseudo-key (see originPseudoKey).
+   * That feeds the same identity sub-keypair derivation used for hyper://
+   * drives, so the `pear.login()` ceremony, profile grants, and verify-login
+   * pipeline all work uniformly across hyper:// and HTTPS apps.
    *
    * Same origin (same scheme + host + port) → same pseudo-driveKey
    * forever → stable per-user-per-site sub-pubkey.
@@ -808,9 +1139,7 @@ class HyperProxy {
       throw new Error('Origin tokens are for non-loopback HTTPS origins only')
     }
 
-    const driveKeyHex = crypto.createHash('sha256')
-      .update('pear.origin.v1:').update(origin)
-      .digest('hex')
+    const driveKeyHex = this.originPseudoKey(origin)
 
     this._cleanupExpiredApiTokens()
     const token = crypto.randomBytes(32).toString('hex')
@@ -896,5 +1225,8 @@ li{padding:8px 0;border-bottom:1px solid #333}a{color:#4dabf7;text-decoration:no
 module.exports = { 
   HyperProxy, 
   getUserFriendlyError,
-  USER_FRIENDLY_ERRORS 
+  USER_FRIENDLY_ERRORS,
+  sha256ScriptBody,
+  injectCspShimHashes,
+  escapeStyleText
 }

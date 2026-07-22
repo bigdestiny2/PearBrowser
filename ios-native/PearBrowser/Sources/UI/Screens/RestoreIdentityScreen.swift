@@ -1,7 +1,7 @@
 //  PearBrowser — RestoreIdentityScreen.swift
 //
 //  SwiftUI mirror of app/screens/RestoreIdentityScreen.tsx. Accepts a
-//  12-word BIP-39 phrase, validates it via PearRPC.validatePhrase (async
+//  24-word BIP-39 phrase, validates it via PearRPC.validatePhrase (async
 //  as the user types), and on confirm calls PearRPC.importPhrase then
 //  prompts the user to restart.
 
@@ -26,7 +26,7 @@ struct RestoreIdentityScreen: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Enter your 12-word backup phrase. Words separated by single spaces. Case doesn't matter.")
+                    Text("Enter your 24-word backup phrase. Legacy 12-word BIP-39 phrases are also accepted.")
                         .font(.system(size: 13))
                         .foregroundStyle(PearColors.textSecondary)
 
@@ -98,7 +98,7 @@ struct RestoreIdentityScreen: View {
             } else if isValid == false {
                 Text("✗ Invalid phrase — check each word").font(.system(size: 13)).foregroundStyle(PearColors.error)
             } else if !input.isEmpty {
-                Text("Enter 12 or 24 words to validate")
+                Text("Enter 24 words, or a legacy 12-word phrase, to validate")
                     .font(.system(size: 13))
                     .foregroundStyle(PearColors.textMuted)
             }
@@ -141,7 +141,7 @@ struct RestoreIdentityScreen: View {
 
     private func submit() {
         guard isValid == true else {
-            errorMessage = "Check that every word is spelled correctly and the phrase is 12 or 24 words."
+            errorMessage = "Check that every word is spelled correctly and the phrase is 24 words, or a legacy 12-word phrase."
             return
         }
         showConfirm = true

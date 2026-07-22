@@ -1,7 +1,7 @@
 //  PearBrowser — BackupPhraseScreen.swift
 //
 //  SwiftUI mirror of app/screens/BackupPhraseScreen.tsx.
-//  Shows the user's 12-word BIP-39 seed phrase with a tap-to-reveal
+//  Shows the user's 24-word BIP-39 seed phrase with a tap-to-reveal
 //  grid, copy-to-clipboard button, confirmation switch, and a done
 //  button gated on the user confirming they've written it down.
 
@@ -98,7 +98,7 @@ struct BackupPhraseScreen: View {
             Text("Write this down. Keep it private.")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(PearColors.warning)
-            Text("This 12-word phrase is the master key to your PearBrowser identity. Anyone with these words can impersonate you on the P2P network and read any synced data.")
+            Text("This 24-word phrase is the master key to your PearBrowser identity. Anyone with these words can impersonate you on the P2P network and read any synced data.")
                 .font(.system(size: 13))
                 .foregroundStyle(PearColors.textPrimary)
             Text("Save it on paper, in a password manager, or somewhere only you can reach. If you lose it, you cannot recover your identity.")

@@ -20,6 +20,17 @@ function freshProxy () {
   return new HyperProxy(async () => null, () => {}, null)
 }
 
+function makeRes () {
+  const res = {
+    statusCode: 0,
+    headers: {},
+    body: '',
+    setHeader (name, value) { this.headers[name.toLowerCase()] = value },
+    end (body = '') { this.body = body }
+  }
+  return res
+}
+
 test('issueOriginToken: same origin → same pseudo-driveKey', () => {
   const a = freshProxy()
   const t1 = a.issueOriginToken('https://example.com')
@@ -119,4 +130,54 @@ test('validateApiToken: rejects garbage', () => {
   assert.equal(a.validateApiToken('short'), null)
   assert.equal(a.validateApiToken(null), null)
   assert.equal(a.validateApiToken('a'.repeat(64)), null) // never issued
+})
+
+test('HyperProxy CORS preflight works without re-allowing query tokens', async () => {
+  const proxy = freshProxy()
+  proxy._port = 12345
+  const origin = 'https://example.com'
+
+  const preflight = makeRes()
+  await proxy._handle({
+    method: 'OPTIONS',
+    url: '/api/swarm/ticket',
+    headers: {
+      origin,
+      'access-control-request-method': 'POST',
+      'access-control-request-headers': 'content-type,x-pear-token'
+    },
+    socket: {}
+  }, preflight)
+  assert.equal(preflight.statusCode, 204)
+  assert.equal(preflight.headers['access-control-allow-origin'], origin)
+
+  const issued = proxy.issueOriginToken(origin)
+  const queryBearer = makeRes()
+  await proxy._handle({
+    method: 'GET',
+    url: `/api/swarm/events?channelId=channel-1&token=${encodeURIComponent(issued.token)}`,
+    headers: { origin },
+    socket: {}
+  }, queryBearer)
+  assert.notEqual(queryBearer.headers['access-control-allow-origin'], origin)
+})
+
+test('HyperProxy returns 400 for malformed request URLs instead of crashing', async () => {
+  const proxy = freshProxy()
+  proxy._port = 12345
+  const OriginalURL = global.URL
+  global.URL = class {
+    constructor () {
+      throw new URIError('URI malformed')
+    }
+  }
+  const res = makeRes()
+  try {
+    await proxy._handle({ method: 'GET', url: '/api/sync/range?lt=probe!%FF', headers: {}, socket: {} }, res)
+  } finally {
+    global.URL = OriginalURL
+  }
+  assert.equal(res.statusCode, 400)
+  assert.equal(res.headers['content-type'], 'text/plain; charset=utf-8')
+  assert.equal(res.body, 'Bad request')
 })

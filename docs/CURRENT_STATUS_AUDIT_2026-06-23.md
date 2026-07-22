@@ -1,5 +1,9 @@
 # PearBrowser Current Status Audit
 
+> Historical snapshot from 2026-06-23. For the current source, native-build,
+> security, and distribution status, see
+> [RELEASE_EVIDENCE_2026-07-22.md](RELEASE_EVIDENCE_2026-07-22.md).
+
 Generated: 2026-06-23
 Loop candidate: `pearbrowser-status-audit`
 Autonomy level: Level 1 status artifact

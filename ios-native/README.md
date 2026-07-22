@@ -37,8 +37,14 @@ ios-native/
                 ├── HomeScreen.swift
                 ├── ExploreScreen.swift
                 ├── BrowseScreen.swift
-                ├── MoreScreen.swift     (stub)
-                └── BookmarksScreen.swift (stub)
+                ├── MoreScreen.swift
+                ├── BookmarksScreen.swift
+                ├── HistoryScreen.swift
+                ├── SettingsScreen.swift
+                ├── MySitesScreen.swift
+                ├── SiteEditorScreen.swift
+                ├── TemplatePickerScreen.swift
+                └── QRScannerScreen.swift
 ```
 
 ## How this differs from the RN shell

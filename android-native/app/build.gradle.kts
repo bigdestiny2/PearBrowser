@@ -5,11 +5,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-val releaseKeystorePath = providers.environmentVariable("PEARBROWSER_ANDROID_KEYSTORE").orNull
-val releaseStorePassword = providers.environmentVariable("PEARBROWSER_ANDROID_STORE_PASSWORD").orNull
-val releaseKeyAlias = providers.environmentVariable("PEARBROWSER_ANDROID_KEY_ALIAS").orNull
-val releaseKeyPassword = providers.environmentVariable("PEARBROWSER_ANDROID_KEY_PASSWORD").orNull
-    ?: releaseStorePassword
+val releaseKeystorePath = providers.environmentVariable("PEARBROWSER_RELEASE_STORE_FILE").orNull
+val releaseStorePassword = providers.environmentVariable("PEARBROWSER_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("PEARBROWSER_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("PEARBROWSER_RELEASE_KEY_PASSWORD").orNull
 val hasReleaseSigning = !releaseKeystorePath.isNullOrBlank() &&
     !releaseStorePassword.isNullOrBlank() &&
     !releaseKeyAlias.isNullOrBlank() &&
@@ -148,6 +147,7 @@ tasks.configureEach {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)

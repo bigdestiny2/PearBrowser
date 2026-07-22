@@ -2,7 +2,7 @@
 
 A peer-to-peer mobile app platform for iOS and Android. Browse the decentralized web, discover P2P apps from decentralized catalogs, build personal websites, and run web apps that can use Pear identity, Autobase sync, Hyperdrive content, and direct Hyperswarm channels from a phone.
 
-**Current architecture:** start with [docs/ARCHITECTURE_AND_CAPABILITIES.md](docs/ARCHITECTURE_AND_CAPABILITIES.md). The current validation snapshot is `npm test` passing with 136 tests plus `npm audit --audit-level=high` passing after the safe lockfile refresh, including native source-contract, catalog safety, release-preflight, navigation parsing, verified-catalog updates, and Android Browse share-sheet coverage. A full `npm audit` still reports 15 moderate advisories inherited through Expo/React Native tooling (`js-yaml` and `uuid` paths); npm only offers breaking framework changes for those, so they are tracked as non-blocking follow-up rather than launch-day force fixes. Native release smoke is mostly cleared: the tracked SwiftUI iOS shell builds, installs, launches, and reaches a green "Connected" worklet state after stale Corestore recovery; the generated Expo iOS compatibility shell now clears Debug and Release simulator Xcode builds with `ExpoLinking` autolinked when built through `npm run ios:generated:release`; Android native `:app:assembleDebug` builds with a verified JDK 17, installs on a headless emulator, launches, extracts the Bare worklet bundle, and reaches a green "Connected" Home screen. Android native release APK/AAB builds now pass with R8/resource shrink, and the env-driven signing path verifies with a disposable test key (`apksigner` for APK, `jarsigner` for AAB). Remaining native gates are production mobile signing/store distribution checks and broader device-matrix validation.
+**Current architecture:** start with [docs/ARCHITECTURE_AND_CAPABILITIES.md](docs/ARCHITECTURE_AND_CAPABILITIES.md). The 2026-07-22 release candidate passes 566 source and parity tests, the high/critical dependency audit, deterministic bundle generation, Android lint-vital plus optimized APK/AAB builds, native SwiftUI Debug/Release device builds, and the generated Expo iOS Release build. The machine-readable preflight has 15 structural passes, no warnings, and only four production-authority blockers: real Android signing, an Apple development team, and recorded iOS/Android store validation. A full audit retains nine moderate `uuid` advisories in Expo's build tooling; npm's only proposed remediation is a breaking downgrade to Expo 46, so the release keeps the high/critical gate green without forcing that regression. See [the current release evidence](docs/RELEASE_EVIDENCE_2026-07-22.md) for exact commands, artifact sizes, honest capability limits, and distribution gates.
 
 **Try it locally:** Build the iOS shell and run the bundled example app from source — see [Setup](#setup) below. In short:
 
@@ -327,8 +327,9 @@ PearBrowser/
 │   └── catalog-relay.js          # Run a catalog relay
 ├── docs/                         # Documentation
 │   ├── ARCHITECTURE_AND_CAPABILITIES.md # Current system map
-│   ├── CURRENT_STATUS_AUDIT_2026-06-23.md # Current release audit
-│   ├── MOBILE_RELEASE_EVIDENCE_2026-06-23.md # Current mobile gate evidence
+│   ├── RELEASE_EVIDENCE_2026-07-22.md # Current release gate evidence
+│   ├── CURRENT_STATUS_AUDIT_2026-06-23.md # Historical status snapshot
+│   ├── MOBILE_RELEASE_EVIDENCE_2026-06-23.md # Historical mobile evidence
 │   ├── USER-FLOWS.md             # User journey diagrams
 │   ├── USE-CASES.md              # Detailed use cases
 │   └── DEVELOPER-GUIDE.md        # Full developer onboarding
@@ -341,8 +342,8 @@ PearBrowser/
 - **[Use Cases](docs/USE-CASES.md)** — Real-world scenarios (POS, publishing, marketplace, education)
 - **[Developer Guide](docs/DEVELOPER-GUIDE.md)** — Build and publish your first P2P app
 - **[Architecture and Capabilities](docs/ARCHITECTURE_AND_CAPABILITIES.md)** — Current mobile runtime map, catalogue model, bridge capabilities, native parity, and limits
-- **[Current Status Audit](docs/CURRENT_STATUS_AUDIT_2026-06-23.md)** — Current mobile release state, validation evidence, and production blockers
-- **[Mobile Release Evidence](docs/MOBILE_RELEASE_EVIDENCE_2026-06-23.md)** — Latest `npm test`, audit, and release-preflight proof for the mobile tree
+- **[Current Release Evidence](docs/RELEASE_EVIDENCE_2026-07-22.md)** — Latest tests, audits, native builds, preflight results, capability boundaries, and production blockers
+- **[June Status Audit](docs/CURRENT_STATUS_AUDIT_2026-06-23.md)** — Historical baseline retained for comparison
 - **[Security Boundary Alignment](docs/SECURITY-BOUNDARY-ALIGNMENT-2026-06-23.md)** — Current mobile security boundary map and remaining caveats
 - **[Desktop Parity Audit](docs/DESKTOP_PARITY_AUDIT_2026-05-19.md)** — Current feature gap analysis against pearbrowser-desktop
 - **[Swarm v1 API](docs/SWARM-V1.md)** — Direct page-scoped Hyperswarm bridge design

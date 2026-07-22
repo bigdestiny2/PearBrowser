@@ -13,6 +13,7 @@
 //  catalogs list) via @AppStorage UserDefaults.
 
 import SwiftUI
+import UIKit
 
 struct SettingsScreen: View {
     let onBack: () -> Void
@@ -36,7 +37,13 @@ struct SettingsScreen: View {
     @State private var relayInput = ""
     @State private var catalogInput = ""
     @State private var showClearConfirm = false
+    @State private var showLinkJoinConfirm = false
     @State private var loadedRelays = false
+    @State private var linkInvite = ""
+    @State private var linkJoinInput = ""
+    @State private var linkBusy: String? = nil
+    @State private var linkNotice: String? = nil
+    @State private var linkError: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -92,6 +99,12 @@ struct SettingsScreen: View {
             Button("Clear everything", role: .destructive) { clearAll() }
         } message: {
             Text("This removes bookmarks, history, settings, and clears the drive cache on this device.")
+        }
+        .alert("Replace this identity?", isPresented: $showLinkJoinConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Link Device", role: .destructive) { confirmLinkJoin() }
+        } message: {
+            Text("Linking will replace this device identity with the one from your other device. Save this device backup phrase first if you still need it.")
         }
     }
 
@@ -278,14 +291,91 @@ struct SettingsScreen: View {
                         onTap: onOpenConnectedApps)
             Divider().background(PearColors.border)
             identityRow("Backup Phrase",
-                        subtitle: "View your 12-word seed. Save it — without it you cannot recover.",
+                        subtitle: "View your 24-word BIP-39 seed. Save it — without it you cannot recover.",
                         onTap: onOpenBackupPhrase)
             Divider().background(PearColors.border)
             identityRow("Restore from Phrase",
-                        subtitle: "Replace this device's identity with one restored from a saved phrase.",
+                        subtitle: "Replace this device's identity with one restored from a saved 24-word phrase.",
                         onTap: onOpenRestoreIdentity)
+            Divider().background(PearColors.border)
+            deviceLinkSection
         }
         .background(PearColors.surface, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var deviceLinkSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Link a Device")
+                        .font(.system(size: 15))
+                        .foregroundStyle(PearColors.textPrimary)
+                    Text("Move this 24-word identity to another device over blind-pairing without typing the phrase.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(PearColors.textMuted)
+                }
+                Spacer()
+                Button(linkBusy == "invite" ? "Creating" : "Invite") { createLinkInvite() }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(PearColors.bg)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(PearColors.accent, in: RoundedRectangle(cornerRadius: 8))
+                    .disabled(rpc == nil || linkBusy == "invite")
+            }
+
+            if !linkInvite.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(linkInvite)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(PearColors.warning)
+                        .textSelection(.enabled)
+                    Button("Copy Invite") {
+                        UIPasteboard.general.string = linkInvite
+                        linkNotice = "Invite copied. Paste it into your other device now."
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(PearColors.accent)
+                    Text("One-time invite. Anyone who receives it can adopt your identity.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(PearColors.error)
+                }
+                .padding(12)
+                .background(PearColors.surfaceElevated, in: RoundedRectangle(cornerRadius: 8))
+            }
+
+            Text("Link this device")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(PearColors.textSecondary)
+            TextField("Paste invite from your other device", text: $linkJoinInput, axis: .vertical)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(PearColors.textPrimary)
+                .lineLimit(2...4)
+                .padding(10)
+                .background(PearColors.surfaceElevated, in: RoundedRectangle(cornerRadius: 8))
+                .disabled(rpc == nil || linkBusy == "join")
+            Button(linkBusy == "join" ? "Linking..." : "Link This Device") {
+                linkNotice = nil
+                linkError = nil
+                showLinkJoinConfirm = true
+            }
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(PearColors.bg)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(PearColors.accent, in: RoundedRectangle(cornerRadius: 8))
+            .disabled(rpc == nil || linkJoinInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || linkBusy == "join")
+
+            if let linkNotice {
+                Text(linkNotice).font(.system(size: 12)).foregroundStyle(PearColors.success)
+            }
+            if let linkError {
+                Text(linkError).font(.system(size: 12)).foregroundStyle(PearColors.error)
+            }
+        }
+        .padding(14)
     }
 
     private func identityRow(_ title: String, subtitle: String, onTap: @escaping () -> Void) -> some View {
@@ -373,6 +463,42 @@ struct SettingsScreen: View {
         guard let rpc else { return }
         _ = try? await rpc.request(Cmd.CLEAR_CACHE)
         await loadStorage()
+    }
+
+    private func createLinkInvite() {
+        guard let rpc else { return }
+        linkBusy = "invite"
+        linkNotice = nil
+        linkError = nil
+        Task {
+            do {
+                let res = try await rpc.deviceLinkCreateInvite()
+                linkInvite = (res["invite"] as? String) ?? ""
+                linkNotice = "Invite created. Paste it into your other device now."
+            } catch {
+                linkError = error.localizedDescription
+            }
+            linkBusy = nil
+        }
+    }
+
+    private func confirmLinkJoin() {
+        guard let rpc else { return }
+        let invite = linkJoinInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !invite.isEmpty else { return }
+        linkBusy = "join"
+        linkNotice = nil
+        linkError = nil
+        Task {
+            do {
+                _ = try await rpc.deviceLinkJoin(invite: invite, device: "iPhone")
+                linkJoinInput = ""
+                linkNotice = "Device linked. Close and reopen PearBrowser for the linked identity to take effect."
+            } catch {
+                linkError = error.localizedDescription
+            }
+            linkBusy = nil
+        }
     }
 
     private func setRelayEnabled(_ enabled: Bool) {

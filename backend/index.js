@@ -30,8 +30,43 @@ const { Contacts } = require('./contacts.js')
 const { TrustedOrigins } = require('./trusted-origins.js')
 const { SwarmBridge } = require('./swarm-bridge.js')
 const { SwarmGrants } = require('./swarm-grants.js')
-const { buildNavigateResponse } = require('./navigation.js')
+const { buildNavigateResponse, normalizeDriveKey } = require('./navigation.js')
+const { ContentShield } = require('./content-shield.cjs')
+const { ShieldListSync } = require('./shield-list-sync.cjs')
+// Pear Plugins (Mission B4a — ported from pearbrowser-desktop Phase 3):
+// drive-installed extensions feeding the same shield engine + inject path.
+const { PluginDriveLoader } = require('./plugin-drive-loader.cjs')
+const { PluginCatalog } = require('./plugin-catalog.cjs')
+const { PearPluginRegistry } = require('./pear-plugins.cjs')
+const { SessionBridge } = require('./session-bridge.cjs')
+const {
+  DEFAULT_PRIVACY,
+  normalizePrivacySettings,
+  mergeSettingsWithPrivacyDefaults,
+  isSearchIndexEnabled
+} = require('./privacy-policy.cjs')
+// Lighthouse local-first search + petname naming (Mission B3 — ported from
+// pearbrowser-desktop; see backend/search-core.cjs + backend/names.cjs headers).
+const { PersonalIndex } = require('./personal-index.cjs')
+const { createSearchHandler } = require('./search-handler.js')
+const { QueryPlanner, SearchFanoutBudget } = require('./query-planner.js')
+const { IdentityBindingPublisher } = require('./identity-binding-publisher.js')
+const ib = require('./identity-binding.cjs')
+const { Names } = require('./names.cjs')
+const { NameRegistry } = require('./name-registry-store.cjs')
+const { FederatedNameResolver } = require('./federated-name-resolver.cjs')
+const { resolveName } = require('./resolve-name.cjs')
+const { nameQueryFromInput } = require('./name-query.cjs')
+const { extractIndexContent } = require('./html-raw-text.cjs')
+const bareCrypto = require('bare-crypto')
 const C = require('./constants.js')
+// Mission B4b — TabRuntime (run pear-request apps headless in a tab) and
+// QVAC / Ask Browser (on-device LLM page Q&A), ported from pearbrowser-desktop.
+// See the gate notes at the wiring sites below.
+const { TabRuntime } = require('./tab-runtime.cjs')
+const { AskBrowserService, AskBrowserServiceError } = require('./ai/ask-browser-service.cjs')
+const { createLazyQvacService } = require('./ai/qvac-host.cjs')
+const { QVAC_MODEL_CATALOG } = require('./ai/qvac-model-catalog.cjs')
 
 const { IPC } = BareKit
 const storagePath = Bare.argv[0] || './pearbrowser-storage'
@@ -125,6 +160,22 @@ let contacts = null
 let trustedOrigins = null
 let swarmBridge = null
 let swarmGrants = null
+let deviceLinker = null
+let contentShield = null // Content Shield — request filter + cosmetic hiding (ported from desktop)
+let shieldListSync = null // P2P filter-list subscriptions (Phase 2 gate)
+let pearPlugins = null // Pear Plugins registry (Mission B4a — desktop Phase 3)
+let pluginDriveLoader = null // Plugin installs from drives (capability grant + escalation guard)
+let pluginCatalog = null // Plugin discovery: builtin seed + subscribed catalogue drives
+let sessionBridge = null // Clearnet session bridge facade (Mission B2 — desktop Phase 4)
+let privacySettings = { ...DEFAULT_PRIVACY } // live privacy ladder state (user-data backed)
+let personalIndex = null // Lighthouse local self-search (Mission B3 — signed postings Hyperbee)
+let queryPlanner = null // B3 — federated query orchestration (local-first + budgeted trusted-peer fan-out)
+let identityBindingPublisher = null // B3 — root → rotatable search subkey binding (DHT self-certifying record)
+let names = null // B3 — petname store (naming Tier 0)
+let nameRegistry = null // B3 — N5 multi-writer name registry; null until first use
+let federatedNameResolver = null // B3 — resolve contacts' names across their registries
+let tabRuntime = null // B4b — run pear-request apps headless in a tab (demo path works; pear:// worker path gated)
+let aiService = null // B4b — QVAC on-device LLM service; null while the native runtime is not linked
 /** Map<requestId, { resolve, reject, timer }> for login() ceremonies. */
 const pendingLogins = new Map()
 /** Map<requestId, { resolve, reject, timer }> for swarm.join() consent ceremonies. */
@@ -139,14 +190,145 @@ let corestorePath = storagePath
 
 const rpc = new WorkletRPC(IPC)
 
+// Mission B4b — QVAC on-device LLM service. GATED on mobile: no runtime
+// loader is injected because the @qvac/llm-llamacpp native addon is not
+// linked into the Android worklet (see backend/ai/qvac-host.cjs for the full
+// assessment + the exact steps to enable it), so createLazyQvacService
+// returns null and Ask Browser reports 'runtime-unavailable' through the
+// desktop's own availability contract — never a hardcoded "available".
+aiService = createLazyQvacService({
+  homeDir: storagePath,
+  models: QVAC_MODEL_CATALOG,
+  idleUnloadMs: 15 * 60 * 1000 // same default as the desktop root index.js
+})
+
+// Mirrors pearbrowser-desktop backend/index.js, with one gate: when the AI
+// runtime is absent, getAiService throws a typed 'runtime-unavailable' error
+// (AskBrowserService.capabilities maps any getAiService throw to that reason;
+// start() propagates it, so CMD_ASK_BROWSER_START fails closed at the RPC
+// boundary instead of hanging a stream).
+const askBrowserService = new AskBrowserService({
+  getAiService: () => {
+    if (!aiService) {
+      throw new AskBrowserServiceError(
+        'runtime-unavailable',
+        'Ask Browser is unavailable: the QVAC native runtime (@qvac/llm-llamacpp) is not linked into this Android worklet build'
+      )
+    }
+    return aiService
+  },
+  loadContext: async (page) => ({
+    context: page,
+    source: { kind: page?.text || page?.selection ? 'active-page' : 'metadata' }
+  }),
+  emit: (payload) => rpc.event(C.EVT_ASK_BROWSER_STREAM, payload)
+})
+
+rpc.handle(C.CMD_ASK_BROWSER_CAPABILITIES, async () => {
+  return askBrowserService.capabilities()
+})
+
+rpc.handle(C.CMD_ASK_BROWSER_START, async (data = {}) => {
+  return askBrowserService.start(data)
+})
+
+rpc.handle(C.CMD_ASK_BROWSER_CANCEL, async (data = {}) => {
+  return { ok: await askBrowserService.cancel(data) }
+})
+
 // Browser commands
 rpc.handle(C.CMD_NAVIGATE, async (data) => {
   if (!proxy) throw new Error('Proxy not running')
+
+  // Naming (Mission B3): pearname://<name> and bare-word tokens try the
+  // tiered name resolver BEFORE URL handling — mirrors the desktop URL bar
+  // (ui/shell.js go()): petname (Tier 0) → own registry (Tier 2a) → trusted
+  // contacts (Tier 2b) → curated floor (Tier 3), then clearnet-host / hyper
+  // fallback. Gated by the same experimentalNaming setting as
+  // CMD_NAME_RESOLVE; a miss, a disabled flag, or a resolver error falls
+  // straight through to the unchanged URL path below.
+  let nameResolution = null
+  const rawInput = data && data.url
+  const nameQuery = typeof rawInput === 'string' ? nameQueryFromInput(rawInput) : null
+  if (nameQuery) {
+    try {
+      const resolved = await resolveNameTiered(nameQuery)
+      if (resolved && (resolved.link || resolved.key)) {
+        const link = resolved.link || `hyper://${resolved.key}/`
+        nameResolution = {
+          name: resolved.name,
+          label: resolved.label || nameQuery,
+          provenance: resolved.provenance || null,
+          source: resolved.source || null
+        }
+        if (/^(?:pear|file):\/\//i.test(link)) {
+          // A pear:// / file:// target is a full Pear-runtime app — mobile has
+          // no Pear launch phase yet, so the shell surfaces the same honest
+          // "coming in a later phase" dialog it uses for pear:// deep links.
+          return {
+            localUrl: null,
+            key: null,
+            path: '/',
+            apiToken: null,
+            kind: 'pear-link',
+            url: link,
+            nameResolution
+          }
+        }
+        data = { ...data, url: link }
+      }
+    } catch { /* name resolution never breaks navigation */ }
+  }
+
+  // Phase 4–5 clearnet / loopback routing via SessionBridge (Mission B2,
+  // mirrors pearbrowser-desktop backend/index.js). Non-hyper input (https
+  // URLs, bare hosts, bare keys) is normalized and classified: clearnet
+  // resolves to a proxied /clearnet/<base64url> loopback URL by default so
+  // Content Shield + the privacy ladder see every request; the
+  // `clearnetMode: 'direct'` settings opt-in returns the real https URL
+  // and loads without shielding (WebViews cannot intercept requests, so
+  // the proxy is the only shielded path).
+  const rawUrl = data && data.url
+  if (sessionBridge && typeof rawUrl === 'string' && !/^hyper:\/\//i.test(rawUrl.trim())) {
+    const resolved = sessionBridge.resolveNavigation(rawUrl)
+    if (resolved.kind === 'clearnet') {
+      return {
+        localUrl: resolved.localUrl,
+        key: null,
+        path: '/',
+        apiToken: null,
+        kind: 'clearnet',
+        url: resolved.url,
+        mode: resolved.mode,
+        upgraded: !!resolved.upgraded,
+        stripped: resolved.stripped || [],
+        shieldActive: !!resolved.shieldActive
+      }
+    }
+    if (resolved.kind === 'loopback') {
+      // Relay/catalog fallback and developer pages keep loading directly.
+      return {
+        localUrl: resolved.localUrl,
+        key: null,
+        path: new URL(resolved.url).pathname || '/',
+        apiToken: null,
+        kind: 'loopback',
+        url: resolved.url
+      }
+    }
+    if (resolved.kind === 'hyper') {
+      // Bare 64-hex / z32 keys normalize to hyper:// — fall through to the
+      // drive flow below with the canonical URL.
+      data = { ...data, url: resolved.url }
+    }
+  }
+
   const result = buildNavigateResponse({
     url: data && data.url,
     proxyPort: proxy.port,
     issueApiToken: proxy.issueApiToken && proxy.issueApiToken.bind(proxy),
   })
+  if (nameResolution) result.nameResolution = nameResolution
 
   // Start loading the drive in the background — don't wait for sync.
   // The proxy will handle waiting for content when WebView requests it.
@@ -248,6 +430,85 @@ rpc.handle(C.CMD_LIST_INSTALLED, () => {
 rpc.handle(C.CMD_CHECK_UPDATES, async () => {
   const allApps = catalogManager.getAllApps()
   return await appManager.checkUpdates(allApps)
+})
+
+// Run a pear-request app HEADLESS, streamed into a browser tab (Mission B4b,
+// mirrors pearbrowser-desktop). 'demo' runs the in-process router — that path
+// works in the Android worklet. pear:// / file:// links need a pear-run
+// worker process, which the mobile runtime cannot spawn; tabRuntime.open()
+// then throws a typed TabRuntimeError (code 'runtime-unavailable') so the
+// command fails closed instead of returning a URL that would never stream.
+rpc.handle(C.CMD_RUN_APP_IN_TAB, async (data) => {
+  const link = String(data?.link || 'demo').trim()
+  if (!tabRuntime) throw new Error('tab runtime is not available')
+  if (link !== 'demo' && !/^pear:\/\/.+/.test(link) && !/^file:\/\/.+/.test(link)) {
+    throw new Error('Only the demo, or pear:// / file:// apps, can run in a tab')
+  }
+  const res = tabRuntime.open(link)
+  console.log('[tab-runtime] run-in-tab')
+  return res
+})
+
+// --- Lighthouse P2P search (Mission B3 — ported from pearbrowser-desktop) ---
+// Query / feed the personal index. Querying is fully local (no network);
+// indexing is opt-in (searchIndexEnabled, default OFF) and best-effort.
+// handleSearch (search-handler.js) returns local hop-0 results synchronously
+// and, when data.federated is set and a planner exists, pushes
+// EVT_SEARCH_FEDERATED later with the enriched trusted-peer set
+// (queryId-correlated, stale-suppressed).
+const handleSearch = createSearchHandler({
+  getPersonalIndex: () => personalIndex,
+  getQueryPlanner: () => queryPlanner,
+  emit: (payload) => rpc.event(C.EVT_SEARCH_FEDERATED, payload),
+})
+rpc.handle(C.CMD_SEARCH, async (data) => {
+  return handleSearch(data)
+})
+
+rpc.handle(C.CMD_SEARCH_FEDERATED, async (data = {}) => {
+  return handleSearch({ ...data, federated: true })
+})
+
+// Publish/refresh our IdentityBinding on demand (e.g. a Settings "rotate
+// search key" action), and resolve a contact's current search pubkey from
+// the DHT (verified against their Contacts-held root). The mobile backend
+// does NOT auto-publish at boot — see boot for the rationale.
+rpc.handle(C.CMD_IDENTITY_BINDING_PUBLISH, async (data) => {
+  if (!identityBindingPublisher) throw new Error('binding publisher unavailable')
+  const published = await identityBindingPublisher.publish({ rotate: !!(data && data.rotate) })
+  rpc.event(C.EVT_IDENTITY_BINDING_PUBLISHED, { searchPubkey: published.searchPubkey, version: published.version })
+  return published
+})
+
+rpc.handle(C.CMD_IDENTITY_BINDING_RESOLVE, async (data) => {
+  if (!identityBindingPublisher) throw new Error('binding publisher unavailable')
+  if (!data || !data.contactPubkey || !data.dhtPubkey) throw new Error('contactPubkey + dhtPubkey required')
+  const resolved = await identityBindingPublisher.resolve({
+    contactPubkey: String(data.contactPubkey), dhtPubkey: String(data.dhtPubkey),
+  })
+  return resolved || { searchPubkey: null, indexKey: null }
+})
+
+rpc.handle(C.CMD_SEARCH_INDEX, async (data) => {
+  // Privacy-first: local page indexing is opt-in (searchIndexEnabled).
+  if (!personalIndex || !data || !data.driveKey) return { ok: false, indexed: false }
+  try {
+    const settings = userData ? await userData.getSettings() : {}
+    if (!isSearchIndexEnabled(settings)) {
+      return { ok: true, indexed: false, reason: 'search-index-disabled' }
+    }
+    const docId = await personalIndex.indexDoc({
+      driveKey: normalizeDriveKey(data.driveKey),
+      path: data.path || '/',
+      title: data.title || '',
+      body: data.text || data.body || '',
+      publishedAt: Number.isFinite(data.publishedAt) ? data.publishedAt : 0,
+    })
+    return { ok: !!docId, docId, indexed: !!docId }
+  } catch (err) {
+    console.error('[search] index failed')
+    return { ok: false, indexed: false }
+  }
 })
 
 // Site Builder commands
@@ -409,6 +670,22 @@ rpc.handle(C.CMD_USERDATA_GET_SETTINGS, async () => {
 
 rpc.handle(C.CMD_USERDATA_SET_SETTINGS, async ({ updates } = {}) => {
   const settings = await requireUserData().setSettings(updates || {})
+  // Apply the Content Shield toggle live — default ON; only explicit false disables.
+  if (contentShield) contentShield.setEnabled(settings.contentShield !== false)
+  // Allowlist / strict arrays can also be written as settings for simpler UI paths.
+  if (contentShield && updates && typeof updates === 'object') {
+    if (Array.isArray(updates.contentShieldAllow)) {
+      for (const key of contentShield.allowlist()) contentShield.removeAllowlistDrive(key)
+      for (const key of updates.contentShieldAllow) contentShield.allowlistDrive(key)
+    }
+    if (Array.isArray(updates.contentShieldStrict)) {
+      for (const key of contentShield.strictDrives()) contentShield.setStrictDrive(key, false)
+      for (const key of updates.contentShieldStrict) contentShield.setStrictDrive(key, true)
+    }
+  }
+  // Privacy ladder + clearnet mode — apply live to the proxy (Mission B2).
+  // The session bridge reads the shared privacySettings object by reference.
+  applyPrivacyFromSettings(settings)
   return { settings }
 })
 
@@ -440,18 +717,58 @@ rpc.handle(C.CMD_IDENTITY_EXPORT_PHRASE, async () => {
 rpc.handle(C.CMD_IDENTITY_IMPORT_PHRASE, async ({ mnemonic } = {}) => {
   if (typeof mnemonic !== 'string') throw new Error('mnemonic must be a string')
   if (!validateMnemonic(mnemonic)) throw new Error('Invalid seed phrase — check each word and try again')
-  requireIdentity().restoreFromMnemonic(mnemonic)
+  await requireIdentity().restoreFromMnemonic(mnemonic)
   // Caller MUST restart the worklet for the new identity to take effect
   return { ok: true, restartRequired: true }
 })
 
 rpc.handle(C.CMD_IDENTITY_ROTATE, async () => {
-  requireIdentity().rotate()
+  await requireIdentity().rotate()
   return { ok: true, restartRequired: true }
 })
 
 rpc.handle(C.CMD_IDENTITY_VALIDATE_PHRASE, async ({ mnemonic } = {}) => {
   return { valid: validateMnemonic(mnemonic || '') }
+})
+
+// --- Device linking (blind-pairing) ----------------------------------------
+// The source device mints a single-use invite. backend/device-linker.js keeps
+// the root entropy sealed until the invited candidate is accepted.
+function getDeviceLinker () {
+  if (!swarm) throw new Error('swarm not ready - cannot link devices yet')
+  if (!deviceLinker) {
+    const { DeviceLinker } = require('./device-linker.js')
+    deviceLinker = new DeviceLinker(swarm, {
+      identity: requireIdentity(),
+      autoAccept: true,
+      log: (message) => console.log(message)
+    })
+  }
+  return deviceLinker
+}
+
+rpc.handle(C.CMD_DEVICE_LINK_CREATE_INVITE, async () => {
+  const { invite, discoveryKey, done } = await getDeviceLinker().createInvite()
+  done
+    .then((result) => {
+      const device = result && result.device && result.device.device
+      console.log('[device-link] linked ' + (device || 'device'))
+    })
+    .catch((err) => console.warn('[device-link] failed:', err && err.message))
+  return { invite, discoveryKey }
+})
+
+rpc.handle(C.CMD_DEVICE_LINK_JOIN, async ({ invite, device } = {}) => {
+  if (typeof invite !== 'string' || invite.trim().length === 0) throw new Error('invite required')
+  if (!swarm) throw new Error('swarm not ready - cannot link devices yet')
+  const { DeviceLinker } = require('./device-linker.js')
+  const linker = new DeviceLinker(swarm, { identity: requireIdentity() })
+  try {
+    await linker.joinWithInvite(invite.trim(), { device: device || 'this device' })
+  } finally {
+    await linker.close().catch(() => {})
+  }
+  return { ok: true, restartRequired: true }
 })
 
 rpc.handle(C.CMD_IDENTITY_SIGN, async ({ payload, driveKey } = {}) => {
@@ -634,6 +951,242 @@ rpc.handle(C.CMD_CONTACTS_REMOVE, async ({ pubkey } = {}) => {
   return { ok: true }
 })
 
+// --- Names (Mission B3) — petnames + N5 multi-writer registry ---------------
+// Local Hyperbee petname store (Tier 0) + the pure tiered resolver
+// (names.cjs / resolve-name.cjs), the N5 owner-signed multi-writer registry
+// (name-registry-store.cjs), and trusted-contact federation
+// (federated-name-resolver.cjs). Gated behind the experimentalNaming
+// user-data flag exactly like the desktop: disabled ⇒ CMD_NAME_RESOLVE
+// answers null and the URL bar behaves EXACTLY as before. Mutations fail
+// closed.
+
+function requireNames () {
+  if (!names) throw new Error('Names not available — worklet still booting')
+  return names
+}
+
+async function isNamingEnabled () {
+  try {
+    const s = await requireUserData().getSettings()
+    return !!(s && s.experimentalNaming)
+  } catch { return false }
+}
+
+async function requireNaming () {
+  if (!(await isNamingEnabled())) {
+    throw new Error('Naming (petnames) is experimental — enable it in Settings first.')
+  }
+}
+
+// The owner identity for the user's name claims: their stable ROOT ed25519
+// key. ownerSign signs the registry's domain-tagged canonical bytes (NOT
+// page-supplied bytes — the canon is built backend-side in name-registry-ops),
+// so a claim can never be coerced into signing attacker-chosen content.
+function nameRegSigner () {
+  const id = requireIdentity()
+  return {
+    owner: b4a.toString(id.getSigningKeypair().publicKey, 'hex'),
+    ownerSign: (msg) => id.sign(msg).signature,
+  }
+}
+
+// Serialize ensureNameRegistry so two concurrent first-time claims can't both
+// enter the create branch (which would double-mint + race setSettings,
+// orphaning one base). The second caller awaits the first, then sees the
+// persisted key and reopens the same registry. Mirrors PersonalIndex._serialize.
+let _nameRegChain = Promise.resolve()
+function ensureNameRegistry (opts = {}) {
+  const run = _nameRegChain.then(() => _ensureNameRegistryImpl(opts), () => _ensureNameRegistryImpl(opts))
+  _nameRegChain = run.then(() => {}, () => {}) // the lock never rejects
+  return run
+}
+async function _ensureNameRegistryImpl ({ create = false } = {}) {
+  const s = await requireUserData().getSettings()
+  const key = (typeof s.nameRegKey === 'string' && /^[0-9a-f]{64}$/i.test(s.nameRegKey)) ? s.nameRegKey : null
+  if (key) {
+    if (nameRegistry && nameRegistry.key === key) return nameRegistry
+    if (nameRegistry) { try { await nameRegistry.close() } catch {} nameRegistry = null }
+    nameRegistry = await new NameRegistry(store, { bootstrap: key, encryptionKey: null }).ready()
+    if (nameRegistry.discoveryKey && swarm) swarm.join(nameRegistry.discoveryKey, { server: true, client: true })
+    return nameRegistry
+  }
+  if (!create) return null
+  // Create the user's registry ONCE and KEEP it (no close-then-reopen on the
+  // shared store). UNENCRYPTED so trusted contacts can replicate + resolve the
+  // user's PUBLIC name claims — integrity is the per-claim owner signature,
+  // not secrecy. Anyone the user shares the key with (their contacts) can
+  // resolve it.
+  const reg = await new NameRegistry(store, { bootstrap: null, encryptionKey: null }).ready()
+  await requireUserData().setSettings({ nameRegKey: reg.key })
+  nameRegistry = reg
+  if (nameRegistry.discoveryKey && swarm) swarm.join(nameRegistry.discoveryKey, { server: true, client: true })
+  return nameRegistry
+}
+
+// Read-only, cached, replicating views of CONTACTS' registries (federation).
+// Each gets its OWN substore (keyed by bootstrap) so they never collide with
+// the user's own registry or each other on the shared store. Keyed by the
+// CONTACT root (one registry per contact): when a contact rotates their
+// advertised key we tear down the stale base + leave its swarm topic, and the
+// map is capped + LRU-evicted, so a verified contact churning their key can't
+// leak unbounded substores/topics.
+const MAX_CONTACT_REGISTRIES = 128
+const _contactRegistries = new Map() // contactRoot hex -> { keyHex, reg }
+async function _closeContactReg (entry) {
+  try { if (entry.reg.discoveryKey && swarm) swarm.leave(entry.reg.discoveryKey) } catch {}
+  try { await entry.reg.close() } catch {}
+}
+async function openContactRegistry (keyHex, contactRoot) {
+  if (typeof keyHex !== 'string' || !/^[0-9a-f]{64}$/i.test(keyHex)) return null
+  const rootKey = (typeof contactRoot === 'string' && contactRoot) ? contactRoot.toLowerCase() : keyHex
+  const cached = _contactRegistries.get(rootKey)
+  if (cached) {
+    if (cached.keyHex === keyHex) return cached.reg
+    _contactRegistries.delete(rootKey) // contact rotated their key — drop the stale base
+    await _closeContactReg(cached)
+  }
+  while (_contactRegistries.size >= MAX_CONTACT_REGISTRIES) { // bound + LRU-evict (insertion order)
+    const oldestKey = _contactRegistries.keys().next().value
+    const oldest = _contactRegistries.get(oldestKey)
+    _contactRegistries.delete(oldestKey)
+    await _closeContactReg(oldest)
+  }
+  const reg = await new NameRegistry(store, { bootstrap: keyHex, encryptionKey: null, storeNamespace: 'eab-name-registry-c-' + keyHex }).ready()
+  if (reg.discoveryKey && swarm) swarm.join(reg.discoveryKey, { server: false, client: true })
+  _contactRegistries.set(rootKey, { keyHex, reg })
+  return reg
+}
+
+// The tiered resolver shared by CMD_NAME_RESOLVE and CMD_NAVIGATE: petname
+// (Tier 0, wins) → own registry (Tier 2a) → trusted contacts (Tier 2b) →
+// curated floor (Tier 3). Returns null when naming is disabled or nothing
+// resolves — callers then fall through to plain URL handling.
+async function resolveNameTiered (name) {
+  if (!(await isNamingEnabled())) return null
+  const petnames = names ? await names.petnameMap() : {}
+  // Tier 2a — the user's OWN registry (reopened if it exists; never minted by
+  // a read). Best-effort: a registry failure must not break petname/curated.
+  let registry = {}
+  try { const reg = await ensureNameRegistry({ create: false }); if (reg) registry = await reg.activeMap() } catch {}
+  // Resolve highest tiers first WITHOUT the curated floor: petname (0) + own
+  // registry (2a). If those miss, try federation (2b) before falling to curated.
+  let resolved = resolveName(name, { petnames, registry, aliases: false })
+  if (!resolved && federatedNameResolver) {
+    // Tier 2b — trusted contacts' registries (cross-user federation).
+    let fed = null
+    try { fed = await federatedNameResolver.resolve(name) } catch {}
+    if (fed) resolved = { name: fed.name, key: fed.key || null, link: fed.link || null, target: fed.target || fed.link || fed.key || null, label: fed.name, provenance: 'contact', source: fed.source, candidates: fed.candidates }
+  }
+  // Tier 3 — curated bootstrap floor (lowest authority).
+  if (!resolved) resolved = resolveName(name, { aliases: true })
+  return resolved
+}
+
+// Resolve a typed word against the local petname store + registry + curated
+// floor. Never throws for the disabled/unknown case — returns
+// { resolved: null } so the UI falls through to plain URL handling.
+rpc.handle(C.CMD_NAME_RESOLVE, async ({ name } = {}) => {
+  if (!(await isNamingEnabled())) return { resolved: null, enabled: false }
+  return { resolved: await resolveNameTiered(name), enabled: !!names }
+})
+
+rpc.handle(C.CMD_NAME_PETNAME_LIST, async ({ limit } = {}) => {
+  if (!names || !(await isNamingEnabled())) return { petnames: [] }
+  return { petnames: await requireNames().list({ limit }) }
+})
+
+rpc.handle(C.CMD_NAME_PETNAME_SET, async ({ name, key, link, label } = {}) => {
+  await requireNaming()
+  return { petname: await requireNames().setPetname({ name, key, link, label }) }
+})
+
+rpc.handle(C.CMD_NAME_PETNAME_REMOVE, async ({ name } = {}) => {
+  await requireNaming()
+  await requireNames().removePetname(name)
+  return { ok: true }
+})
+
+// --- Name registry (N5) — owner-signed multi-writer claims -------------------
+// Claims auto-create the user's own registry; the owner is their root
+// identity, signed backend-side (the page supplies only name+target, never
+// signable bytes).
+function requireNameRegistryCreated () {
+  if (!nameRegistry) throw new Error('No name registry yet — claim a name to create one.')
+  return nameRegistry
+}
+
+rpc.handle(C.CMD_NAMEREG_STATUS, async () => {
+  if (!(await isNamingEnabled())) return { enabled: false, created: false }
+  const reg = await ensureNameRegistry({ create: false })
+  if (!reg) return { enabled: true, created: false }
+  const { owner } = nameRegSigner()
+  return { enabled: true, created: true, key: reg.key, owner, writable: reg.writable, writerKey: reg.localKey }
+})
+
+rpc.handle(C.CMD_NAMEREG_LIST, async () => {
+  if (!(await isNamingEnabled())) return { names: [] }
+  const reg = await ensureNameRegistry({ create: false })
+  return { names: reg ? await reg.list() : [] }
+})
+
+rpc.handle(C.CMD_NAMEREG_RESOLVE, async ({ name } = {}) => {
+  if (!(await isNamingEnabled())) return { resolved: null }
+  const reg = await ensureNameRegistry({ create: false })
+  return { resolved: reg ? await reg.resolve(name) : null }
+})
+
+rpc.handle(C.CMD_NAMEREG_CLAIM, async ({ name, target } = {}) => {
+  await requireNaming()
+  // Pre-validate BEFORE minting, so garbage input never creates a registry or
+  // appends a dead op. A name that normalizes to empty (all-invisible) or
+  // exceeds MAX_NAME would be silently dropped by the reducer → a confusing
+  // {ok, null}.
+  const { normalize } = require('./name-normalize.cjs')
+  const { MAX_NAME, TARGET_ERROR, normalizeTarget } = require('./name-registry-ops.cjs')
+  if (typeof name !== 'string' || !name.trim()) throw new Error('name required')
+  if (name.length > MAX_NAME || !normalize(name)) throw new Error('invalid name (too long, or empty after normalization)')
+  const cleanTarget = normalizeTarget(target)
+  if (!cleanTarget) throw new Error(TARGET_ERROR)
+  const reg = await ensureNameRegistry({ create: true })
+  const { owner, ownerSign } = nameRegSigner()
+  await reg.claim({ name, target: cleanTarget.target, owner }, ownerSign)
+  const resolved = await reg.resolve(name)
+  // A null resolve after a well-formed claim means the reducer rejected it —
+  // homograph-blocked or already held by someone else. Report it honestly.
+  if (!resolved) throw new Error('Name unavailable — already held or blocked as a look-alike of an existing name.')
+  return { ok: true, resolved }
+})
+
+rpc.handle(C.CMD_NAMEREG_ROTATE, async ({ name, target } = {}) => {
+  await requireNaming()
+  const { TARGET_ERROR, normalizeTarget } = require('./name-registry-ops.cjs')
+  const cleanTarget = normalizeTarget(target)
+  if (!cleanTarget) throw new Error(TARGET_ERROR)
+  const reg = requireNameRegistryCreated()
+  const cur = await reg.resolve(name)
+  if (!cur) throw new Error('You don\'t hold that name (claim it first).')
+  const { owner, ownerSign } = nameRegSigner()
+  if (cur.owner !== owner) throw new Error('You don\'t own that name.')
+  await reg.rotate({ name, target: cleanTarget.target, owner, version: cur.version + 1 }, ownerSign)
+  return { ok: true, resolved: await reg.resolve(name) }
+})
+
+rpc.handle(C.CMD_NAMEREG_RELEASE, async ({ name } = {}) => {
+  await requireNaming()
+  const reg = requireNameRegistryCreated()
+  const { owner, ownerSign } = nameRegSigner()
+  await reg.release({ name, owner }, ownerSign)
+  return { ok: true }
+})
+
+rpc.handle(C.CMD_NAMEREG_REVOKE, async ({ name } = {}) => {
+  await requireNaming()
+  const reg = requireNameRegistryCreated()
+  const { owner, ownerSign } = nameRegSigner()
+  await reg.revoke({ name, owner }, ownerSign)
+  return { ok: true }
+})
+
 // --- swarm.v1 — consent ceremony + grants management ---
 //
 // Arbitrary topic joins reveal network metadata and may expose the user to
@@ -758,6 +1311,299 @@ rpc.handle(C.CMD_TRUSTED_ORIGINS_SET_MODE, async ({ mode } = {}) => {
   const next = await requireTrustedOrigins().setMode(mode)
   return { ok: true, mode: next }
 })
+
+
+// --- Content Shield (ported from pearbrowser-desktop) ---
+// Live status for the Settings card. Toggle / allowlist / strict / lists
+// persist via user-data settings; CMD_SHIELD_* / CMD_PRIVACY_STATUS feed
+// the Android Settings → Content Shield section.
+
+rpc.handle(C.CMD_SHIELD_STATUS, async (data = {}) => {
+  if (!contentShield) {
+    return {
+      enabled: false, blocked: 0, allowed: 0, blockRules: 0, exceptionRules: 0,
+      cosmeticRules: 0, scriptletRules: 0, lists: [], listDetails: [],
+      allowlist: [], strict: [], plugins: {}, topRules: []
+    }
+  }
+  const stats = contentShield.stats()
+  const driveKey = typeof data.driveKey === 'string' ? data.driveKey.trim().toLowerCase() : ''
+  if (driveKey && /^[0-9a-f]{64}$/.test(driveKey)) {
+    stats.driveKey = driveKey
+    stats.driveAllowlisted = contentShield.isAllowlisted(driveKey)
+    stats.driveStrict = contentShield.isStrict(driveKey)
+  }
+  stats.subscriptions = shieldListSync ? shieldListSync.subscriptions() : []
+  return stats
+})
+
+rpc.handle(C.CMD_SHIELD_LOAD_LIST, async (data = {}) => {
+  if (!contentShield) throw new Error('Content Shield not available')
+  const name = typeof data.name === 'string' ? data.name.trim() : ''
+  if (!name || name === 'builtin' || name.startsWith('plugin:')) {
+    throw new Error('invalid list name')
+  }
+  const result = contentShield.addList(name, data.text == null ? '' : String(data.text))
+  await persistShieldState()
+  return result
+})
+
+rpc.handle(C.CMD_SHIELD_REMOVE_LIST, async (data = {}) => {
+  if (!contentShield) throw new Error('Content Shield not available')
+  const name = typeof data.name === 'string' ? data.name.trim() : ''
+  if (!name || name === 'builtin') throw new Error('invalid list name')
+  const removed = contentShield.removeList(name)
+  await persistShieldState()
+  return { removed, name }
+})
+
+rpc.handle(C.CMD_SHIELD_SET_ALLOW, async (data = {}) => {
+  if (!contentShield) throw new Error('Content Shield not available')
+  const driveKey = typeof data.driveKey === 'string' ? data.driveKey.trim().toLowerCase() : ''
+  if (!/^[0-9a-f]{64}$/.test(driveKey)) throw new Error('driveKey must be 64-char hex')
+  if (data.allow) contentShield.allowlistDrive(driveKey)
+  else contentShield.removeAllowlistDrive(driveKey)
+  await persistShieldState()
+  return {
+    driveKey,
+    allowlisted: contentShield.isAllowlisted(driveKey),
+    allowlist: contentShield.allowlist()
+  }
+})
+
+rpc.handle(C.CMD_SHIELD_SET_STRICT, async (data = {}) => {
+  if (!contentShield) throw new Error('Content Shield not available')
+  const driveKey = typeof data.driveKey === 'string' ? data.driveKey.trim().toLowerCase() : ''
+  if (!/^[0-9a-f]{64}$/.test(driveKey)) throw new Error('driveKey must be 64-char hex')
+  contentShield.setStrictDrive(driveKey, !!data.strict)
+  await persistShieldState()
+  return {
+    driveKey,
+    strict: contentShield.isStrict(driveKey),
+    strictDrives: contentShield.strictDrives()
+  }
+})
+
+// Privacy ladder + clearnet mode — normalize stored settings against the
+// privacy-first defaults and push them into the proxy's clearnet path.
+// Mirrors pearbrowser-desktop applyPrivacyFromSettings (the shield toggle
+// itself stays in the SET_SETTINGS handler above).
+function applyPrivacyFromSettings (settings) {
+  const merged = mergeSettingsWithPrivacyDefaults(settings || {})
+  privacySettings = normalizePrivacySettings(merged)
+  if (proxy && typeof proxy.setPrivacySettings === 'function') {
+    proxy.setPrivacySettings(privacySettings)
+  }
+}
+
+// Shield + privacy-ladder + session-bridge posture snapshot (Mission B2 —
+// the desktop Phase 4–5 shape). `session` fills the B1 reserved spot: the
+// SessionBridge status (native hook presence, live privacy ladder, proxy
+// port). The direct/proxied toggle is the `clearnetMode` settings key —
+// the desktop has no dedicated command for it either; it flows through
+// CMD_USERDATA_SET_SETTINGS like every other ladder key.
+rpc.handle(C.CMD_PRIVACY_STATUS, async () => {
+  const stored = userData ? await userData.getSettings() : {}
+  const merged = mergeSettingsWithPrivacyDefaults(stored)
+  return {
+    privacy: {
+      ...privacySettings,
+      historyEnabled: merged.historyEnabled === true,
+      searchIndexEnabled: merged.searchIndexEnabled === true,
+      telemetryEnabled: false,
+      contentShield: merged.contentShield !== false
+    },
+    dataCollection: {
+      telemetry: false,
+      history: merged.historyEnabled === true,
+      searchIndex: merged.searchIndexEnabled === true,
+      remoteAnalytics: false,
+      note: 'PearBrowser does not ship telemetry. History and local search indexing are opt-in only.'
+    },
+    shield: contentShield
+      ? { enabled: contentShield.enabled, blocked: contentShield.stats().blocked, allowed: contentShield.stats().allowed }
+      : null,
+    session: sessionBridge
+      ? sessionBridge.status()
+      : { nativeBridge: false, hasNativeHook: false }
+  }
+})
+
+// --- P2P distribution: filter-list drives ---
+// Rule text is durable through persistShieldState(); these commands own the
+// drive-sourced lifecycle (subscribe/refresh) so lists keep working offline
+// after first sync and hot-swap when their drives update.
+
+rpc.handle(C.CMD_SHIELD_SUBSCRIBE_LIST, async (data = {}) => {
+  if (!shieldListSync) throw new Error('Shield list sync not available')
+  const result = await shieldListSync.subscribe(data.driveKey)
+  await persistShieldState()
+  return { ...result, subscriptions: shieldListSync.subscriptions() }
+})
+
+rpc.handle(C.CMD_SHIELD_UNSUBSCRIBE_LIST, async (data = {}) => {
+  if (!shieldListSync) throw new Error('Shield list sync not available')
+  const result = await shieldListSync.unsubscribe(data.driveKey)
+  await persistShieldState()
+  return { ...result, subscriptions: shieldListSync.subscriptions() }
+})
+
+rpc.handle(C.CMD_SHIELD_REFRESH_LISTS, async (data = {}) => {
+  if (!shieldListSync) throw new Error('Shield list sync not available')
+  const outcomes = data.driveKey
+    ? [{ driveKey: String(data.driveKey).toLowerCase(), ok: true, ...(await shieldListSync.refresh(data.driveKey, { force: !!data.force })) }]
+    : await shieldListSync.refreshAll({ force: !!data.force })
+  await persistShieldState()
+  return { outcomes, subscriptions: shieldListSync.subscriptions() }
+})
+
+// --- Pear Plugins (Mission B4a — ported from pearbrowser-desktop Phase 3) ---
+// Handlers mirror the desktop backend/index.js exactly (minus its whenReady
+// gate — mobile handlers already run post-boot). Drive installs carry the
+// two-step snapshot-bound consent, the update path carries the escalation
+// guard, and the catalogue is metadata-only discovery.
+
+rpc.handle(C.CMD_PLUGIN_LIST, async () => {
+  return { plugins: pearPlugins ? pearPlugins.list() : [] }
+})
+
+rpc.handle(C.CMD_PLUGIN_SET_ENABLED, async (data = {}) => {
+  if (!pearPlugins) throw new Error('Plugin registry not available')
+  const result = pearPlugins.setEnabled(data.id, data.enabled !== false)
+  await persistShieldState()
+  return result
+})
+
+rpc.handle(C.CMD_PLUGIN_REGISTER, async (data = {}) => {
+  if (!pearPlugins) throw new Error('Plugin registry not available')
+  const result = pearPlugins.register({
+    id: data.id,
+    manifest: data.manifest,
+    contribution: data.contribution,
+    enabled: data.enabled !== false
+  })
+  if (result && result.ok) rememberPluginPayload(data)
+  await persistShieldState()
+  return result
+})
+
+// --- P2P distribution: plugin drives ---
+// Plugin payloads are durable through persistShieldState(); these commands
+// own the drive-sourced lifecycle (install/update/uninstall) so plugins keep
+// working offline after first sync and hot-swap when their drives update.
+
+rpc.handle(C.CMD_PLUGIN_INSTALL_DRIVE, async (data = {}) => {
+  if (!pluginDriveLoader) throw new Error('Plugin drive loader not available')
+  const result = await pluginDriveLoader.installFromDrive(data.driveKey, {
+    grantedCapabilities: data.granted,
+    reviewedFingerprint: data.reviewedFingerprint
+  })
+  await persistShieldState()
+  return result
+})
+
+rpc.handle(C.CMD_PLUGIN_UPDATE_DRIVE, async (data = {}) => {
+  if (!pluginDriveLoader) throw new Error('Plugin drive loader not available')
+  const result = await pluginDriveLoader.updateFromDrive(data.driveKey, {
+    grantedCapabilities: data.granted,
+    reviewedFingerprint: data.reviewedFingerprint
+  })
+  await persistShieldState()
+  return result
+})
+
+rpc.handle(C.CMD_PLUGIN_UNINSTALL, async (data = {}) => {
+  if (!pluginDriveLoader) throw new Error('Plugin drive loader not available')
+  const result = await pluginDriveLoader.uninstall(data.driveKey)
+  if (result.driveKey) delete persistShieldState._pluginPayloads[result.driveKey]
+  await persistShieldState()
+  return result
+})
+
+// Plugin discovery. The catalogue is metadata-only: installing still runs
+// through the drive loader's grant + escalation path, and `kind: "app"`
+// entries (anonGPT) simply open as hyper:// apps.
+rpc.handle(C.CMD_PLUGIN_CATALOG, async () => {
+  if (!pluginCatalog) return { entries: [], sources: [] }
+  const installed = new Set(pearPlugins ? pearPlugins.list().map(p => p.id) : [])
+  return {
+    entries: pluginCatalog.entries().map(entry => ({
+      ...entry,
+      installed: !!(entry.driveKey && installed.has(entry.driveKey))
+    })),
+    sources: pluginCatalog.sources()
+  }
+})
+
+rpc.handle(C.CMD_PLUGIN_CATALOG_LOAD_DRIVE, async (data = {}) => {
+  if (!pluginCatalog) throw new Error('Plugin catalogue not available')
+  const result = await pluginCatalog.loadFromDrive(data.driveKey)
+  await persistPluginCatalog()
+  return { ...result, sources: pluginCatalog.sources() }
+})
+
+rpc.handle(C.CMD_PLUGIN_CATALOG_REMOVE_SOURCE, async (data = {}) => {
+  if (!pluginCatalog) throw new Error('Plugin catalogue not available')
+  const removed = pluginCatalog.removeSource(data.driveKey)
+  await persistPluginCatalog()
+  return { removed, sources: pluginCatalog.sources() }
+})
+
+function persistPluginCatalog () {
+  if (!pluginCatalog || !userData) return Promise.resolve()
+  return userData.setSettings({ contentShieldPluginCatalog: pluginCatalog.exportState() }).catch(() => {})
+}
+
+function persistPluginInstallRecords () {
+  if (!pluginDriveLoader || !userData) return Promise.resolve()
+  const records = {}
+  for (const record of pluginDriveLoader.installs()) {
+    records[record.driveKey] = {
+      granted: record.granted,
+      version: record.version,
+      installedAt: record.installedAt,
+      escalated: record.escalated
+    }
+  }
+  return userData.setSettings({ contentShieldPluginInstalls: records }).catch(() => {})
+}
+
+// Remember last-known plugin register payloads so restart can rehydrate.
+function rememberPluginPayload (data) {
+  if (!data || !data.id) return
+  const id = String(data.id).trim().toLowerCase()
+  persistShieldState._pluginPayloads[id] = {
+    id,
+    manifest: data.manifest,
+    contribution: data.contribution,
+    enabled: data.enabled !== false
+  }
+}
+
+async function persistShieldState () {
+  if (!contentShield || !userData) return
+  try {
+    const state = contentShield.exportListState()
+    // Sync enable flags from registry into durable state.
+    if (pearPlugins) {
+      for (const p of pearPlugins.list()) {
+        state.plugins[p.id] = p.enabled
+        if (persistShieldState._pluginPayloads[p.id]) {
+          persistShieldState._pluginPayloads[p.id].enabled = p.enabled
+        }
+      }
+    }
+    await userData.setSettings({
+      contentShieldState: state,
+      contentShieldPlugins: { ...persistShieldState._pluginPayloads },
+      contentShieldAllow: state.allowlist,
+      contentShieldStrict: state.strict
+    })
+  } catch (err) {
+    console.warn('[content-shield] persist failed:', err && err.message)
+  }
+}
+persistShieldState._pluginPayloads = {}
 
 
 // Also enrich the existing CMD_GET_IDENTITY response with mnemonic hint
@@ -926,6 +1772,103 @@ async function boot () {
   try { await contacts.ready(); console.log('Contacts ready') }
   catch (err) { console.error('Contacts init failed:', err && err.message); contacts = null }
 
+  // Lighthouse local self-search + petname naming (Mission B3 — ported from
+  // pearbrowser-desktop). PersonalIndex is a per-user Hyperbee of signed
+  // postings over the shared Corestore; indexing is opt-in
+  // (searchIndexEnabled, default OFF) at the /hyper/ proxy chokepoint, and
+  // querying is fully local — no query ever leaves the device.
+  try {
+    // Sign each posting with the BOUND (rotatable) search key via the binding
+    // publisher, so a trusted peer who resolves our search key can verify our
+    // postings (Lighthouse Phase 2). The publisher is created just below; this
+    // hook runs only when a page is indexed (post-boot), so it's set by then.
+    // Fallback to the seed-derived 'search' subkey if the publisher isn't up —
+    // those postings stay self-only (hop-0 isn't peer-verified) until re-indexed.
+    const sign = (canonDoc) => {
+      const payload = JSON.stringify(canonDoc)
+      if (identityBindingPublisher) {
+        try { return identityBindingPublisher.signDocSync(payload) } catch (_) { /* fall through */ }
+      }
+      const r = identity.signForApp('search', payload, 'lighthouse-doc-v2')
+      return { sig: r.signature, pubkey: r.publicKey }
+    }
+    personalIndex = await new PersonalIndex(store, { sign }).ready()
+    console.log('PersonalIndex ready')
+  } catch (err) {
+    console.error('PersonalIndex init failed:', err && err.message)
+    personalIndex = null
+  }
+
+  // Lighthouse Phase 2 — the binding publisher mints/loads the rotatable
+  // search subkey (persisted in the PersonalIndex meta namespace) so postings
+  // verify against our root-signed binding. DEVIATION from the desktop: no
+  // automatic publish() at boot. Mobile Contacts records cannot carry
+  // bindingKey/verifiedAt yet, so no peer could resolve the DHT record anyway;
+  // CMD_IDENTITY_BINDING_PUBLISH stays wired for explicit use the moment
+  // contact binding keys land (device-linking track). Best-effort, never
+  // blocks boot.
+  if (personalIndex && identity) {
+    try {
+      identityBindingPublisher = await new IdentityBindingPublisher({
+        ib, identity, personalIndex, contacts, dht: swarm && swarm.dht,
+        // advertise our name-registry key (if created) so contacts can resolve our names
+        getNameRegKey: async () => { try { return (await requireUserData().getSettings()).nameRegKey || null } catch { return null } },
+      }).ready()
+      console.log('IdentityBindingPublisher ready')
+    } catch (err) {
+      console.error('IdentityBindingPublisher init failed:', err && err.message)
+      identityBindingPublisher = null
+    }
+  }
+
+  // N5 federation — resolve a typed name across TRUSTED contacts' registries.
+  // Needs contacts (the trust frontier) + the binding publisher (to find each
+  // contact's advertised registry key) + openContactRegistry (to replicate
+  // it). FAILS CLOSED on mobile today: mobile Contacts records do not carry
+  // verifiedAt/bindingKey, so the eligible-contact frontier is empty and
+  // resolve() answers null — local tiers (petname/own-registry/curated) keep
+  // working fully.
+  if (contacts && identityBindingPublisher) {
+    try {
+      federatedNameResolver = new FederatedNameResolver({
+        listContacts: () => requireContacts().list({ limit: 200 }),
+        resolveBinding: (args) => identityBindingPublisher.resolve(args),
+        openRegistry: (keyHex, contactRoot) => openContactRegistry(keyHex, contactRoot),
+      })
+      console.log('FederatedNameResolver ready')
+    } catch (err) {
+      console.error('FederatedNameResolver init failed:', err && err.message)
+      federatedNameResolver = null
+    }
+  }
+
+  // Lighthouse Phase 2 — federated query planner (local-first + trusted-peer
+  // fan-out). The fan-out is hard-capped by SearchFanoutBudget (4 cold
+  // connects/query, 24 live sessions, 30 joins/min) and fails closed on
+  // mobile for the same reason as name federation: with no contact binding
+  // keys the fetch loop skips every peer, so planAndSearch returns the local
+  // set with honest provenance — never a silent wide fanout. Degrades to
+  // local-only search if it can't construct, matching the graceful pattern.
+  if (personalIndex && identity) {
+    try {
+      queryPlanner = new QueryPlanner({
+        personalIndex, contacts, identity, swarm, store,
+        budget: new SearchFanoutBudget(), bindingPublisher: identityBindingPublisher,
+      })
+      console.log('QueryPlanner ready')
+    } catch (err) {
+      console.error('QueryPlanner init failed:', err && err.message)
+      queryPlanner = null
+    }
+  }
+
+  // Naming Phase N1 — local petname store (crypto-free Hyperbee). Always
+  // inited; the experimentalNaming flag only gates whether the resolver/
+  // mutations are reachable, not whether the store opens.
+  names = new Names(store)
+  try { await names.ready(); console.log('Names ready') }
+  catch (err) { console.error('Names init failed:', err && err.message); names = null }
+
   // Trusted-origins allow-list — gates window.pear injection on HTTPS
   // pages when the user has flipped to 'allowlist' mode. Default 'all'
   // mode preserves the current "inject everywhere, unauthorised until
@@ -986,6 +1929,163 @@ async function boot () {
   }, relayClient)
   proxy.setPearSwarmShim(PEAR_SWARM_V1_SHIM)
 
+  // Content Shield — enabled by default, persisted `contentShield: false`
+  // turns it off. Durable lists / allowlist / strict and Phase 3
+  // plugin kill-switches rehydrate from user-data so everything works
+  // offline after first save.
+  // (Boot sequence mirrors pearbrowser-desktop backend/index.js.)
+  contentShield = new ContentShield()
+  pearPlugins = new PearPluginRegistry({ shield: contentShield })
+  try {
+    const shieldSettings = userData ? await userData.getSettings() : null
+    if (shieldSettings && shieldSettings.contentShield === false) contentShield.setEnabled(false)
+    if (shieldSettings && shieldSettings.contentShieldState) {
+      contentShield.importListState(shieldSettings.contentShieldState)
+    }
+    // Legacy array keys (settings UI may write these directly).
+    if (shieldSettings && Array.isArray(shieldSettings.contentShieldAllow)) {
+      for (const key of shieldSettings.contentShieldAllow) contentShield.allowlistDrive(key)
+    }
+    if (shieldSettings && Array.isArray(shieldSettings.contentShieldStrict)) {
+      for (const key of shieldSettings.contentShieldStrict) contentShield.setStrictDrive(key, true)
+    }
+    if (shieldSettings && shieldSettings.contentShieldPlugins && typeof shieldSettings.contentShieldPlugins === 'object') {
+      persistShieldState._pluginPayloads = { ...shieldSettings.contentShieldPlugins }
+      for (const payload of Object.values(shieldSettings.contentShieldPlugins)) {
+        try { pearPlugins.register(payload) } catch {}
+      }
+    }
+
+    // P2P filter-list distribution. Rule text was already rehydrated above,
+    // so lists work fully offline; this owns the drive-sourced metadata
+    // (version/sha256 bookkeeping) and the hot-swap lifecycle.
+    const sha256Hex = (buf) => bareCrypto.createHash('sha256').update(buf).digest('hex')
+    const refreshDistributionDrive = async (keyHex) => {
+      const drive = await getDriveForProxy(keyHex)
+      if (!drive) return
+      const before = drive.version
+      try {
+        await Promise.race([
+          drive.update({ wait: true }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('update-timeout')), 8000))
+        ])
+      } catch {
+        // Timeout is acceptable — the fetch below still tries cached state.
+      }
+      if (drive.version !== before && proxy && typeof proxy.invalidateCache === 'function') {
+        proxy.invalidateCache(keyHex)
+      }
+    }
+    shieldListSync = new ShieldListSync({
+      shield: contentShield,
+      fetchDriveFile: (keyHex, path) => proxy._hybridFetch(keyHex, path),
+      refreshDrive: refreshDistributionDrive,
+      sha256Hex,
+      persistMeta: async (meta) => {
+        if (userData) await userData.setSettings({ contentShieldListSync: meta })
+      }
+    })
+    if (shieldSettings && shieldSettings.contentShieldListSync) {
+      shieldListSync.restore(shieldSettings.contentShieldListSync)
+    }
+
+    // Pear Plugins (Mission B4a — desktop Phase 3 gate). Plugin payloads were
+    // already rehydrated above, so installed plugins work fully offline;
+    // these own the drive-sourced grant records (snapshot-bound consent +
+    // escalation guard) and the discovery catalogue. Same injected seams as
+    // the desktop: proxy._hybridFetch + refreshDistributionDrive + sha256Hex.
+    pluginDriveLoader = new PluginDriveLoader({
+      registry: pearPlugins,
+      fetchDriveFile: (keyHex, path) => proxy._hybridFetch(keyHex, path),
+      refreshDrive: refreshDistributionDrive,
+      sha256Hex,
+      persistInstall: async (id, payload) => {
+        if (payload === null) {
+          delete persistShieldState._pluginPayloads[id]
+        } else if (payload.__recordPatch) {
+          const existing = persistShieldState._pluginPayloads[id]
+          if (existing) existing.enabled = false // escalation guard disabled it
+        } else {
+          persistShieldState._pluginPayloads[id] = {
+            id,
+            manifest: payload.manifest,
+            contribution: payload.contribution,
+            enabled: payload.enabled !== false
+          }
+        }
+        await persistPluginInstallRecords()
+      }
+    })
+    if (shieldSettings && shieldSettings.contentShieldPluginInstalls) {
+      pluginDriveLoader.restore(shieldSettings.contentShieldPluginInstalls)
+    }
+    pluginCatalog = new PluginCatalog({
+      fetchDriveFile: (keyHex, path) => proxy._hybridFetch(keyHex, path),
+      refreshDrive: refreshDistributionDrive
+    })
+    if (shieldSettings && shieldSettings.contentShieldPluginCatalog) {
+      pluginCatalog.restore(shieldSettings.contentShieldPluginCatalog)
+    }
+  } catch {}
+  proxy.setContentShield(contentShield)
+
+  // Local-first search indexing (Mission B3): the /hyper/ HTML serve
+  // chokepoint feeds the personal index. This is the mobile equivalent of the
+  // desktop UI's indexPage() (which extracts title+text from the loaded page)
+  // — same opt-in gate (searchIndexEnabled, default OFF), same best-effort
+  // discipline (never throws into the serve path), hyper:// content only.
+  proxy.setPageIndexer(({ driveKeyHex, filePath, html }) => {
+    (async () => {
+      if (!personalIndex) return
+      const settings = userData ? await userData.getSettings() : {}
+      if (!isSearchIndexEnabled(settings)) return
+      const { title, text } = extractIndexContent(html)
+      await personalIndex.indexDoc({
+        driveKey: normalizeDriveKey(driveKeyHex) || String(driveKeyHex || ''),
+        path: filePath || '/',
+        title,
+        body: text,
+        publishedAt: 0,
+      })
+    })().catch(() => { /* indexing is best-effort */ })
+  })
+
+  // Background list refresh: first sweep shortly after boot (drives need
+  // the swarm), then periodic hot-swap checks. Same 30-minute cadence as
+  // the desktop — the timer is unref'd so it never keeps the worklet
+  // alive, and per-drive failures never disturb browsing.
+  if (shieldListSync) {
+    const firstSweep = setTimeout(() => {
+      shieldListSync.refreshAll()
+        .then((outcomes) => {
+          if (outcomes.some(o => o.ok && o.changed)) return persistShieldState()
+        })
+        .catch(() => {})
+    }, 30 * 1000)
+    if (typeof firstSweep?.unref === 'function') firstSweep.unref()
+    shieldListSync.startAutoRefresh(30 * 60 * 1000)
+  }
+
+  // Session bridge + privacy ladder (Mission B2 — desktop Phases 4–5).
+  // Clearnet navigations route through the browser-owned /clearnet/* proxy
+  // by default so Content Shield sees every request. Direct mode (real
+  // https load in the WebView) is a settings opt-in (clearnetMode: 'direct').
+  try {
+    const bootPrivacy = userData ? await userData.getSettings() : null
+    applyPrivacyFromSettings(bootPrivacy || {})
+  } catch {
+    privacySettings = { ...DEFAULT_PRIVACY }
+    if (proxy) proxy.setPrivacySettings(privacySettings)
+  }
+  sessionBridge = new SessionBridge({
+    getShield: () => contentShield,
+    getPrivacy: () => privacySettings,
+    getProxyPort: () => (proxy && proxy.port) || 0
+  })
+  // No native webRequest hook exists on Android WebView / WKWebView; this is
+  // a no-op today and activates automatically if a future bridge injects one.
+  try { sessionBridge.attachNativeSession() } catch {}
+
   // Mount direct HTTP bridge (WebView → localhost → Bare, bypasses RN relay)
   const httpBridge = new HttpBridge(pearBridge, swarm, getDriveForProxy, {
     validateToken: (token) => proxy ? proxy.validateApiToken(token) : null,
@@ -1007,6 +2107,20 @@ async function boot () {
   console.log('HTTP proxy started on port:', port)
   rpc.event(C.EVT_BOOT_PROGRESS, { stage: 'proxy-ready', message: 'HTTP proxy ready on port ' + port })
 
+  // Tab runtime (Mission B4b, mirrors the desktop boot): the "run in a tab"
+  // path. Serves the headless-app wrapper + bridges each tab's WebSocket to a
+  // pear-request worker pipe. pearRun is null — the Android worklet cannot
+  // spawn a pear-run worker process, so pear:// / file:// tabs fail closed
+  // (typed 'runtime-unavailable' error) while the in-proc demo tab works.
+  // Best-effort: a failure here just means the in-tab path is unavailable.
+  try {
+    tabRuntime = new TabRuntime({ pearRun: null })
+    await tabRuntime.start()
+  } catch (err) {
+    console.error('[tab-runtime] failed to start:', err && err.message)
+    tabRuntime = null
+  }
+
   // Start storage monitoring
   storageTimer = setInterval(() => checkStorageQuota(), STORAGE_CHECK_INTERVAL)
   storageTimer.unref?.()
@@ -1018,7 +2132,20 @@ async function boot () {
 
 async function shutdown () {
   if (storageTimer) { clearInterval(storageTimer); storageTimer = null }
+  if (shieldListSync) { try { shieldListSync.stop() } catch {} shieldListSync = null }
+  try { await askBrowserService.close() } catch {}
+  if (aiService) { try { await aiService.close() } catch {} aiService = null }
+  if (tabRuntime) { try { await tabRuntime.stop() } catch {} tabRuntime = null }
   if (proxy) { try { await proxy.stop() } catch {} proxy = null }
+  for (const [, entry] of _contactRegistries) { try { await _closeContactReg(entry) } catch {} }
+  _contactRegistries.clear()
+  if (nameRegistry) { try { await nameRegistry.close() } catch {} nameRegistry = null }
+  if (names) { try { await names.close() } catch {} names = null }
+  if (personalIndex) { try { await personalIndex.close() } catch {} personalIndex = null }
+  queryPlanner = null
+  federatedNameResolver = null
+  identityBindingPublisher = null
+  if (deviceLinker) { try { await deviceLinker.close() } catch {} deviceLinker = null }
   if (swarmBridge) { try { await swarmBridge.destroy() } catch {} swarmBridge = null }
   if (pearBridge) { try { await pearBridge.close() } catch {} pearBridge = null }
   if (siteManager) { try { await siteManager.close() } catch {} siteManager = null }

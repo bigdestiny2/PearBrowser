@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  TextInput, Alert, Switch, Platform,
+  TextInput, Alert, Switch, Platform, Clipboard,
 } from 'react-native'
 import { colors } from '../lib/theme'
 import { getSettings, updateSettings, clearAllData, addCatalog, removeCatalog, type Settings } from '../lib/storage'
@@ -31,6 +31,10 @@ export function SettingsScreen({ onBack, rpc, onOpenBackupPhrase, onOpenRestoreI
   })
   const [relayConfig, setRelayConfig] = useState<RelayConfig>({ relays: [], enabled: true, configured: false })
   const [relayInput, setRelayInput] = useState('')
+  const [linkInvite, setLinkInvite] = useState('')
+  const [linkJoinInput, setLinkJoinInput] = useState('')
+  const [linkBusy, setLinkBusy] = useState<'invite' | 'join' | null>(null)
+  const [linkNotice, setLinkNotice] = useState('')
 
   useEffect(() => {
     getSettings().then(s => {
@@ -164,6 +168,63 @@ export function SettingsScreen({ onBack, rpc, onOpenBackupPhrase, onOpenRestoreI
       Alert.alert('Error', 'Failed to clear cache.')
     }
   }, [rpc])
+
+  const handleCreateLinkInvite = useCallback(async () => {
+    if (!rpc) {
+      Alert.alert('P2P engine not connected', 'Cannot create a device-link invite right now.')
+      return
+    }
+    setLinkBusy('invite')
+    setLinkNotice('')
+    try {
+      const result = await rpc.deviceLinkCreateInvite()
+      setLinkInvite(result.invite)
+      setLinkNotice('Invite created. Paste it into your other device now.')
+    } catch (err: any) {
+      Alert.alert('Device link failed', err?.message || 'Could not create an invite.')
+    } finally {
+      setLinkBusy(null)
+    }
+  }, [rpc])
+
+  const handleCopyLinkInvite = useCallback(() => {
+    if (!linkInvite) return
+    Clipboard.setString(linkInvite)
+    Alert.alert('Copied', 'Device-link invite copied to clipboard.')
+  }, [linkInvite])
+
+  const handleJoinLinkInvite = useCallback(() => {
+    if (!rpc) {
+      Alert.alert('P2P engine not connected', 'Cannot link this device right now.')
+      return
+    }
+    const invite = linkJoinInput.trim()
+    if (!invite) return
+    Alert.alert(
+      'Replace this identity?',
+      'Linking will replace this device identity with the one from your other device. Save this device backup phrase first if you still need it.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Link Device',
+          style: 'destructive',
+          onPress: async () => {
+            setLinkBusy('join')
+            setLinkNotice('')
+            try {
+              await rpc.deviceLinkJoin(invite, Platform.OS === 'ios' ? 'iPhone' : Platform.OS === 'android' ? 'Android phone' : 'this device')
+              setLinkJoinInput('')
+              setLinkNotice('Device linked. Close and reopen PearBrowser for the linked identity to take effect.')
+            } catch (err: any) {
+              Alert.alert('Device link failed', err?.message || 'Could not link this device.')
+            } finally {
+              setLinkBusy(null)
+            }
+          },
+        },
+      ],
+    )
+  }, [rpc, linkJoinInput])
 
   if (!settings) return null
 
@@ -400,10 +461,10 @@ export function SettingsScreen({ onBack, rpc, onOpenBackupPhrase, onOpenRestoreI
             disabled={!onOpenBackupPhrase}
           >
             <View style={{ flex: 1 }}>
-              <Text style={styles.settingLabel}>Backup Phrase</Text>
-              <Text style={styles.settingHint}>
-                View your 12-word seed phrase. Save it somewhere safe — without it you cannot recover your identity.
-              </Text>
+	              <Text style={styles.settingLabel}>Backup Phrase</Text>
+	              <Text style={styles.settingHint}>
+	                View your 24-word BIP-39 seed phrase. Save it somewhere safe — without it you cannot recover your identity.
+	              </Text>
             </View>
             <Text style={[styles.settingValue, { color: colors.accent, fontSize: 18 }]}>{'>'}</Text>
           </TouchableOpacity>
@@ -413,14 +474,62 @@ export function SettingsScreen({ onBack, rpc, onOpenBackupPhrase, onOpenRestoreI
             disabled={!onOpenRestoreIdentity}
           >
             <View style={{ flex: 1 }}>
-              <Text style={styles.settingLabel}>Restore from Phrase</Text>
-              <Text style={styles.settingHint}>
-                Replace this device's identity with one restored from a saved backup phrase.
-              </Text>
+	              <Text style={styles.settingLabel}>Restore from Phrase</Text>
+	              <Text style={styles.settingHint}>
+	                Replace this device's identity with one restored from a saved 24-word backup phrase.
+	              </Text>
             </View>
-            <Text style={[styles.settingValue, { color: colors.accent, fontSize: 18 }]}>{'>'}</Text>
-          </TouchableOpacity>
-        </View>
+	            <Text style={[styles.settingValue, { color: colors.accent, fontSize: 18 }]}>{'>'}</Text>
+	          </TouchableOpacity>
+	          <View style={styles.settingRow}>
+	            <View style={{ flex: 1 }}>
+	              <Text style={styles.settingLabel}>Link a Device</Text>
+	              <Text style={styles.settingHint}>
+	                Move this 24-word identity to another device over blind-pairing without typing the phrase.
+	              </Text>
+	            </View>
+	            <TouchableOpacity
+	              onPress={handleCreateLinkInvite}
+	              style={[styles.saveBtn, linkBusy === 'invite' && { opacity: 0.7 }]}
+	              disabled={!rpc || linkBusy === 'invite'}
+	            >
+	              <Text style={styles.saveBtnText}>{linkBusy === 'invite' ? 'Creating' : 'Invite'}</Text>
+	            </TouchableOpacity>
+	          </View>
+	          {linkInvite ? (
+	            <View style={styles.linkBox}>
+	              <Text style={styles.linkInviteText} selectable>{linkInvite}</Text>
+	              <TouchableOpacity onPress={handleCopyLinkInvite} style={styles.copyLinkBtn}>
+	                <Text style={styles.copyLinkText}>Copy Invite</Text>
+	              </TouchableOpacity>
+	              <Text style={styles.settingHint}>
+	                One-time invite. Anyone who receives it can adopt your identity.
+	              </Text>
+	            </View>
+	          ) : null}
+	          <View style={styles.linkJoinBox}>
+	            <Text style={styles.label}>Link this device</Text>
+	            <TextInput
+	              style={styles.linkInput}
+	              value={linkJoinInput}
+	              onChangeText={setLinkJoinInput}
+	              placeholder="Paste invite from your other device"
+	              placeholderTextColor={colors.textMuted}
+	              autoCapitalize="none"
+	              autoCorrect={false}
+	              multiline
+	              editable={!!rpc && linkBusy !== 'join'}
+	            />
+	            <TouchableOpacity
+	              onPress={handleJoinLinkInvite}
+	              style={[styles.copyBtn, (!linkJoinInput.trim() || linkBusy === 'join') && { opacity: 0.55 }]}
+	              disabled={!linkJoinInput.trim() || linkBusy === 'join'}
+	            >
+	              <Text style={styles.copyBtnText}>{linkBusy === 'join' ? 'Linking...' : 'Link This Device'}</Text>
+	            </TouchableOpacity>
+	            {linkNotice ? <Text style={[styles.settingHint, { color: colors.success }]}>{linkNotice}</Text> : null}
+	          </View>
+	        </View>
 
         {/* Data */}
         <Text style={styles.sectionTitle}>DATA</Text>
@@ -503,4 +612,28 @@ const styles = StyleSheet.create({
   settingLabel: { color: colors.textPrimary, fontSize: 15 },
   settingValue: { color: colors.textMuted, fontSize: 12, fontFamily: 'monospace', marginTop: 2 },
   settingHint: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
+  linkBox: {
+    backgroundColor: colors.surfaceElevated, borderRadius: 8,
+    padding: 12, marginVertical: 8,
+  },
+  linkInviteText: {
+    color: colors.warning, fontSize: 11, fontFamily: 'monospace',
+    lineHeight: 16, marginBottom: 10,
+  },
+  copyLinkBtn: {
+    alignSelf: 'flex-start', backgroundColor: colors.surface,
+    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 6,
+  },
+  copyLinkText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
+  linkJoinBox: { paddingTop: 8 },
+  linkInput: {
+    backgroundColor: colors.surfaceElevated, borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 10, color: colors.textPrimary,
+    fontSize: 12, fontFamily: 'monospace', minHeight: 72, marginBottom: 8,
+  },
+  copyBtn: {
+    backgroundColor: colors.accent, borderRadius: 8,
+    paddingVertical: 10, alignItems: 'center',
+  },
+  copyBtnText: { color: colors.bg, fontSize: 14, fontWeight: '600' },
 })
