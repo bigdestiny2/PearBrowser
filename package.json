@@ -17,6 +17,7 @@
     "ios:generated:release": "sh scripts/build-generated-ios-release.sh",
     "release:preflight": "node scripts/release-preflight.js",
     "check:release-preflight-report": "node scripts/check-release-preflight-report.js",
+    "audit:high": "node scripts/check-high-severity-audit.mjs",
     "barekit:fetch": "node scripts/fetch-barekit.js",
     "barekit:fetch:android": "node scripts/fetch-android-barekit.js",
     "barekit:fetch:addons": "node scripts/fetch-barekit-addons.js",

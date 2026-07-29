@@ -44,7 +44,7 @@ jobs:
         run: npm test
 
       - name: Run high-severity audit
-        run: npm audit --audit-level=high
+        run: npm run audit:high
 
       - name: Build native worklet bundles
         run: npm run bundle-all-native
