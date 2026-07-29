@@ -7,12 +7,21 @@
 
 import SwiftUI
 
+struct NativeDelivery: Codable, Hashable {
+    let status: String
+    let kind: String
+    let installLink: String
+    let productName: String?
+    let targets: [String]
+}
+
 struct SiteInfo: Identifiable, Codable, Hashable {
     let id: String
     let name: String
     let description: String
     let driveKey: String?
     let link: String?
+    let nativeDelivery: NativeDelivery?
     let desktopPackage: Bool
 }
 
@@ -117,20 +126,56 @@ struct ExploreScreen: View {
                 ?? normalizeDriveKey(app["appKey"])
                 ?? normalizeDriveKey(app["key"])
                 ?? driveKeyFromHyperLink(link)
-            guard driveKey != nil || link != nil else { return nil }
+            let nativeDelivery = normalizeNativeDelivery(app["nativeDelivery"])
+            guard driveKey != nil || link != nil || nativeDelivery != nil else { return nil }
             return SiteInfo(
-                id: (app["id"] as? String) ?? driveKey ?? link!,
+                id: (app["id"] as? String) ?? driveKey ?? link ?? nativeDelivery!.installLink,
                 name: (app["name"] as? String) ?? "Untitled",
                 description: (app["description"] as? String) ?? "",
                 driveKey: driveKey,
                 link: link,
-                desktopPackage: isDesktopPackage(app)
+                nativeDelivery: nativeDelivery,
+                desktopPackage: nativeDelivery != nil || isDesktopPackage(app)
             )
         }
     }
 }
 
+private let pearRootLink = try! NSRegularExpression(pattern: #"^pear://[13-9a-km-uw-z]{52}$"#, options: .caseInsensitive)
+private let supportedNativeTargets: Set<String> = [
+    "darwin-arm64", "darwin-x64",
+    "linux-arm64", "linux-x64",
+    "win32-arm64", "win32-x64",
+]
+
+private func normalizeNativeDelivery(_ raw: Any?) -> NativeDelivery? {
+    guard let value = raw as? [String: Any],
+          value["status"] as? String == "available",
+          value["kind"] as? String == "pear-v3",
+          let rawLink = value["installLink"] as? String else { return nil }
+    let installLink = rawLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: #"/$"#, with: "", options: .regularExpression)
+        .lowercased()
+    let range = NSRange(installLink.startIndex..<installLink.endIndex, in: installLink)
+    guard pearRootLink.firstMatch(in: installLink, range: range) != nil else { return nil }
+    let targets = ((value["targets"] as? [String]) ?? [])
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        .filter { supportedNativeTargets.contains($0) }
+    guard !targets.isEmpty else { return nil }
+    let productName = (value["productName"] as? String)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .prefix(120)
+    return NativeDelivery(
+        status: "available",
+        kind: "pear-v3",
+        installLink: installLink,
+        productName: productName.map(String.init),
+        targets: Array(Set(targets)).sorted()
+    )
+}
+
 private func isDesktopPackage(_ app: [String: Any]) -> Bool {
+    if normalizeNativeDelivery(app["nativeDelivery"]) != nil { return true }
     let generation = (app["generation"] as? Int) == 3 || (app["pearGeneration"] as? Int) == 3
     let delivery = ((app["delivery"] as? String) ?? (app["packageType"] as? String) ?? (app["kind"] as? String) ?? "").lowercased()
     let isPackage = generation || delivery.contains("native") || delivery.contains("desktop") || delivery.contains("package")

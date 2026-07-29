@@ -977,7 +977,18 @@ test('ExploreScreen opens Hyperdrive rows and presents legacy Pear links as migr
             apps: [
               { id: 'alpha', name: 'Alpha App', description: 'First app', driveKey: keyHex },
               { id: 'pear', name: 'Pear Link', description: 'Standalone app', link: 'PEAR://keet' },
-              { id: 'native', name: 'Desktop Tool', description: 'Native app', driveKey: keyHex, generation: 3, targets: ['desktop'] },
+              {
+                id: 'native',
+                name: 'Desktop Tool',
+                description: 'Native app',
+                nativeDelivery: {
+                  status: 'available',
+                  kind: 'pear-v3',
+                  installLink: 'pear://' + 'a'.repeat(52),
+                  productName: 'Desktop Tool',
+                  targets: ['darwin-arm64', 'linux-x64']
+                }
+              },
               { id: 'bad', name: 'Broken App', description: 'No key', driveKey: 'bad' }
             ]
           }

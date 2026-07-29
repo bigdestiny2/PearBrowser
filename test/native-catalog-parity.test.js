@@ -15,7 +15,7 @@ function includesAll (text, fragments) {
   }
 }
 
-test('native Explore screens preserve legacy links as migration records and drop targetless rows', () => {
+test('native Explore screens preserve Pear v3 delivery metadata, legacy migration links, and drop targetless rows', () => {
   const rn = read('app/screens/ExploreScreen.tsx')
   const ios = read('ios-native/PearBrowser/Sources/UI/Screens/ExploreScreen.swift')
   const android = read('android-native/app/src/main/java/com/pearbrowser/app/ui/screens/ExploreScreen.kt')
@@ -24,6 +24,9 @@ test('native Explore screens preserve legacy links as migration records and drop
     'link?: string',
     'normalizeEntry',
     'normalizeEntries',
+    'normalizeNativeDelivery',
+    'nativeDelivery?: NativeDelivery',
+    'pearRootLink',
     'catalogAction',
     'Migration required',
     'Desktop only',
@@ -35,6 +38,9 @@ test('native Explore screens preserve legacy links as migration records and drop
     'let driveKey: String?',
     'let link: String?',
     'normalizeCatalogLink',
+    'normalizeNativeDelivery',
+    'let nativeDelivery: NativeDelivery?',
+    'pearRootLink',
     'normalizeDriveKey',
     'driveKeyFromHyperLink',
     'root["entries"]',
@@ -52,6 +58,9 @@ test('native Explore screens preserve legacy links as migration records and drop
     'ACTION_CATALOG_UPDATED',
     'EXTRA_CATALOG_JSON',
     'normalizeCatalogLink',
+    'normalizeNativeDelivery',
+    'val nativeDelivery: NativeDelivery?',
+    'pearRootLink',
     'normalizeDriveKey',
     'driveKeyFromHyperLink',
     'root["entries"]',

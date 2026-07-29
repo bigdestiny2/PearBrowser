@@ -18,7 +18,7 @@ const { targetToResolution } = require('./name-registry-ops.cjs')
  *   @param {object} ctx.registry  { [normalizedName]: { target, owner?, version?, label? } }
  *                                 the multi-writer N5 name registry (Tier 2)
  *   @param {boolean} ctx.aliases  include the curated bootstrap floor (default true)
- * @returns {null | { name, key, link, label, provenance }}  provenance ∈
+ * @returns {null | { name, key, link, label, provenance, legacyMigrationId?, nativeDelivery? }}  provenance ∈
  *   'petname' | 'registry' | 'curated' (later: 'contact').
  */
 function resolveName (rawName, { petnames = {}, registry = {}, aliases = true } = {}) {
@@ -49,7 +49,18 @@ function resolveName (rawName, { petnames = {}, registry = {}, aliases = true } 
     if (a) {
       const key = a.key || null
       const link = a.link || null
-      return { name: n, key, link, target: link || key, label: a.label, provenance: 'curated' }
+      const legacyMigrationId = a.legacyMigrationId || null
+      return {
+        name: n,
+        key,
+        link,
+        target: link || key,
+        label: a.label,
+        provenance: 'curated',
+        ...(legacyMigrationId
+          ? { legacyMigrationId, nativeDelivery: { status: 'migration-required' } }
+          : {})
+      }
     }
   }
 

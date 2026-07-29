@@ -10,17 +10,20 @@ const { lookupAlias } = aliasMod
 
 const KEY = '0c35d12fd9b1115dd2d1fb1cd1751817c9173d3196ac7c62ae37d023340dcb75'
 
-test('bootstrap floor: a bare word resolves on day one (curated)', () => {
+test('bootstrap floor: a retired native name returns migration metadata, not an executable link', () => {
   const r = resolveName('keet', { petnames: {} })
   assert.equal(r.provenance, 'curated')
-  assert.match(r.link, /^pear:\/\//)
+  assert.equal(r.link, null)
+  assert.equal(r.legacyMigrationId, 'oeeoz3w6fjjt7bym3ndpa6hhicm8f8naxyk11z4iypeoupn6jzpo')
+  assert.deepEqual(r.nativeDelivery, { status: 'migration-required' })
   assert.equal(r.label, 'Keet')
 })
 
 test('curated lookup is normalized + supports alias names', () => {
   assert.equal(resolveName('KEET', { petnames: {} }).provenance, 'curated')  // case-folded
   assert.equal(lookupAlias('pass').label, 'PearPass')                        // alias → PearPass
-  assert.equal(lookupAlias('peercord').link, 'pear://wmir47w7mai3b1skj66mx7fzso6k6o91kipaney7gtt69npimouy')
+  assert.equal(lookupAlias('peercord').legacyMigrationId, 'wmir47w7mai3b1skj66mx7fzso6k6o91kipaney7gtt69npimouy')
+  assert.equal(lookupAlias('peercord').link, undefined)
   // peerit is a hyper:// site (not a pear:// app) — the alias layer carries it too
   assert.equal(lookupAlias('peerit').link, 'hyper://ec6e2d6d9d22b9d6b40e11a9ca3042be3197e4bdca9e9a7f079be6ee830761b4/')
 })

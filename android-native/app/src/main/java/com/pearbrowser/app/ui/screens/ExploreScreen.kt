@@ -230,7 +230,16 @@ private data class Site(
     val driveKey: String?,
     val link: String?,
     val version: String?,
+    val nativeDelivery: NativeDelivery?,
     val desktopPackage: Boolean,
+)
+
+private data class NativeDelivery(
+    val status: String,
+    val kind: String,
+    val installLink: String,
+    val productName: String?,
+    val targets: List<String>,
 )
 
 private data class CatalogLoadResult(
@@ -296,20 +305,50 @@ private fun sitesFromCatalog(root: JsonObject): List<Site> {
             ?: normalizeDriveKey(obj.stringAt("appKey"))
             ?: normalizeDriveKey(obj.stringAt("key"))
             ?: driveKeyFromHyperLink(link)
-        if (driveKey == null && link == null) return@mapNotNull null
+        val nativeDelivery = normalizeNativeDelivery(obj["nativeDelivery"])
+        if (driveKey == null && link == null && nativeDelivery == null) return@mapNotNull null
         Site(
-            id = obj.stringAt("id") ?: driveKey ?: link ?: return@mapNotNull null,
+            id = obj.stringAt("id") ?: driveKey ?: link ?: nativeDelivery?.installLink ?: return@mapNotNull null,
             name = obj.stringAt("name") ?: "Untitled",
             description = obj.stringAt("description") ?: "",
             driveKey = driveKey,
             link = link,
             version = obj.stringAt("version"),
-            desktopPackage = isDesktopPackage(obj),
+            nativeDelivery = nativeDelivery,
+            desktopPackage = nativeDelivery != null || isDesktopPackage(obj),
         )
     }
 }
 
+private val pearRootLink = Regex("^pear://[13-9a-km-uw-z]{52}$", RegexOption.IGNORE_CASE)
+private val supportedNativeTargets = setOf(
+    "darwin-arm64", "darwin-x64",
+    "linux-arm64", "linux-x64",
+    "win32-arm64", "win32-x64",
+)
+
+private fun normalizeNativeDelivery(raw: JsonElement?): NativeDelivery? {
+    val obj = runCatching { raw?.jsonObject }.getOrNull() ?: return null
+    if (obj.stringAt("status") != "available" || obj.stringAt("kind") != "pear-v3") return null
+    val installLink = obj.stringAt("installLink")?.removeSuffix("/")?.lowercase() ?: return null
+    if (!pearRootLink.matches(installLink)) return null
+    val targets = obj["targets"]
+        ?.let { runCatching { it.jsonArray.mapNotNull { item -> item.jsonPrimitive.contentOrNull?.trim()?.lowercase() } }.getOrDefault(emptyList()) }
+        ?.filter { supportedNativeTargets.contains(it) }
+        ?.distinct()
+        ?: emptyList()
+    if (targets.isEmpty()) return null
+    return NativeDelivery(
+        status = "available",
+        kind = "pear-v3",
+        installLink = installLink,
+        productName = obj.stringAt("productName")?.take(120),
+        targets = targets,
+    )
+}
+
 private fun isDesktopPackage(obj: JsonObject): Boolean {
+    if (normalizeNativeDelivery(obj["nativeDelivery"]) != null) return true
     val generation = obj.stringAt("generation") == "3" || obj.stringAt("pearGeneration") == "3"
     val delivery = obj.stringAt("delivery") ?: obj.stringAt("packageType") ?: obj.stringAt("kind") ?: ""
     val isPackage = generation || Regex("native|desktop|package", RegexOption.IGNORE_CASE).containsMatchIn(delivery)
