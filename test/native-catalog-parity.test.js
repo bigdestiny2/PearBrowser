@@ -15,7 +15,7 @@ function includesAll (text, fragments) {
   }
 }
 
-test('native Explore screens preserve safe catalog link-only rows and drop targetless rows', () => {
+test('native Explore screens preserve Pear v3 delivery metadata, legacy migration links, and drop targetless rows', () => {
   const rn = read('app/screens/ExploreScreen.tsx')
   const ios = read('ios-native/PearBrowser/Sources/UI/Screens/ExploreScreen.swift')
   const android = read('android-native/app/src/main/java/com/pearbrowser/app/ui/screens/ExploreScreen.kt')
@@ -24,8 +24,13 @@ test('native Explore screens preserve safe catalog link-only rows and drop targe
     'link?: string',
     'normalizeEntry',
     'normalizeEntries',
-    'site.link',
-    'onVisit(site.link)',
+    'normalizeNativeDelivery',
+    'nativeDelivery?: NativeDelivery',
+    'pearRootLink',
+    'catalogAction',
+    'Migration required',
+    'Desktop only',
+    'legacy Pear v2 app',
     'filter((site): site is SiteInfo => !!site)'
   ])
 
@@ -33,10 +38,14 @@ test('native Explore screens preserve safe catalog link-only rows and drop targe
     'let driveKey: String?',
     'let link: String?',
     'normalizeCatalogLink',
+    'normalizeNativeDelivery',
+    'let nativeDelivery: NativeDelivery?',
+    'pearRootLink',
     'normalizeDriveKey',
     'driveKeyFromHyperLink',
     'root["entries"]',
-    'onVisit(link)',
+    'Migrate it to a native v3 package on desktop',
+    'Desktop only',
     'case "pear", "file"'
   ])
 
@@ -49,10 +58,14 @@ test('native Explore screens preserve safe catalog link-only rows and drop targe
     'ACTION_CATALOG_UPDATED',
     'EXTRA_CATALOG_JSON',
     'normalizeCatalogLink',
+    'normalizeNativeDelivery',
+    'val nativeDelivery: NativeDelivery?',
+    'pearRootLink',
     'normalizeDriveKey',
     'driveKeyFromHyperLink',
     'root["entries"]',
-    'val target = site.link',
+    'legacy Pear v2 app',
+    'Desktop only',
     '"pear", "file" ->'
   ])
 })

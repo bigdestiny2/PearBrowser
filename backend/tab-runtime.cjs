@@ -21,10 +21,8 @@
  *     pear-request client (everything else streams from the worker)
  *   - a bare-ws server bridges each tab's WebSocket <-> the worker's duplex pipe
  *
- * Worker source is pluggable:
- *   - 'demo'        -> an in-process pear-request router (rock-solid, no network)
- *   - pear://|file:// -> a real headless worker via pear-run (the production path,
- *                        the in-tab sibling of CMD_LAUNCH_PEAR_LINK's window spawn)
+ * The in-process demo router is the only worker source. Native app code must
+ * arrive through a verified package outside the browser process.
  *
  * --- Mobile adaptations (Mission B4b) ---------------------------------------
  * Everything above is the desktop file's own header, kept verbatim. The port

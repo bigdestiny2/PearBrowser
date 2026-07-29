@@ -24,7 +24,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -34,12 +33,10 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.pearbrowser.app.bridge.PearWorkletEvents
 import com.pearbrowser.app.rpc.LocalPearRpc
-import com.pearbrowser.app.rpc.PearInstalledApp
 import com.pearbrowser.app.rpc.PearRpcClient
 import com.pearbrowser.app.rpc.PearSettings
 import com.pearbrowser.app.ui.theme.PearColors
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -58,11 +55,9 @@ import java.net.URL
  * catalogs are fetched via HttpURLConnection; if a relay advertises a signed
  * catalog bee, the worklet verifies and streams that P2P catalog instead.
  *
- * Catalog entries with a driveKey can be installed (CMD_INSTALL_APP) for
- * offline caching; installed apps open through CMD_LAUNCH_APP, which loads
- * the app drive into the local proxy and hands back its driveKey — the app
- * then opens in the Browse tab like any hyper:// site. An "Installed Apps"
- * section on top lists CMD_LIST_INSTALLED results.
+ * Mobile opens browseable Hyperdrives. Pear v2 executable links remain
+ * visible as migration records, but are never passed to the browser or the
+ * desktop install lifecycle.
  *
  * Phase 2 ticket — see docs/HOLEPUNCH_ALIGNMENT_PLAN.md.
  */
@@ -70,78 +65,16 @@ import java.net.URL
 fun ExploreScreen(onVisit: (String) -> Unit, settings: PearSettings? = null) {
     val context = LocalContext.current
     val rpc = LocalPearRpc.current
-    val scope = rememberCoroutineScope()
     var sites by remember { mutableStateOf<List<Site>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var sourceUrl by remember { mutableStateOf(settings?.catalogUrl ?: "https://relay-us.p2phiverelay.xyz") }
     var activeBeeKey by remember { mutableStateOf<String?>(null) }
 
-    // Install/launch state — sourced from CMD_LIST_INSTALLED.
-    var installed by remember { mutableStateOf<List<PearInstalledApp>>(emptyList()) }
-    var busyAppIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var actionError by remember { mutableStateOf<String?>(null) }
-
-    suspend fun refreshInstalled() {
-        val client = rpc ?: return
-        try {
-            installed = client.listInstalled()
-        } catch (_: Throwable) {
-            // Offline / engine busy — the catalog still works without it.
-        }
-    }
-
-    fun installedAppFor(site: Site): PearInstalledApp? =
-        installed.firstOrNull {
-            it.id == site.id || (site.driveKey != null && it.driveKey == site.driveKey)
-        }
-
-    fun install(site: Site) {
-        val client = rpc ?: return
-        val driveKey = site.driveKey ?: return
-        busyAppIds = busyAppIds + site.id
-        actionError = null
-        scope.launch {
-            try {
-                client.installApp(site.id, driveKey, site.name, site.version)
-                refreshInstalled()
-            } catch (e: Throwable) {
-                actionError = "Install failed: ${e.message ?: "unknown error"}"
-            } finally {
-                busyAppIds = busyAppIds - site.id
-            }
-        }
-    }
-
-    fun open(appId: String, fallbackDriveKey: String?) {
-        val client = rpc ?: return
-        busyAppIds = busyAppIds + appId
-        actionError = null
-        scope.launch {
-            try {
-                // LAUNCH_APP ensures the drive is loaded in the local proxy.
-                // Open via hyper://<driveKey> (mirrors app/App.tsx
-                // handleLaunchApp) so Browse re-navigates through CMD_NAVIGATE
-                // and gets a fresh bridge token; localUrl is the fallback.
-                val result = client.launchApp(appId)
-                val driveKey = result["driveKey"]?.jsonPrimitive?.contentOrNull ?: fallbackDriveKey
-                val localUrl = result["localUrl"]?.jsonPrimitive?.contentOrNull
-                val target = driveKey?.let { "hyper://$it" } ?: localUrl
-                if (target != null) onVisit(target)
-            } catch (e: Throwable) {
-                actionError = "Open failed: ${e.message ?: "unknown error"}"
-            } finally {
-                busyAppIds = busyAppIds - appId
-            }
-        }
-    }
 
     LaunchedEffect(settings?.catalogUrl) {
         settings?.catalogUrl?.takeIf { it.isNotBlank() }?.let { sourceUrl = it }
-    }
-
-    LaunchedEffect(rpc) {
-        refreshInstalled()
     }
 
     LaunchedEffect(sourceUrl, rpc) {
@@ -214,49 +147,6 @@ fun ExploreScreen(onVisit: (String) -> Unit, settings: PearSettings? = null) {
         )
         Spacer(Modifier.height(16.dp))
 
-        if (installed.isNotEmpty()) {
-            Text(
-                "Installed Apps",
-                color = PearColors.TextPrimary,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(8.dp))
-            installed.forEach { app ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .background(PearColors.Surface, RoundedCornerShape(12.dp))
-                        .padding(14.dp),
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            app.name,
-                            color = PearColors.TextPrimary,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            "v${app.version} · hyper://${app.driveKey.take(8)}…",
-                            color = PearColors.TextMuted,
-                            fontSize = 11.sp,
-                        )
-                    }
-                    Text(
-                        if (busyAppIds.contains(app.id)) "Opening…" else "Open",
-                        color = PearColors.Accent,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clickable(enabled = !busyAppIds.contains(app.id)) {
-                            open(app.id, app.driveKey)
-                        },
-                    )
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-        }
-
         actionError?.let {
             Text(it, color = PearColors.Error, fontSize = 13.sp)
             Spacer(Modifier.height(8.dp))
@@ -275,18 +165,20 @@ fun ExploreScreen(onVisit: (String) -> Unit, settings: PearSettings? = null) {
                 fontSize = 13.sp,
             )
             else -> sites.forEach { site ->
-                val installedApp = installedAppFor(site)
                 SiteCard(
                     site = site,
-                    installedApp = installedApp,
-                    busy = busyAppIds.contains(site.id),
-                    canInstall = rpc != null && site.driveKey != null,
                     onVisit = {
-                        val target = site.link ?: site.driveKey?.let { "hyper://$it" }
+                        val target = if (site.desktopPackage) null else {
+                            site.link?.takeIf { it.startsWith("hyper://", ignoreCase = true) }
+                                ?: site.driveKey?.let { "hyper://$it" }
+                        }
                         if (target != null) onVisit(target)
+                        else actionError = if (site.desktopPackage) {
+                            "${site.name} is a desktop v3 package. Open this catalogue on desktop to install its verified native release."
+                        } else {
+                            "${site.name} is a legacy Pear v2 app. Migrate it to a native v3 package on desktop."
+                        }
                     },
-                    onInstall = { install(site) },
-                    onOpen = { open(site.id, site.driveKey) },
                 )
             }
         }
@@ -296,12 +188,7 @@ fun ExploreScreen(onVisit: (String) -> Unit, settings: PearSettings? = null) {
 @Composable
 private fun SiteCard(
     site: Site,
-    installedApp: PearInstalledApp?,
-    busy: Boolean,
-    canInstall: Boolean,
     onVisit: () -> Unit,
-    onInstall: () -> Unit,
-    onOpen: () -> Unit,
 ) {
     Row(
         Modifier
@@ -322,47 +209,17 @@ private fun SiteCard(
                 Spacer(Modifier.height(4.dp))
                 Text(site.description, color = PearColors.TextSecondary, fontSize = 12.sp)
             }
+        }
+        Text(
             when {
-                installedApp != null -> Text(
-                    "Installed · v${installedApp.version}",
-                    color = PearColors.Success,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-                site.driveKey != null && !canInstall -> Text(
-                    "Install needs the P2P engine",
-                    color = PearColors.TextMuted,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-        }
-        when {
-            installedApp != null -> Text(
-                if (busy) "Opening…" else "Open",
-                color = PearColors.Accent,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
-                    .clickable(enabled = !busy) { onOpen() }
-                    .padding(start = 12.dp),
-            )
-            canInstall -> Text(
-                if (busy) "Installing…" else "Install",
-                color = PearColors.Accent,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
-                    .clickable(enabled = !busy) { onInstall() }
-                    .padding(start = 12.dp),
-            )
-            else -> Text(
-                "Visit",
-                color = PearColors.Accent,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
+                site.desktopPackage -> "Desktop only"
+                site.link?.startsWith("hyper://", ignoreCase = true) == true || site.driveKey != null -> "Open"
+                else -> "Migration required"
+            },
+            color = PearColors.Accent,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
@@ -373,6 +230,16 @@ private data class Site(
     val driveKey: String?,
     val link: String?,
     val version: String?,
+    val nativeDelivery: NativeDelivery?,
+    val desktopPackage: Boolean,
+)
+
+private data class NativeDelivery(
+    val status: String,
+    val kind: String,
+    val installLink: String,
+    val productName: String?,
+    val targets: List<String>,
 )
 
 private data class CatalogLoadResult(
@@ -438,16 +305,57 @@ private fun sitesFromCatalog(root: JsonObject): List<Site> {
             ?: normalizeDriveKey(obj.stringAt("appKey"))
             ?: normalizeDriveKey(obj.stringAt("key"))
             ?: driveKeyFromHyperLink(link)
-        if (driveKey == null && link == null) return@mapNotNull null
+        val nativeDelivery = normalizeNativeDelivery(obj["nativeDelivery"])
+        if (driveKey == null && link == null && nativeDelivery == null) return@mapNotNull null
         Site(
-            id = obj.stringAt("id") ?: driveKey ?: link ?: return@mapNotNull null,
+            id = obj.stringAt("id") ?: driveKey ?: link ?: nativeDelivery?.installLink ?: return@mapNotNull null,
             name = obj.stringAt("name") ?: "Untitled",
             description = obj.stringAt("description") ?: "",
             driveKey = driveKey,
             link = link,
             version = obj.stringAt("version"),
+            nativeDelivery = nativeDelivery,
+            desktopPackage = nativeDelivery != null || isDesktopPackage(obj),
         )
     }
+}
+
+private val pearRootLink = Regex("^pear://[13-9a-km-uw-z]{52}$", RegexOption.IGNORE_CASE)
+private val supportedNativeTargets = setOf(
+    "darwin-arm64", "darwin-x64",
+    "linux-arm64", "linux-x64",
+    "win32-arm64", "win32-x64",
+)
+
+private fun normalizeNativeDelivery(raw: JsonElement?): NativeDelivery? {
+    val obj = runCatching { raw?.jsonObject }.getOrNull() ?: return null
+    if (obj.stringAt("status") != "available" || obj.stringAt("kind") != "pear-v3") return null
+    val installLink = obj.stringAt("installLink")?.removeSuffix("/")?.lowercase() ?: return null
+    if (!pearRootLink.matches(installLink)) return null
+    val targets = obj["targets"]
+        ?.let { runCatching { it.jsonArray.mapNotNull { item -> item.jsonPrimitive.contentOrNull?.trim()?.lowercase() } }.getOrDefault(emptyList()) }
+        ?.filter { supportedNativeTargets.contains(it) }
+        ?.distinct()
+        ?: emptyList()
+    if (targets.isEmpty()) return null
+    return NativeDelivery(
+        status = "available",
+        kind = "pear-v3",
+        installLink = installLink,
+        productName = obj.stringAt("productName")?.take(120),
+        targets = targets,
+    )
+}
+
+private fun isDesktopPackage(obj: JsonObject): Boolean {
+    if (normalizeNativeDelivery(obj["nativeDelivery"]) != null) return true
+    val generation = obj.stringAt("generation") == "3" || obj.stringAt("pearGeneration") == "3"
+    val delivery = obj.stringAt("delivery") ?: obj.stringAt("packageType") ?: obj.stringAt("kind") ?: ""
+    val isPackage = generation || Regex("native|desktop|package", RegexOption.IGNORE_CASE).containsMatchIn(delivery)
+    val targets = (obj["platforms"] ?: obj["targets"])
+        ?.let { runCatching { it.jsonArray.mapNotNull { item -> item.jsonPrimitive.contentOrNull } }.getOrDefault(emptyList()) }
+        ?: emptyList()
+    return isPackage && targets.any { it.equals("darwin", true) || it.equals("linux", true) || it.equals("win32", true) || it.equals("desktop", true) }
 }
 
 private val hex64 = Regex("^[0-9a-fA-F]{64}$")
@@ -471,7 +379,7 @@ private fun normalizeCatalogLink(raw: String?): String? {
     val scheme = trimmed.substring(0, separator).lowercase()
     return when (scheme) {
         "hyper" -> normalizeHyperLink(trimmed)
-        "pear", "file" -> "$scheme://${trimmed.substring(separator + 3)}"
+        "pear", "file" -> "$scheme://${trimmed.substring(separator + 3)}" // Migration record; never navigated.
         else -> null
     }
 }

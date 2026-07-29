@@ -375,7 +375,7 @@ export default function App() {
 
   // Launch app by drive key or URL (from explore directory)
   const handleLaunchByKey = useCallback((keyOrUrl: string) => {
-    if (/^(?:hyper|pear|file):\/\//i.test(keyOrUrl)) {
+    if (/^hyper:\/\//i.test(keyOrUrl)) {
       setBrowseUrl(keyOrUrl)
     } else if (keyOrUrl.startsWith('http')) {
       const match = keyOrUrl.match(/\/v1\/hyper\/([a-f0-9]{64})/i)
@@ -385,7 +385,8 @@ export default function App() {
         setBrowseUrl(keyOrUrl)
       }
     } else {
-      setBrowseUrl(`hyper://${keyOrUrl}`)
+      Alert.alert('Unsupported destination', 'PearBrowser mobile opens Hyperdrive sites. Legacy Pear apps require migration on desktop.')
+      return
     }
     setActiveTab('browse')
   }, [setBrowseUrl, setActiveTab])

@@ -48,11 +48,13 @@ async function withStore (fn) {
   }
 }
 
-test('curated floor answers a bare name offline (Tier 3)', async () => {
+test('curated floor returns migration metadata for a retired native name (Tier 3)', async () => {
   await withStore(async (names) => {
     const r = await resolveThroughStore(names, 'keet')
     assert.equal(r.provenance, 'curated')
-    assert.equal(r.link, lookupAlias('keet').link) // the curated bootstrap target
+    assert.equal(r.link, null)
+    assert.equal(r.legacyMigrationId, lookupAlias('keet').legacyMigrationId)
+    assert.deepEqual(r.nativeDelivery, { status: 'migration-required' })
     assert.equal(r.name, 'keet')
   })
 })

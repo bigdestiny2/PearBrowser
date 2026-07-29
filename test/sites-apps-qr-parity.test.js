@@ -162,32 +162,17 @@ test('Android shell routes sites flows from the More tab', () => {
   assert.match(more, /onOpenSites/, 'More tab does not call the Sites route')
 })
 
-test('Android Explore installs, lists, and opens apps via the backend commands', () => {
+test('Android Explore opens Hyperdrive content and presents native apps as migration records', () => {
   const explore = read(`${ANDROID_SCREENS}/ExploreScreen.kt`)
   includesAll(explore, [
-    'listInstalled()',
-    'installApp(site.id, driveKey, site.name, site.version)',
-    'launchApp(appId)',
-    'Installed Apps',
-    'Installing…',
-    'Opening…',
-    '"hyper://$it"'
+    'site.desktopPackage',
+    'startsWith("hyper://", ignoreCase = true)',
+    '"hyper://$it"',
+    'Desktop only',
+    'Migration required',
+    'verified native release',
+    'legacy Pear v2 app'
   ], 'ExploreScreen.kt')
-
-  const client = read('android-native/app/src/main/java/com/pearbrowser/app/rpc/PearRpcClient.kt')
-  for (const name of ['INSTALL_APP', 'LAUNCH_APP', 'LIST_INSTALLED']) {
-    assert.match(client, new RegExp(`Cmd\\.${name}\\b`), `PearRpcClient must call Cmd.${name}`)
-  }
-  // LAUNCH_APP payload key must be `id` — backend reads data.id.
-  assert.match(client, /suspend fun launchApp\(id: String\)[\s\S]*?put\("id", id\)/,
-    'PearRpcClient.launchApp must send { id }')
-  const rpc = read('android-native/app/src/main/java/com/pearbrowser/app/rpc/PearRpc.kt')
-  assert.match(rpc, /suspend fun launchApp\(appId: String\)[\s\S]*?put\("id", appId\)/,
-    'PearRpc.launchApp must send { id }')
-
-  // Backend keeps returning a proxy localUrl + driveKey for launches.
-  const index = read('backend/index.js')
-  includesAll(index, ['CMD_LAUNCH_APP', 'localUrl', 'driveKey'], 'backend/index.js launch handler')
 })
 
 test('Android QR scanner uses CameraX + ML Kit with navigate and device-link modes', () => {

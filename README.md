@@ -41,11 +41,11 @@ PearBrowser has a built-in App Store, but it's not controlled by any single comp
 
 **Anyone can run a catalog.** Relays are open source. You can run your own relay with your own curated selection of apps — for your company, your community, or the public. PearBrowser users add relay URLs in Settings to browse different catalogs.
 
-**Apps load instantly.** When you tap "Get/Open" on an app, PearBrowser loads it from the relay's HTTP gateway (`/v1/hyper/<driveKey>/…`) — not over slow P2P — with a direct P2P fallback. The relay caches the app's files and serves them like a CDN. First load is under 2 seconds.
+**Hyper sites open instantly.** When you tap **Open** on a browseable `hyper://` site, PearBrowser loads it from the relay's HTTP gateway (`/v1/hyper/<driveKey>/…`) — not over slow P2P — with a direct P2P fallback. The relay caches the site's files and serves them like a CDN. First load is under 2 seconds.
 
-**Apps stay current through the catalog.** A stable app key/link in the catalog points users at the current available release. They do not have to remember a URL, download a package, or run an updater by hand.
+**The catalogue states the delivery boundary.** `hyper://` sites are opened on the phone. A compatible native v3 desktop package is labelled **Desktop only** and is never installed by mobile. A `pear://` or `file://` v2 executable is labelled **Migration required**, never launched, and directs its owner to migrate on desktop.
 
-**Catalog rows are normalized before rendering.** PearBrowser accepts `apps[]`, `items[]`, or `entries[]`, recognizes `driveKey`, `appKey`, `key`, and safe `hyper://` links, prefers signed Hyperbee catalogs when advertised, and preserves safe link-only `hyper://`, `pear://`, and `file://` targets.
+**Catalog rows are normalized before rendering.** PearBrowser accepts `apps[]`, `items[]`, or `entries[]`, recognizes `driveKey`, `appKey`, `key`, and safe `hyper://` links, and prefers signed Hyperbee catalogs when advertised. Legacy `pear://` and `file://` links are retained only as migration records; they cannot become a browser destination.
 
 **No app-store gatekeepers.** There's no platform review process, no 30% fee, no approval queue. A relay operator decides what their catalog seeds; users choose which relays they trust and browse those catalogs.
 
@@ -57,7 +57,7 @@ PearBrowser has a built-in App Store, but it's not controlled by any single comp
 
 3. **The relay eager-replicates the drive and reads its `/manifest.json`** to build the catalog entry (name, description, author, version, categories, icon). An app seeded **without a manifest shows up as "Unknown App"** — so always include one.
 
-4. **The relay serves the aggregated catalog at `GET /catalog.json`.** PearBrowser's App Store fetches it over HTTP and lists the apps. If the relay also advertises `catalogBeeKey`, PearBrowser verifies and loads that signed Hyperbee in preference to the plain JSON snapshot. Tapping "Get/Open" loads the app's drive through the relay gateway (`/v1/hyper/<driveKey>/…`) with a P2P fallback.
+4. **The relay serves the aggregated catalog at `GET /catalog.json`.** PearBrowser fetches it over HTTP and lists the entries. If the relay also advertises `catalogBeeKey`, PearBrowser verifies and loads that signed Hyperbee in preference to the plain JSON snapshot. Tapping **Open** loads a browseable Hyperdrive through the relay gateway (`/v1/hyper/<driveKey>/…`) with a P2P fallback; mobile never installs a desktop package.
 
 ```
 Developer            Relay operator          HiveRelay                 PearBrowser
@@ -66,7 +66,7 @@ Build app + drive →  Seed driveKey via   →   Eager-replicates drive,
 manifest.json        dashboard wizard or     reads /manifest.json,
                      POST /seed (Bearer)     adds entry to catalog  →  App Store fetches
                                                                        GET /catalog.json
-                                                                    →  Taps "Get/Open"
+                                                                    →  Taps "Open" for hyper://
                                                                     →  Loads via
                                                                        /v1/hyper/<driveKey>/…
                                                                        (P2P fallback)
@@ -131,7 +131,7 @@ Your site is yours forever. You own the keypair. No hosting fees. No domain regi
 │  │       └──────── Hyperswarm P2P (backup) │  │
 │  │                                         │  │
 │  │  CatalogManager ── loads /catalog.json  │  │
-│  │  AppManager ─────── install/launch apps │  │
+│  │  CatalogManager ─── classifies browse / desktop / legacy │  │
 │  │  SiteManager ────── create/publish sites│  │
 │  │  PearBridge ─────── login/sync/swarm.v1 │  │
 │  │                                         │  │

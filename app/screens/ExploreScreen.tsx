@@ -16,12 +16,85 @@ type SiteInfo = {
   version: string
   driveKey: string
   link?: string
+  nativeDelivery?: NativeDelivery
   categories: string[]
+}
+
+type NativeDelivery = {
+  status: 'available'
+  kind: 'pear-v3'
+  installLink: string
+  productName?: string
+  targets: string[]
 }
 
 type Props = {
   rpc: PearRPC | null
   onVisit: (url: string) => void
+}
+
+type CatalogAction = {
+  label: string
+  message?: string
+  target?: string
+}
+
+const pearRootLink = /^pear:\/\/[13-9a-km-uw-z]{52}$/i
+const nativeTargets = new Set([
+  'darwin-arm64', 'darwin-x64',
+  'linux-arm64', 'linux-x64',
+  'win32-arm64', 'win32-x64',
+])
+
+function normalizeNativeDelivery (value: any): NativeDelivery | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const installLink = String(value.installLink || '').trim().replace(/\/$/, '').toLowerCase()
+  const targets = Array.isArray(value.targets)
+    ? [...new Set(value.targets.map((target: unknown) => String(target || '').trim().toLowerCase()))]
+        .filter((target): target is string => nativeTargets.has(target as string))
+    : []
+  if (value.status !== 'available' || value.kind !== 'pear-v3' || !pearRootLink.test(installLink) || !targets.length) return undefined
+  const productName = String(value.productName || '').trim().slice(0, 120)
+  return {
+    status: 'available',
+    kind: 'pear-v3',
+    installLink,
+    ...(productName ? { productName } : {}),
+    targets,
+  }
+}
+
+// Mobile is a Hyper web host, not a Pear desktop runtime. Keep catalogue
+// metadata useful without treating an executable v2/v3 record as a URL.
+function catalogAction (site: SiteInfo): CatalogAction {
+  const link = site.link || ''
+  if (/^(?:pear|file):\/\//i.test(link)) {
+    return {
+      label: 'Migration required',
+      message: `“${site.name}” is a legacy Pear v2 app. Migrate it to a native v3 package on desktop before it can be installed.`,
+    }
+  }
+
+  if (site.nativeDelivery) {
+    return {
+      label: 'Desktop only',
+      message: `“${site.name}” is a desktop v3 package. Open this catalogue on a desktop device to install its verified native release.`,
+    }
+  }
+
+  const raw = site as any
+  const platforms = Array.isArray(raw.platforms) ? raw.platforms : Array.isArray(raw.targets) ? raw.targets : []
+  const delivery = String(raw.delivery || raw.packageType || raw.kind || '').toLowerCase()
+  const isDesktopPackage = String(raw.generation) === '3' || String(raw.pearGeneration) === '3' || /(?:native|desktop|package)/.test(delivery)
+  if (isDesktopPackage && platforms.some((platform: unknown) => /^(?:darwin|linux|win32|desktop)$/i.test(String(platform)))) {
+    return {
+      label: 'Desktop only',
+      message: `“${site.name}” is a desktop v3 package. Open this catalogue on a desktop device to install its verified native release.`,
+    }
+  }
+
+  const target = link || (site.driveKey ? `hyper://${site.driveKey}` : '')
+  return target ? { label: 'Open', target } : { label: 'Unavailable', message: `No browseable Hyperdrive was supplied for “${site.name}”.` }
 }
 
 export function ExploreScreen({ rpc, onVisit }: Props) {
@@ -45,12 +118,14 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
     const linkKey = link.match(/^hyper:\/\/([0-9a-f]{64})(?:[/?#].*)?$/i)?.[1]
     const rawKey = String(a.driveKey || a.appKey || a.key || linkKey || '').trim()
     const driveKey = /^[a-f0-9]{64}$/i.test(rawKey) ? rawKey.toLowerCase() : ''
-    if (!driveKey && !link) return null
+    const nativeDelivery = normalizeNativeDelivery(a.nativeDelivery)
+    if (!driveKey && !link && !nativeDelivery) return null
     return {
       ...a,
       driveKey,
       ...(link ? { link } : {}),
-      id: a.id || a.appKey || driveKey || link,
+      ...(nativeDelivery ? { nativeDelivery } : {}),
+      id: a.id || a.appKey || driveKey || link || nativeDelivery?.installLink,
       name: a.name || a.title || 'Untitled',
       description: a.description || '',
     }
@@ -154,21 +229,12 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
   }, [])
 
   const handleVisit = useCallback((site: SiteInfo) => {
-    if (site.link) {
-      onVisit(site.link)
+    const action = catalogAction(site)
+    if (action.target) {
+      onVisit(action.target)
       return
     }
-    let key = (site.driveKey || (site as any).key || (site as any).appKey || '').toString()
-    if (key.startsWith('hyper://')) key = key.replace('hyper://', '')
-    if (/^[a-f0-9]{64}$/i.test(key)) {
-      onVisit(`hyper://${key}`)
-      return
-    }
-    if (site.id && /^[a-f0-9]{64}$/i.test(site.id)) {
-      onVisit(`hyper://${site.id}`)
-      return
-    }
-    setError(`Invalid drive key for "${site.name}"`)
+    setError(action.message || `Invalid drive key for "${site.name}"`)
   }, [onVisit])
 
   return (
@@ -215,7 +281,7 @@ export function ExploreScreen({ rpc, onVisit }: Props) {
               description={site.description}
               onPress={() => handleVisit(site)}
               onAction={() => handleVisit(site)}
-              actionLabel="Visit"
+              actionLabel={catalogAction(site).label}
             />
           ))}
         </View>
