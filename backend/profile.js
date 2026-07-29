@@ -5,7 +5,7 @@
  * storing profile fields (display name, avatar, bio, email, etc.) and
  * per-app grants that let apps read specific fields.
  *
- * Only the "browser" context (`pear://browser/profile`) can WRITE to
+ * Only the local browser-owned context can WRITE to
  * the profile. Catalogue apps READ the profile only through the
  * `pear.login()` consent ceremony (Phase C), and only the fields the
  * user has explicitly granted.

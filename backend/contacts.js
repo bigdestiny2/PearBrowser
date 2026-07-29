@@ -114,7 +114,7 @@ class Contacts {
   }
 
   /**
-   * Parse a `pear://contact?pk=<hex>&name=<url-encoded>&sig=<hex>` URL
+   * Parse a `p2p-contact://invite?pk=<hex>&name=<url-encoded>&sig=<hex>` URL
    * into a contact record. `sig` is optional (ed25519 signature over
    * `pear.contact:<pubkey>:<displayName>` by the contact's root key —
    * proves the QR wasn't tampered with). If sig is present + invalid
@@ -123,8 +123,7 @@ class Contacts {
   static parseInviteURL (url) {
     try {
       const u = new URL(url)
-      if (u.protocol !== 'pear:') return null
-      if (u.hostname !== 'contact' && u.pathname.replace('//', '') !== 'contact') return null
+      if (u.protocol !== 'p2p-contact:' || u.hostname !== 'invite') return null
       const pk = u.searchParams.get('pk')
       const name = u.searchParams.get('name') || ''
       const sig = u.searchParams.get('sig')
