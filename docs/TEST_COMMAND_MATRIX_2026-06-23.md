@@ -10,7 +10,7 @@ PearBrowser. Source status is summarized in
 
 ## Read First
 
-- Root project: `/Users/localllm/Projects/pear-ecosystem/01-browser/PearBrowser`
+- Root project: `~/pear-ecosystem/01-browser/PearBrowser`
 - This is a standalone git repository; the worktree was clean before this docs
   loop.
 - The repo has no `.github/` workflow directory in this checkout. Use
