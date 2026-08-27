@@ -121,6 +121,19 @@ test('mobile catalogue and status surfaces describe cached Hyperdrive content wi
   assert.doesNotMatch(androidMore, /Installed Apps/)
 })
 
+test('current swarm plan requires the signed Pear v3 release boundary', () => {
+  const swarmPlan = read('docs/SWARM-V1.md')
+
+  includesAll(swarmPlan, [
+    'pear-build@1.2.0',
+    'signed AppRelease v2',
+    'provisioning/multisig',
+    'data-recovery/rollback',
+    'native platform signing'
+  ])
+  assert.doesNotMatch(swarmPlan, /\bpear\s+(?:run|stage|seed|release)\b/i)
+})
+
 test('Android native BrowseScreen hardens CMD_NAVIGATE proxy and bridge lifecycle', () => {
   const browse = read('android-native/app/src/main/java/com/pearbrowser/app/ui/screens/BrowseScreen.kt')
   includesAll(browse, [
