@@ -655,6 +655,8 @@ test('MoreScreen navigates, reports status, shows identity, and saves catalog pr
   assert.match(textContent(tree), /Connected/)
   assert.match(textContent(tree), /Port 9898/)
   assert.match(textContent(tree), /1.5 KB \/ 2 KB/)
+  assert.match(textContent(tree), /Saved Offline Sites/)
+  assert.doesNotMatch(textContent(tree), /Installed Apps/)
 
   for (const label of ['My Sites', 'Bookmarks', 'History', 'Settings']) {
     findTouchableWithText(tree, label).props.onPress()
@@ -665,6 +667,7 @@ test('MoreScreen navigates, reports status, shows identity, and saves catalog pr
   await flushMicrotasks()
   assert.equal(rn.alerts[0][0], 'P2P Status')
   assert.match(rn.alerts[0][1], /Peers: 7/)
+  assert.match(rn.alerts[0][1], /Saved offline sites: 4/)
 
   await findTouchableWithText(tree, 'My Identity').props.onPress()
   await flushMicrotasks()

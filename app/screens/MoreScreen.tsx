@@ -23,7 +23,7 @@ interface ConnectionDetails {
   peerCount: number
   proxyPort: number
   browseDrives: number
-  installedApps: number
+  savedOfflineSites: number
   storageUsed: number
   storageLimit: number
   publishedSites: number
@@ -37,7 +37,7 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
     peerCount: 0,
     proxyPort: 0,
     browseDrives: 0,
-    installedApps: 0,
+    savedOfflineSites: 0,
     storageUsed: 0,
     storageLimit: 0,
     publishedSites: 0,
@@ -55,7 +55,8 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
             peerCount: status.peerCount || 0,
             proxyPort: status.proxyPort || proxyPort || 0,
             browseDrives: status.browseDrives || 0,
-            installedApps: status.installedApps || 0,
+            // `installedApps` is the legacy RPC field for cached Hyperdrives.
+            savedOfflineSites: status.installedApps || 0,
             storageUsed: status.storageUsed || 0,
             storageLimit: status.storageLimit || 0,
             publishedSites: status.publishedSites || 0,
@@ -83,7 +84,7 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
         `Peers: ${s.peerCount}`,
         `Proxy port: ${s.proxyPort || proxyPort || 'N/A'}`,
         `Browse drives: ${s.browseDrives}`,
-        `Saved sites: ${s.installedApps}`,
+        `Saved offline sites: ${s.installedApps}`,
         `Published sites: ${s.publishedSites}`,
       ].join('\n'))
     } catch (err: any) {
@@ -218,8 +219,8 @@ export function MoreScreen({ rpc, peerCount, proxyPort, status, onNavigateToSite
         </View>
         
         <View style={styles.statusRow}>
-          <Text style={styles.statusLabel}>Installed Apps</Text>
-          <Text style={styles.statusValue}>{connectionDetails.installedApps}</Text>
+          <Text style={styles.statusLabel}>Saved Offline Sites</Text>
+          <Text style={styles.statusValue}>{connectionDetails.savedOfflineSites}</Text>
         </View>
 
         {connectionDetails.storageLimit > 0 && (

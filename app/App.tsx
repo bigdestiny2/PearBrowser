@@ -57,7 +57,7 @@ interface ConnectionStatusDetails {
   peerCount: number
   proxyPort: number
   browseDrives: number
-  installedApps: number
+  savedOfflineSites: number
   publishedSites: number
 }
 
@@ -110,7 +110,7 @@ export default function App() {
     peerCount: 0,
     proxyPort: 0,
     browseDrives: 0,
-    installedApps: 0,
+    savedOfflineSites: 0,
     publishedSites: 0,
   })
 
@@ -289,7 +289,8 @@ export default function App() {
             peerCount: status.peerCount || 0,
             proxyPort: status.proxyPort || proxyPort || 0,
             browseDrives: status.browseDrives || 0,
-            installedApps: status.installedApps || 0,
+            // `installedApps` is the legacy RPC field for cached Hyperdrives.
+            savedOfflineSites: status.installedApps || 0,
             publishedSites: status.publishedSites || 0,
           })
         }
@@ -353,28 +354,9 @@ export default function App() {
     }
   }, [activeTab])
 
-  // Launch saved site by ID (from home screen)
-  const handleLaunchApp = useCallback(async (appId: string) => {
-    if (!rpcRef.current) {
-      console.warn('[App] launchApp: no RPC available')
-      return
-    }
-    try {
-      const result = await rpcRef.current.launchApp(appId)
-      if (result.driveKey) {
-        setBrowseUrl(`hyper://${result.driveKey}`)
-      } else if (result.localUrl) {
-        setBrowseUrl(result.localUrl)
-      }
-      setActiveTab('browse')
-    } catch (err: any) {
-      console.warn('[App] launchApp failed:', err)
-      Alert.alert('Launch failed', err?.message || 'Could not launch this site.')
-    }
-  }, [setActiveTab, setBrowseUrl])
-
-  // Launch app by drive key or URL (from explore directory)
-  const handleLaunchByKey = useCallback((keyOrUrl: string) => {
+  // Open static catalog content by drive key or URL. Native packages remain
+  // desktop-only and legacy v2 entries remain migration-required.
+  const handleOpenCatalogContent = useCallback((keyOrUrl: string) => {
     if (/^hyper:\/\//i.test(keyOrUrl)) {
       setBrowseUrl(keyOrUrl)
     } else if (keyOrUrl.startsWith('http')) {
@@ -385,7 +367,10 @@ export default function App() {
         setBrowseUrl(keyOrUrl)
       }
     } else {
-      Alert.alert('Unsupported destination', 'PearBrowser mobile opens Hyperdrive sites. Legacy Pear apps require migration on desktop.')
+      Alert.alert(
+        'Unsupported destination',
+        'PearBrowser Mobile opens static Hyperdrive content only. Signed Pear v3 native packages are desktop-only; legacy Pear v2 entries remain migration-required.'
+      )
       return
     }
     setActiveTab('browse')
@@ -503,8 +488,8 @@ export default function App() {
                   <Text style={styles.statusDetailValue}>{connectionDetails.browseDrives}</Text>
                 </View>
                 <View style={styles.statusDetailRow}>
-                  <Text style={styles.statusDetailLabel}>Installed Apps</Text>
-                  <Text style={styles.statusDetailValue}>{connectionDetails.installedApps}</Text>
+                  <Text style={styles.statusDetailLabel}>Saved Offline Sites</Text>
+                  <Text style={styles.statusDetailValue}>{connectionDetails.savedOfflineSites}</Text>
                 </View>
                 <View style={styles.statusDetailRow}>
                   <Text style={styles.statusDetailLabel}>Published Sites</Text>
@@ -640,7 +625,7 @@ export default function App() {
         {activeTab === 'explore' && (
           <ExploreScreen
             rpc={rpcRef.current}
-            onVisit={handleLaunchByKey}
+            onVisit={handleOpenCatalogContent}
           />
         )}
         {/* BrowseScreen - keep mounted after first open, hide when not active */}
