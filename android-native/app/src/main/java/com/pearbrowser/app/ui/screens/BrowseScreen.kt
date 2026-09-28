@@ -138,11 +138,15 @@ fun BrowseScreen(
     // History recording is opt-in (settings.historyEnabled, default OFF for
     // privacy). When enabled, each navigation target is recorded best-effort;
     // the page URL stands in for the title until the WebView title is plumbed.
-    LaunchedEffect(currentUrl, settings?.historyEnabled, rpc) {
+    LaunchedEffect(currentUrl, settings?.historyEnabled, settings?.privateMode, rpc) {
         val target = currentUrl ?: return@LaunchedEffect
-        if (settings?.historyEnabled != true) return@LaunchedEffect
+        if (settings?.privateMode == true || settings?.historyEnabled != true) return@LaunchedEffect
         val client = rpc ?: return@LaunchedEffect
         try {
+            // Settings can change in another shell between root polls. A
+            // failed fresh read must not turn private browsing into history.
+            val latest = client.getSettings()
+            if (latest.privateMode || !latest.historyEnabled) return@LaunchedEffect
             client.addHistory(target, "")
         } catch (_: Throwable) {
             // History is best-effort and must never break browsing.
@@ -155,7 +159,18 @@ fun BrowseScreen(
         val serial = navigationSerial.incrementAndGet()
         error = null
 
-        if (target.startsWith("hyper://", ignoreCase = true)) {
+        val appTarget = normalizeAppNavigation(target)
+        if (target.startsWith("app://", ignoreCase = true) && appTarget == null) {
+            error = "Invalid app:// address"
+            webViewUrl = null
+            webViewUrlTab = tabId
+            apiToken = ""
+            proxyPort = 0
+            clearnetProxyActive = false
+            return@LaunchedEffect
+        }
+
+        if (target.startsWith("hyper://", ignoreCase = true) || appTarget != null) {
             val client = rpc
             if (client == null) {
                 error = "P2P engine is not ready yet."
@@ -168,7 +183,7 @@ fun BrowseScreen(
             }
 
             try {
-                val result = client.navigate(target)
+                val result = client.navigate(appTarget?.hyperUrl ?: target)
                 if (serial != navigationSerial.get()) return@LaunchedEffect
                 val localUrl = result["localUrl"]?.jsonPrimitive?.contentOrNull
                     ?: throw IllegalStateException("Backend did not return localUrl")
@@ -182,7 +197,17 @@ fun BrowseScreen(
                 if (token.isBlank()) {
                     throw IllegalStateException("Backend did not return an API token")
                 }
-                webViewUrl = localUrl
+                webViewUrl = if (appTarget == null) {
+                    localUrl
+                } else {
+                    val responseKey = result["key"]?.jsonPrimitive?.contentOrNull
+                    val prefix = "/hyper/${appTarget.key}"
+                    val path = URI(localUrl).rawPath.orEmpty()
+                    if (responseKey != appTarget.key || (path != prefix && !path.startsWith("$prefix/"))) {
+                        throw IllegalStateException("Backend returned an invalid app route")
+                    }
+                    localUrl.replaceFirst(prefix, "/app/${appTarget.key}")
+                }
                 webViewUrlTab = tabId
                 apiToken = token
                 proxyPort = localPort
@@ -615,6 +640,20 @@ private fun EmptyBrowseState() {
 }
 
 private val hyperHost = Regex("^(?:[0-9a-fA-F]{64}|[13-9a-km-uw-zA-KM-UW-Z]{52})$")
+private val appHost = Regex("^[0-9a-fA-F]{64}$")
+
+private data class AppNavigation(val key: String, val url: String, val hyperUrl: String)
+
+private fun normalizeAppNavigation(url: String?): AppNavigation? {
+    val trimmed = url?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val uri = try { URI(trimmed) } catch (_: Throwable) { return null }
+    if (!uri.scheme.equals("app", ignoreCase = true) || uri.userInfo != null || uri.port != -1) return null
+    val key = uri.host?.takeIf { appHost.matches(it) }?.lowercase() ?: return null
+    val path = uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/"
+    val query = uri.rawQuery?.let { "?$it" }.orEmpty()
+    val fragment = uri.rawFragment?.let { "#$it" }.orEmpty()
+    return AppNavigation(key, "app://$key$path$query$fragment", "hyper://$key$path$query$fragment")
+}
 
 /** Creates a fully configured WebView for one browser tab. Instances live in
  *  the BrowserTabManager pool and are re-parented into the active container
@@ -639,7 +678,7 @@ private fun createTabWebView(
         @JavascriptInterface
         fun navigate(url: String) {
             mainHandler.post {
-                val target = normalizeHyperNavigation(url)
+                val target = normalizeHyperNavigation(url) ?: normalizeAppNavigation(url)?.url
                 if (target != null) {
                     onHyperNavigate(target)
                 } else if (isHttpOrHttpsUrl(url)) {
@@ -701,9 +740,9 @@ private fun pearWebViewClient(
             val url = request?.url?.toString() ?: return false
             if (request.isForMainFrame != true) return false
 
-            val hyperTarget = normalizeHyperNavigation(url)
-            if (hyperTarget != null) {
-                onHyperNavigate(hyperTarget)
+            val browserTarget = normalizeHyperNavigation(url) ?: normalizeAppNavigation(url)?.url
+            if (browserTarget != null) {
+                onHyperNavigate(browserTarget)
                 return true
             }
 

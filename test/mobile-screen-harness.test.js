@@ -8,8 +8,9 @@ const ts = require('typescript')
 const root = path.join(__dirname, '..')
 const keyHex = 'a'.repeat(64)
 
-function flushMicrotasks () {
-  return Promise.resolve().then(() => Promise.resolve())
+async function flushMicrotasks () {
+  // App startup now waits for storage migration and a second session read.
+  for (let i = 0; i < 8; i++) await Promise.resolve()
 }
 
 function createReactHarness () {
@@ -86,6 +87,7 @@ function createReactNativeStub () {
   const alerts = []
   const shared = []
   const clipboard = { value: '' }
+  const appStateListeners = []
 
   return {
     module: {
@@ -100,6 +102,15 @@ function createReactNativeStub () {
       StatusBar: 'StatusBar',
       Modal: 'Modal',
       NativeModules: {},
+      AppState: {
+        addEventListener: (_event, callback) => {
+          appStateListeners.push(callback)
+          return { remove: () => {
+            const index = appStateListeners.indexOf(callback)
+            if (index >= 0) appStateListeners.splice(index, 1)
+          } }
+        }
+      },
       Switch: 'Switch',
       Linking: {
         opened: [],
@@ -127,7 +138,8 @@ function createReactNativeStub () {
     },
     alerts,
     shared,
-    clipboard
+    clipboard,
+    appStateListeners
   }
 }
 
@@ -257,9 +269,18 @@ function makeComponentStubs (harness) {
 function makeAppScreenStubs (harness) {
   const simpleScreen = (label) => () => harness.React.createElement('Text', null, label)
   return {
-    './screens/HomeScreen': { HomeScreen: simpleScreen('Home screen') },
+    './screens/HomeScreen': {
+      HomeScreen: ({ onNavigate }) => harness.React.createElement('View', null,
+        harness.React.createElement('Text', null, 'Home screen'),
+        harness.React.createElement('TouchableOpacity', {
+          onPress: () => onNavigate('hyper://' + keyHex)
+        }, harness.React.createElement('Text', null, 'Open hyper page'))
+      )
+    },
     './screens/ExploreScreen': { ExploreScreen: simpleScreen('Explore screen') },
-    './screens/BrowseScreen': { BrowseScreen: simpleScreen('Browse screen') },
+    './screens/BrowseScreen': { BrowseScreen: 'BrowseScreen' },
+    './screens/SearchScreen': { SearchScreen: simpleScreen('Search screen') },
+    './screens/TabSwitcherScreen': { TabSwitcherScreen: 'TabSwitcherScreen' },
     './screens/MoreScreen': { MoreScreen: simpleScreen('More screen') },
     './screens/BookmarksScreen': { BookmarksScreen: simpleScreen('Bookmarks screen') },
     './screens/HistoryScreen': { HistoryScreen: simpleScreen('History screen') },
@@ -330,7 +351,13 @@ function loadAppWithRuntime (harness, rn, runtime) {
     './lib/network': { networkMonitor: { start: () => {}, stop: () => {} } },
     './lib/storage': {
       getSession: async () => ({}),
+      getSettings: async () => ({ privateMode: false }),
+      getPrivateModeStrict: async () => runtime.privateMode === true,
       saveSession: async () => {},
+      scrubBrowserSession: async () => {
+        runtime.scrubs = (runtime.scrubs || 0) + 1
+        if (runtime.scrubFails) throw new Error('scrub offline')
+      },
       bootstrapHyperbeeStorage: async () => {}
     },
     'react-native-bare-kit': { Worklet: FakeWorklet },
@@ -428,6 +455,155 @@ test('App shows swarm consent with topic context and resolves decisions', async 
   assert.deepEqual(runtime.calls.at(-1), ['swarmResolve', 'swarm-2', true])
   tree = harness.render(App, {})
   assert.doesNotMatch(textContent(tree), /Direct swarm access/)
+})
+
+test('React Native opens, selects, and closes independent browser tabs', async () => {
+  const harness = createReactHarness()
+  const rn = createReactNativeStub()
+  const runtime = { calls: [], workletStarts: [], rpc: null, terminated: false }
+  const App = loadAppWithRuntime(harness, rn, runtime)
+
+  let tree = harness.render(App, {})
+  runtime.rpc.readyHandler(9876)
+  await flushMicrotasks()
+  tree = harness.render(App, {})
+  findTouchableWithText(tree, 'Open hyper page').props.onPress()
+  tree = harness.render(App, {})
+  let switcher = findAll(tree, node => node.type === 'TabSwitcherScreen')[0]
+  assert.equal(switcher.props.tabs.length, 1)
+  const firstId = switcher.props.activeTabId
+  assert.equal(switcher.props.tabs[0].url, 'hyper://' + keyHex)
+
+  switcher.props.onNewTab()
+  tree = harness.render(App, {})
+  assert.match(textContent(tree), /Home screen/)
+  switcher = findAll(tree, node => node.type === 'TabSwitcherScreen')[0]
+  assert.equal(switcher.props.tabs.length, 2)
+  assert.notEqual(switcher.props.activeTabId, firstId)
+  assert.equal(switcher.props.tabs[1].url, '')
+
+  findTouchableWithText(tree, 'Open hyper page').props.onPress()
+  tree = harness.render(App, {})
+  switcher = findAll(tree, node => node.type === 'TabSwitcherScreen')[0]
+  assert.equal(switcher.props.tabs.length, 2)
+  assert.equal(switcher.props.tabs[1].url, 'hyper://' + keyHex)
+
+  switcher.props.onSelect(firstId)
+  tree = harness.render(App, {})
+  switcher = findAll(tree, node => node.type === 'TabSwitcherScreen')[0]
+  assert.equal(switcher.props.activeTabId, firstId)
+  switcher.props.onClose(firstId)
+  tree = harness.render(App, {})
+  switcher = findAll(tree, node => node.type === 'TabSwitcherScreen')[0]
+  assert.equal(switcher.props.tabs.length, 1)
+  assert.equal(switcher.props.activeTabId, switcher.props.tabs[0].id)
+})
+
+test('React Native discards live tabs after an external Private Mode change', async () => {
+  const harness = createReactHarness()
+  const rn = createReactNativeStub()
+  const runtime = { calls: [], workletStarts: [], rpc: null, terminated: false, privateMode: false }
+  const App = loadAppWithRuntime(harness, rn, runtime)
+
+  let tree = harness.render(App, {})
+  runtime.rpc.readyHandler(9876)
+  await flushMicrotasks()
+  tree = harness.render(App, {})
+  await flushMicrotasks() // finish the observer's initial strict settings read
+  findTouchableWithText(tree, 'Open hyper page').props.onPress()
+  tree = harness.render(App, {})
+  let switcher = findAll(tree, node => node.type === 'TabSwitcherScreen')[0]
+  assert.equal(switcher.props.tabs.length, 1)
+
+  runtime.privateMode = true
+  rn.appStateListeners.at(-1)('active')
+  await flushMicrotasks()
+  tree = harness.render(App, {})
+  switcher = findAll(tree, node => node.type === 'TabSwitcherScreen')[0]
+  assert.equal(switcher.props.tabs.length, 0)
+  assert.equal(runtime.scrubs, 1)
+
+  // A page opened privately is also discarded when another shell switches
+  // back to normal mode. Failed cleanup stays pending for a foreground retry.
+  findTouchableWithText(tree, 'Open hyper page').props.onPress()
+  tree = harness.render(App, {})
+  switcher = findAll(tree, node => node.type === 'TabSwitcherScreen')[0]
+  assert.equal(switcher.props.tabs.length, 1)
+  runtime.privateMode = false
+  runtime.scrubFails = true
+  rn.appStateListeners.at(-1)('active')
+  await flushMicrotasks()
+  tree = harness.render(App, {})
+  switcher = findAll(tree, node => node.type === 'TabSwitcherScreen')[0]
+  assert.equal(switcher.props.tabs.length, 0)
+  runtime.scrubFails = false
+  rn.appStateListeners.at(-1)('active')
+  await flushMicrotasks()
+  assert.equal(runtime.scrubs, 3)
+})
+
+test('React Native retains six live tab views and reopens an evicted tab from its saved address', async () => {
+  const harness = createReactHarness()
+  const rn = createReactNativeStub()
+  const runtime = { calls: [], workletStarts: [], rpc: null, terminated: false }
+  const App = loadAppWithRuntime(harness, rn, runtime)
+  const render = () => {
+    harness.render(App, {}) // allow effects to update the retained pool
+    return harness.render(App, {})
+  }
+  const liveViews = (tree) => findAll(tree, node =>
+    node.type === 'View' && typeof node.props.testID === 'string' &&
+    node.props.testID.startsWith('live-browser-tab-'))
+  const tabIds = []
+
+  let tree = harness.render(App, {})
+  runtime.rpc.readyHandler(9876)
+  await flushMicrotasks()
+  tree = render()
+  for (let index = 0; index < 7; index++) {
+    if (index > 0) {
+      findAll(tree, node => node.type === 'TabSwitcherScreen')[0].props.onNewTab()
+      tree = render()
+    }
+    findTouchableWithText(tree, 'Open hyper page').props.onPress()
+    tree = render()
+    tabIds.push(findAll(tree, node => node.type === 'TabSwitcherScreen')[0].props.activeTabId)
+  }
+
+  let views = liveViews(tree)
+  assert.equal(views.length, 6)
+  assert.equal(views.some(view => view.props.testID === `live-browser-tab-${tabIds[0]}`), false)
+  assert.equal(views.some(view => view.props.testID === `live-browser-tab-${tabIds[6]}`), true)
+  const sixth = views.find(view => view.props.testID === `live-browser-tab-${tabIds[5]}`)
+  const sixthRequestId = findAll(sixth, node => node.type === 'BrowseScreen')[0].props.navigationRequestId
+  assert.equal(sixthRequestId, 1)
+
+  // Selecting another retained view does not create a new navigation request
+  // or remove the previous view from the React tree.
+  findAll(tree, node => node.type === 'TabSwitcherScreen')[0].props.onSelect(tabIds[5])
+  tree = render()
+  views = liveViews(tree)
+  assert.equal(views.length, 6)
+  const retainedSixth = views.find(view => view.props.testID === `live-browser-tab-${tabIds[5]}`)
+  assert.equal(findAll(retainedSixth, node => node.type === 'BrowseScreen')[0].props.navigationRequestId, sixthRequestId)
+  assert.equal(views.some(view => view.props.testID === `live-browser-tab-${tabIds[6]}`), true)
+  const hiddenSeventh = views.find(view => view.props.testID === `live-browser-tab-${tabIds[6]}`)
+  assert.equal(hiddenSeventh.props.style[1].pointerEvents, 'none')
+
+  // The seventh distinct tab had evicted the first; selecting it mounts a
+  // fresh keyed view with the persisted address while keeping the pool at six.
+  findAll(tree, node => node.type === 'TabSwitcherScreen')[0].props.onSelect(tabIds[0])
+  tree = render()
+  views = liveViews(tree)
+  assert.equal(views.length, 6)
+  const restoredFirst = views.find(view => view.props.testID === `live-browser-tab-${tabIds[0]}`)
+  assert.ok(restoredFirst)
+  assert.equal(findAll(restoredFirst, node => node.type === 'BrowseScreen')[0].props.initialUrl, 'hyper://' + keyHex)
+  assert.equal(views.some(view => view.props.testID === `live-browser-tab-${tabIds[1]}`), false)
+
+  findAll(tree, node => node.type === 'TabSwitcherScreen')[0].props.onClose(tabIds[0])
+  tree = render()
+  assert.equal(liveViews(tree).some(view => view.props.testID === `live-browser-tab-${tabIds[0]}`), false)
 })
 
 test('QRScannerScreen handles permission states and accepts only supported P2P QR payloads', async () => {
@@ -893,7 +1069,15 @@ test('BrowseScreen routes hyper URLs through rpc.navigate and opens untrusted HT
   const rpc = {
     async navigate (url) {
       navigateCalls.push(url)
-      return { localUrl: 'http://127.0.0.1:9876/hyper/' + keyHex + '/', apiToken: 'token-1' }
+      const parsed = new URL(url)
+      const port = parsed.hostname === 'b'.repeat(64) ? 9898 : 9876
+      const resolvedKey = parsed.hostname === 'y'.repeat(52) ? keyHex : parsed.hostname
+      return {
+        localUrl: 'http://127.0.0.1:' + port + '/hyper/' + resolvedKey + (parsed.pathname || '/'),
+        key: resolvedKey,
+        proxyPort: port,
+        apiToken: 'token-1'
+      }
     }
   }
 
@@ -958,6 +1142,33 @@ test('BrowseScreen routes hyper URLs through rpc.navigate and opens untrusted HT
   findByProp(tree, 'TextInput', 'placeholder', 'hyper://...').props.onSubmitEditing()
   await flushMicrotasks()
   assert.equal(navigateCalls.at(-1), 'hyper://' + 'b'.repeat(64))
+  tree = harness.render(BrowseScreen, { rpc, proxyPort: 9876, peerCount: 3, status: 'connected', initialUrl: 'hyper://' + keyHex })
+  webView = findAll(tree, node => node.type === 'WebView')[0]
+  assert.equal(webView.props.source.uri, 'http://127.0.0.1:9898/hyper/' + 'b'.repeat(64) + '/')
+  assert.equal(webView.props.injectedJavaScriptBeforeContentLoaded, 'bridge:9898:token-1')
+  assert.equal(webView.props.onShouldStartLoadWithRequest({ url: 'http://127.0.0.1:9898.evil/hyper/' + 'b'.repeat(64) + '/' }), false)
+  assert.equal(webView.props.onShouldStartLoadWithRequest({ url: 'http://127.0.0.1:9898/hyper/' + keyHex + '/' }), false)
+  await flushMicrotasks()
+  assert.equal(navigateCalls.at(-1), 'hyper://' + keyHex + '/')
+
+  tree = harness.render(BrowseScreen, { rpc, proxyPort: 9876, peerCount: 3, status: 'connected', initialUrl: 'hyper://' + keyHex })
+  findByProp(tree, 'TextInput', 'placeholder', 'hyper://...').props.onChangeText('app://' + keyHex + '/index.html')
+  tree = harness.render(BrowseScreen, { rpc, proxyPort: 9876, peerCount: 3, status: 'connected', initialUrl: 'hyper://' + keyHex })
+  findByProp(tree, 'TextInput', 'placeholder', 'hyper://...').props.onSubmitEditing()
+  await flushMicrotasks()
+  tree = harness.render(BrowseScreen, { rpc, proxyPort: 9876, peerCount: 3, status: 'connected', initialUrl: 'hyper://' + keyHex })
+  assert.equal(navigateCalls.at(-1), 'hyper://' + keyHex + '/index.html')
+  webView = findAll(tree, node => node.type === 'WebView')[0]
+  assert.equal(webView.props.source.uri, 'http://127.0.0.1:9876/app/' + keyHex + '/index.html')
+
+  findByProp(tree, 'TextInput', 'placeholder', 'hyper://...').props.onChangeText('hyper://' + 'y'.repeat(52))
+  tree = harness.render(BrowseScreen, { rpc, proxyPort: 9876, peerCount: 3, status: 'connected', initialUrl: 'hyper://' + keyHex })
+  findByProp(tree, 'TextInput', 'placeholder', 'hyper://...').props.onSubmitEditing()
+  await flushMicrotasks()
+  tree = harness.render(BrowseScreen, { rpc, proxyPort: 9876, peerCount: 3, status: 'connected', initialUrl: 'hyper://' + keyHex })
+  webView = findAll(tree, node => node.type === 'WebView')[0]
+  assert.equal(webView.props.source.uri, 'http://127.0.0.1:9876/hyper/' + keyHex + '/')
+  assert.equal(webView.props.injectedJavaScriptBeforeContentLoaded, 'bridge:9876:token-1')
 })
 
 test('ExploreScreen opens Hyperdrive rows and presents legacy Pear links as migration records', async () => {
@@ -1050,6 +1261,8 @@ test('SettingsScreen updates catalog, relay, privacy, cache, and identity naviga
     async getStatus () {
       return { storageUsed: 256, storageLimit: 1024, storagePercent: 25 }
     },
+    async getPrivacyStatus () { return { privacy: { searchIndexEnabled: false } } },
+    async userDataSetSettings (updates) { calls.push(['userDataSetSettings', updates]); return updates },
     async clearCache () {
       calls.push('clearCache')
     },
@@ -1115,7 +1328,7 @@ test('SettingsScreen updates catalog, relay, privacy, cache, and identity naviga
   await switches[0].props.onValueChange(true)
   assert.equal(calls.at(-1)[0], 'settings')
   assert.equal(calls.at(-1)[1].privateMode, true)
-  await switches[1].props.onValueChange(false)
+  await switches[2].props.onValueChange(false)
   assert.equal(calls.at(-1)[0], 'relayEnabled')
   assert.equal(calls.at(-1)[1], false)
 

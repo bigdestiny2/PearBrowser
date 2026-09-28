@@ -2,6 +2,8 @@
 
 Last updated: 2026-06-23
 
+This is a historical architecture baseline. For the 2026-09-26 local candidate and current qualification gates, see [PEARBROWSER_UPDATE_2026-09-26.md](PEARBROWSER_UPDATE_2026-09-26.md).
+
 PearBrowser Mobile is the iOS and Android host for PearBrowser apps and
 `hyper://` sites. It pairs native mobile shells with a Bare Kit worklet so a
 phone can browse Hyperdrives, load relay-backed catalogues, publish simple

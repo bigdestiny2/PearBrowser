@@ -13,6 +13,7 @@ type Props = {
   rpc?: PearRPC | null
   onOpenBackupPhrase?: () => void
   onOpenRestoreIdentity?: () => void
+  onPrivateModeChange?: (enabled: boolean) => void
 }
 
 type RelayConfig = {
@@ -21,8 +22,12 @@ type RelayConfig = {
   configured: boolean
 }
 
-export function SettingsScreen({ onBack, rpc, onOpenBackupPhrase, onOpenRestoreIdentity }: Props) {
+export function SettingsScreen({ onBack, rpc, onOpenBackupPhrase, onOpenRestoreIdentity, onPrivateModeChange }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null)
+  const [privateModeBusy, setPrivateModeBusy] = useState(false)
+  const [searchIndexEnabled, setSearchIndexEnabled] = useState(false)
+  const [searchIndexReady, setSearchIndexReady] = useState(false)
+  const [searchIndexBusy, setSearchIndexBusy] = useState(false)
   const [catalogInput, setCatalogInput] = useState('')
   const [storageInfo, setStorageInfo] = useState({
     used: 0,
@@ -59,6 +64,58 @@ export function SettingsScreen({ onBack, rpc, onOpenBackupPhrase, onOpenRestoreI
       .catch((err) => console.warn('[Settings] getRelays failed:', err))
     return () => { cancelled = true }
   }, [rpc])
+
+  // The worklet's privacy policy owns indexing; its default is off.
+  useEffect(() => {
+    setSearchIndexReady(false)
+    setSearchIndexEnabled(false)
+    if (!rpc) return
+    let active = true
+    rpc.getPrivacyStatus()
+      .then((status) => {
+        if (!active) return
+        setSearchIndexEnabled(status.privacy.searchIndexEnabled === true)
+        setSearchIndexReady(true)
+      })
+      .catch((err) => {
+        if (active) console.warn('[Settings] getPrivacyStatus failed:', err)
+      })
+    return () => { active = false }
+  }, [rpc])
+
+  const handleToggleSearchIndex = useCallback(async (enabled: boolean) => {
+    if (!rpc || !searchIndexReady || searchIndexBusy) return
+    setSearchIndexBusy(true)
+    try {
+      await rpc.userDataSetSettings({ searchIndexEnabled: enabled })
+      const status = await rpc.getPrivacyStatus()
+      setSearchIndexEnabled(status.privacy.searchIndexEnabled === true)
+    } catch (err: any) {
+      Alert.alert('Indexing setting failed', err?.message || 'Could not update page indexing.')
+    } finally {
+      setSearchIndexBusy(false)
+    }
+  }, [rpc, searchIndexReady, searchIndexBusy])
+
+  const handleTogglePrivateMode = useCallback(async (enabled: boolean) => {
+    if (privateModeBusy) return
+    setPrivateModeBusy(true)
+    try {
+      const updated = await updateSettings({ privateMode: enabled })
+      setSettings(updated)
+      onPrivateModeChange?.(enabled)
+      Alert.alert(
+        enabled ? 'Private Mode On' : 'Private Mode Off',
+        enabled
+          ? 'History will not be recorded. Private tabs are discarded when you leave private mode or restart the app.'
+          : 'Normal browsing resumed. Private tabs have been discarded.'
+      )
+    } catch (err: any) {
+      Alert.alert('Private Mode failed', err?.message || 'Could not update private mode.')
+    } finally {
+      setPrivateModeBusy(false)
+    }
+  }, [onPrivateModeChange, privateModeBusy])
 
   const handleAddRelay = useCallback(async () => {
     if (!rpc) {
@@ -274,21 +331,35 @@ export function SettingsScreen({ onBack, rpc, onOpenBackupPhrase, onOpenRestoreI
           <View style={styles.settingRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.settingLabel}>Private Mode</Text>
-              <Text style={styles.settingHint}>No history recorded. Ephemeral drive cache. Data cleared on exit.</Text>
+              <Text style={styles.settingHint}>History is not recorded. Private tabs are discarded when you leave private mode or restart.</Text>
             </View>
             <Switch
               value={settings.privateMode}
-              onValueChange={async (val) => {
-                const updated = await updateSettings({ privateMode: val })
-                setSettings(updated)
-                Alert.alert(
-                  val ? 'Private Mode On' : 'Private Mode Off',
-                  val ? 'Browsing history will not be recorded. Cached drives will be cleared when you close the app.' : 'Normal browsing resumed. History will be recorded.'
-                )
-              }}
+              onValueChange={handleTogglePrivateMode}
+              disabled={privateModeBusy}
               trackColor={{ true: colors.accent, false: colors.surfaceElevated }}
             />
           </View>
+          <View style={styles.settingRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingLabel}>Index pages for search</Text>
+              <Text style={styles.settingHint}>
+                Off by default. When enabled, pages you browse can be added to a local search index.
+                Turning this off stops new indexing; existing indexed pages can still appear in searches.
+              </Text>
+            </View>
+            <Switch
+              value={searchIndexEnabled}
+              onValueChange={handleToggleSearchIndex}
+              disabled={!rpc || !searchIndexReady || searchIndexBusy}
+              trackColor={{ true: colors.accent, false: colors.surfaceElevated }}
+            />
+          </View>
+          {!searchIndexReady && (
+            <Text style={styles.settingHint}>
+              Page indexing controls are available when the P2P engine is connected.
+            </Text>
+          )}
         </View>
 
         {/* Relay (configurable via RPC — Phase 0 ticket 2) */}

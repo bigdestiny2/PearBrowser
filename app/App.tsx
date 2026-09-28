@@ -9,7 +9,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View, Text, StyleSheet, StatusBar, Platform,
   ActivityIndicator, TouchableOpacity, NativeModules,
-  Modal, ScrollView, Alert,
+  Modal, ScrollView, Alert, AppState as NativeAppState,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Paths } from 'expo-file-system'
@@ -18,7 +18,8 @@ import { EVT } from './lib/constants'
 import { networkMonitor, NetworkInfo } from './lib/network'
 import { StatusDot } from './components/StatusDot'
 import * as FileSystem from 'expo-file-system'
-import { getSession, saveSession, bootstrapHyperbeeStorage } from './lib/storage'
+import { getSession, getSettings, getPrivateModeStrict, saveSession, scrubBrowserSession, bootstrapHyperbeeStorage } from './lib/storage'
+import type { Tab as BrowserTab } from './lib/storage'
 
 // @ts-ignore — bare-pack bundles, platform-specific
 import iosBundleImport from '../assets/backend.bundle.mjs'
@@ -35,8 +36,10 @@ try {
 }
 import { colors } from './lib/theme'
 import { HomeScreen } from './screens/HomeScreen'
+import { SearchScreen } from './screens/SearchScreen'
 import { ExploreScreen } from './screens/ExploreScreen'
 import { BrowseScreen } from './screens/BrowseScreen'
+import { TabSwitcherScreen } from './screens/TabSwitcherScreen'
 import { MoreScreen } from './screens/MoreScreen'
 import { BookmarksScreen } from './screens/BookmarksScreen'
 import { HistoryScreen } from './screens/HistoryScreen'
@@ -78,14 +81,47 @@ interface SwarmConsentRequest {
   reason: string
 }
 
+const MAX_LIVE_BROWSER_TABS = 6
+
+function newBrowserTabId(): string {
+  return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+function restoreBrowserTabs(raw: unknown): BrowserTab[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  return raw.slice(0, 1000).flatMap((entry): BrowserTab[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const id = typeof entry.id === 'string' ? entry.id : ''
+    const url = typeof entry.url === 'string' ? entry.url : ''
+    const title = typeof entry.title === 'string' ? entry.title : ''
+    const supportedUrl = !url || /^(?:hyper|https?):\/\//i.test(url) ||
+      /^app:\/\/[0-9a-f]{64}(?:[/?#]|$)/i.test(url)
+    if (!id || id.length > 128 || seen.has(id) || url.length > 8192 ||
+        title.length > 256 || !supportedUrl) return []
+    seen.add(id)
+    return [{ id, url, title }]
+  })
+}
+
 export default function App() {
   const [state, setState] = useState<AppState>('booting')
   const [proxyPort, setProxyPort] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [peerCount, setPeerCount] = useState(0)
   const [activeTab, setActiveTabState] = useState<Tab>('home')
-  const [browseUrl, setBrowseUrlState] = useState<string | null>(null)
+  const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([])
+  const [activeBrowserTabId, setActiveBrowserTabId] = useState<string | null>(null)
+  const [browseNavigationIds, setBrowseNavigationIds] = useState<Record<string, number>>({})
+  const [liveBrowserTabIds, setLiveBrowserTabIds] = useState<string[]>([])
+  const [showTabSwitcher, setShowTabSwitcher] = useState(false)
   const [sessionRestored, setSessionRestored] = useState(false)
+  const [storageSettled, setStorageSettled] = useState(false)
+  const [privacySettled, setPrivacySettled] = useState(false)
+  const [privateMode, setPrivateMode] = useState(false)
+  const browseUrl = browserTabs.find(tab => tab.id === activeBrowserTabId)?.url || null
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [showSites, setShowSites] = useState(false)
   const [showBookmarks, setShowBookmarks] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
@@ -95,7 +131,6 @@ export default function App() {
   const [editorTemplate, setEditorTemplate] = useState<Template | null>(null)
   const [pendingSiteName, setPendingSiteName] = useState('')
   const [isOffline, setIsOffline] = useState(false)
-  const [hasBrowseOpened, setHasBrowseOpened] = useState(false)
   const [bootProgress, setBootProgress] = useState<string>('Initializing...')
   const [showQRScanner, setShowQRScanner] = useState(false)
   const [showBackupPhrase, setShowBackupPhrase] = useState(false)
@@ -116,43 +151,93 @@ export default function App() {
 
   const workletRef = useRef<any>(null)
   const rpcRef = useRef<PearRPC | null>(null)
+  const restoreGenerationRef = useRef(0)
+  const privateModeRef = useRef(false)
+  const pendingPrivacyScrubRef = useRef<boolean | null>(null)
 
   const connectionStatus: 'connected' | 'connecting' | 'offline' | 'error' | 'http-only' = state === 'ready'
     ? (proxyPort > 0 ? 'connected' : (Worklet ? 'connecting' : 'http-only'))
     : state === 'error' ? 'offline' : 'connecting'
 
-  // Persist tab changes (throttled — only after initial restore completes)
-  const setActiveTab = useCallback((tab: Tab) => {
-    setActiveTabState(tab)
-    if (sessionRestored) {
-      saveSession({ activeTab: tab }).catch(err => console.warn('[session] save tab failed:', err))
-    }
-  }, [sessionRestored])
+  const setActiveTab = useCallback((tab: Tab) => setActiveTabState(tab), [])
 
+  // Every explicit destination opens in the selected browser tab. A blank
+  // tab created from the switcher becomes the selected tab on Home.
   const setBrowseUrl = useCallback((url: string | null) => {
-    setBrowseUrlState(url)
-    if (sessionRestored && url) {
-      saveSession({ lastBrowseUrl: url }).catch(err => console.warn('[session] save url failed:', err))
-    }
-  }, [sessionRestored])
+    if (!url) return
+    const id = activeBrowserTabId || newBrowserTabId()
+    setBrowserTabs(previous => {
+      const index = previous.findIndex(tab => tab.id === id)
+      if (index < 0) return [...previous, { id, url, title: '' }]
+      return previous.map(tab => tab.id === id ? { ...tab, url, title: '' } : tab)
+    })
+    setActiveBrowserTabId(id)
+    setBrowseNavigationIds(previous => ({ ...previous, [id]: (previous[id] || 0) + 1 }))
+  }, [activeBrowserTabId])
 
-  // Restore session (active tab + last browse URL) on mount
+  const updateBrowserTab = useCallback((id: string, url: string, title: string) => {
+    if (!url) return
+    setBrowserTabs(previous => {
+      const tab = previous.find(item => item.id === id)
+      if (!tab || (tab.url === url && tab.title === title)) return previous
+      return previous.map(item => item.id === id ? { ...item, url, title } : item)
+    })
+  }, [])
+
+  // The session shape is shared with Android. One complete write prevents
+  // separate active-screen and URL writes from overwriting each other.
+  useEffect(() => {
+    if (!sessionRestored || !storageSettled || !privacySettled) return
+    const timer = setTimeout(() => {
+      saveSession(privateMode
+        ? { activeTab: 'home', lastBrowseUrl: null, browserTabs: [], activeBrowserTabId: null }
+        : { activeTab, lastBrowseUrl: browseUrl, browserTabs, activeBrowserTabId }
+      ).catch(err => console.warn('[session] save failed:', err))
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [activeTab, browseUrl, browserTabs, activeBrowserTabId, sessionRestored, storageSettled, privacySettled, privateMode])
+
+  // Older RN sessions stored one URL. Android and current RN sessions store
+  // the browser tab list and active id in the same user-scoped session record.
+  const applyRestoredSession = useCallback((
+    session: Awaited<ReturnType<typeof getSession>>,
+    isPrivate: boolean,
+  ) => {
+    privateModeRef.current = isPrivate
+    setPrivateMode(isPrivate)
+    setLiveBrowserTabIds([])
+    setBrowseNavigationIds({})
+    if (isPrivate) {
+      setActiveTabState('home')
+      setBrowserTabs([])
+      setActiveBrowserTabId(null)
+      return
+    }
+    setActiveTabState(session.activeTab || 'home')
+    const restored = restoreBrowserTabs(session.browserTabs)
+    const tabs = Array.isArray(session.browserTabs)
+      ? restored
+      : session.lastBrowseUrl
+        ? restoreBrowserTabs([{ id: newBrowserTabId(), url: session.lastBrowseUrl, title: '' }])
+        : []
+    const id = tabs.find(tab => tab.id === session.activeBrowserTabId)?.id || tabs[0]?.id || null
+    setBrowserTabs(tabs)
+    setActiveBrowserTabId(id)
+  }, [])
+
   useEffect(() => {
     let cancelled = false
-    getSession()
-      .then(session => {
-        if (cancelled) return
-        if (session.activeTab && session.activeTab !== 'home') {
-          setActiveTabState(session.activeTab)
-        }
-        if (session.lastBrowseUrl) {
-          setBrowseUrlState(session.lastBrowseUrl)
-        }
+    const generation = ++restoreGenerationRef.current
+    Promise.all([getSession(), getSettings()])
+      .then(([session, settings]) => {
+        if (cancelled || restoreGenerationRef.current !== generation) return
+        applyRestoredSession(session, settings.privateMode)
+        setPrivacySettled(true)
+        setSessionRestored(true)
       })
       .catch(err => console.warn('[session] restore failed:', err))
-      .finally(() => { if (!cancelled) setSessionRestored(true) })
     return () => { cancelled = true }
-  }, [])
+  }, [applyRestoredSession])
 
   // Boot P2P worklet
   // Android: Write bundle to filesystem first to avoid JNI string size limits
@@ -162,7 +247,10 @@ export default function App() {
 
     async function boot() {
       if (!Worklet) {
-        if (mounted) setState('ready')
+        if (mounted) {
+          setStorageSettled(true)
+          setState('ready')
+        }
         return
       }
 
@@ -178,15 +266,33 @@ export default function App() {
         rpc.onReady((port) => {
           if (!mounted) return
           gotReady = true
+          // The local AsyncStorage read can still be pending. Invalidate it
+          // before the backend swaps so it cannot overwrite native state.
+          ++restoreGenerationRef.current
+          setSessionRestored(false)
+          setPrivacySettled(false)
+          setStorageSettled(false)
           setProxyPort(port)
-          setState('ready')
-          // Phase 1 ticket 2: migrate AsyncStorage → Hyperbee on first ready,
-          // then swap the active storage backend so bookmarks/history sync
-          // across devices going forward. Failure is non-fatal — we stay
-          // on AsyncStorage.
-          bootstrapHyperbeeStorage(rpc).catch((err) =>
-            console.warn('[App] Hyperbee bootstrap threw:', err)
-          )
+          // Finish backend selection before restoring and saving the session.
+          // This keeps an empty AsyncStorage snapshot from replacing a native
+          // Android session that already lives in the shared Hyperbee.
+          bootstrapHyperbeeStorage(rpc)
+            .catch((err) => console.warn('[App] Hyperbee bootstrap threw:', err))
+            .then(() => Promise.all([getSession(), getSettings()]))
+            .then(([session, settings]) => {
+              if (!mounted) return
+              applyRestoredSession(session, settings.privateMode)
+              setPrivacySettled(true)
+              setSessionRestored(true)
+              setStorageSettled(true)
+              setState('ready')
+            })
+            .catch(err => {
+              if (!mounted) return
+              console.warn('[App] session reload failed:', err)
+              setStorageSettled(true)
+              setState('ready')
+            })
         })
 
         rpc.onPeerCount((count) => {
@@ -262,6 +368,7 @@ export default function App() {
       } catch (err: any) {
         if (mounted) {
           console.error('Worklet boot failed:', err)
+          setStorageSettled(true)
           setState('ready') // Fall back to HTTP-only mode
         }
       }
@@ -347,34 +454,138 @@ export default function App() {
     setActiveTab('browse')
   }, [setBrowseUrl, setActiveTab])
 
-  // Track when browse tab was first opened to keep WebView mounted
-  useEffect(() => {
-    if (activeTab === 'browse') {
-      setHasBrowseOpened(true)
+  const selectBrowserTab = useCallback((id: string) => {
+    if (!browserTabs.some(tab => tab.id === id)) return
+    setActiveBrowserTabId(id)
+    setActiveTab('browse')
+    setShowTabSwitcher(false)
+  }, [browserTabs, setActiveTab])
+
+  const closeBrowserTab = useCallback((id: string) => {
+    const index = browserTabs.findIndex(tab => tab.id === id)
+    if (index < 0) return
+    const remaining = browserTabs.filter(tab => tab.id !== id)
+    setBrowserTabs(remaining)
+    setLiveBrowserTabIds(previous => previous.filter(tabId => tabId !== id))
+    setBrowseNavigationIds(previous => {
+      const next = { ...previous }
+      delete next[id]
+      return next
+    })
+    if (id === activeBrowserTabId) {
+      const next = remaining[index] || remaining[remaining.length - 1]
+      setActiveBrowserTabId(next?.id || null)
+      if (!next) setActiveTab('home')
     }
-  }, [activeTab])
+  }, [browserTabs, activeBrowserTabId, setActiveTab])
+
+  const openNewBrowserTab = useCallback(() => {
+    const id = newBrowserTabId()
+    setBrowserTabs(previous => [...previous, { id, url: '', title: '' }])
+    setActiveBrowserTabId(id)
+    setShowTabSwitcher(false)
+    setActiveTab('home')
+  }, [setActiveTab])
+
+  const handlePrivateModeChange = useCallback((enabled: boolean) => {
+    // Settings has already scrubbed the stored session. Discard live pages
+    // before normal-mode persistence can resume.
+    privateModeRef.current = enabled
+    setPrivateMode(enabled)
+    setBrowserTabs([])
+    setActiveBrowserTabId(null)
+    setLiveBrowserTabIds([])
+    setBrowseNavigationIds({})
+    setShowTabSwitcher(false)
+    setShowSearch(false)
+    setSearchQuery('')
+    setActiveTab('home')
+  }, [setActiveTab])
+
+  // The shared setting can change in the native shell while RN stays open.
+  // Observe it with a strict read, discard all live tabs at a transition,
+  // and confirm a shared-session scrub before allowing normal saves again.
+  useEffect(() => {
+    if (!sessionRestored || !storageSettled || state !== 'ready') return
+    let cancelled = false
+    let checking = false
+    const checkPrivateMode = async () => {
+      if (checking) return
+      checking = true
+      try {
+        const observed = await getPrivateModeStrict()
+        if (cancelled) return
+        if (observed !== privateModeRef.current) {
+          setPrivacySettled(false)
+          pendingPrivacyScrubRef.current = observed
+          handlePrivateModeChange(observed)
+        }
+        if (pendingPrivacyScrubRef.current !== null) {
+          await scrubBrowserSession()
+          if (cancelled) return
+          pendingPrivacyScrubRef.current = null
+          setPrivacySettled(true)
+        }
+      } catch (err) {
+        console.warn('[App] privacy mode observation failed:', err)
+        // A pending scrub keeps normal session persistence gated. The next
+        // interval or foreground event retries it.
+      } finally {
+        checking = false
+      }
+    }
+    void checkPrivateMode()
+    const interval = setInterval(checkPrivateMode, 5_000)
+    const subscription = NativeAppState.addEventListener('change', next => {
+      if (next === 'active') void checkPrivateMode()
+    })
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+      subscription.remove()
+    }
+  }, [sessionRestored, storageSettled, state, handlePrivateModeChange])
+
+  // Keep a bounded set of live WebViews. Switching among these tabs keeps
+  // form state, scroll position, and in-page history; an evicted tab is
+  // re-resolved from its saved address when selected again. Never evict a
+  // possibly active native view during an unrelated tab metadata update.
+  useEffect(() => {
+    if (activeTab !== 'browse' || !activeBrowserTabId) return
+    setLiveBrowserTabIds(previous => {
+      const available = new Set(browserTabs.map(tab => tab.id))
+      const next = previous.filter(id => id !== activeBrowserTabId && available.has(id))
+      next.push(activeBrowserTabId)
+      const bounded = next.slice(-MAX_LIVE_BROWSER_TABS)
+      return bounded.length === previous.length && bounded.every((id, index) => id === previous[index])
+        ? previous
+        : bounded
+    })
+  }, [activeTab, activeBrowserTabId, browserTabs])
+
+  const availableBrowserTabIds = new Set(browserTabs.map(tab => tab.id))
+  const retainedBrowserTabIds = liveBrowserTabIds.filter(id => availableBrowserTabIds.has(id))
+  if (activeTab === 'browse' && activeBrowserTabId && availableBrowserTabIds.has(activeBrowserTabId) &&
+      !retainedBrowserTabIds.includes(activeBrowserTabId)) {
+    retainedBrowserTabIds.push(activeBrowserTabId)
+  }
+  const visibleBrowserTabIds = retainedBrowserTabIds.slice(-MAX_LIVE_BROWSER_TABS)
 
   // Open static catalog content by drive key or URL. Native packages remain
   // desktop-only and legacy v2 entries remain migration-required.
   const handleOpenCatalogContent = useCallback((keyOrUrl: string) => {
     if (/^hyper:\/\//i.test(keyOrUrl)) {
-      setBrowseUrl(keyOrUrl)
+      handleNavigate(keyOrUrl)
     } else if (keyOrUrl.startsWith('http')) {
       const match = keyOrUrl.match(/\/v1\/hyper\/([a-f0-9]{64})/i)
-      if (match) {
-        setBrowseUrl(`hyper://${match[1]}`)
-      } else {
-        setBrowseUrl(keyOrUrl)
-      }
+      handleNavigate(match ? `hyper://${match[1]}` : keyOrUrl)
     } else {
       Alert.alert(
         'Unsupported destination',
         'PearBrowser Mobile opens static Hyperdrive content only. Signed Pear v3 native packages are desktop-only; legacy Pear v2 entries remain migration-required.'
       )
-      return
     }
-    setActiveTab('browse')
-  }, [setBrowseUrl, setActiveTab])
+  }, [handleNavigate])
 
   const resolveLoginConsent = useCallback(async (approved: boolean) => {
     const request = pendingLogin
@@ -613,34 +824,62 @@ export default function App() {
 
       {/* Active screen */}
       <View style={styles.screenContainer}>
-        {activeTab === 'home' && (
+        {activeTab === 'home' && (showSearch ? (
+          <SearchScreen
+            rpc={rpcRef.current}
+            initialQuery={searchQuery}
+            onOpen={(url) => { setShowSearch(false); handleNavigate(url) }}
+            onBack={() => setShowSearch(false)}
+            onOpenSettings={() => {
+              setShowSearch(false)
+              setActiveTab('more')
+              setShowSettings(true)
+            }}
+          />
+        ) : (
           <HomeScreen
             rpc={rpcRef.current!}
             peerCount={peerCount}
             status={connectionStatus}
             onNavigate={handleNavigate}
+            onSearch={(query) => {
+              setSearchQuery(query)
+              setShowSearch(true)
+            }}
             onOpenQR={() => setShowQRScanner(true)}
           />
-        )}
+        ))}
         {activeTab === 'explore' && (
           <ExploreScreen
             rpc={rpcRef.current}
             onVisit={handleOpenCatalogContent}
           />
         )}
-        {/* BrowseScreen - keep mounted after first open, hide when not active */}
-        {(activeTab === 'browse' || hasBrowseOpened) && (
-          <View style={[styles.screenContainer, activeTab !== 'browse' && styles.hiddenScreen]}>
-            <BrowseScreen
-              rpc={rpcRef.current!}
-              proxyPort={proxyPort}
-              peerCount={peerCount}
-              status={connectionStatus}
-              initialUrl={browseUrl}
-              isOffline={isOffline}
-            />
-          </View>
-        )}
+        {/* Retained tab views stay mounted while hidden, up to the pool cap. */}
+        {visibleBrowserTabIds.map(id => {
+          const tab = browserTabs.find(item => item.id === id)!
+          const visible = activeTab === 'browse' && activeBrowserTabId === id
+          return (
+            <View
+              key={id}
+              testID={`live-browser-tab-${id}`}
+              style={[styles.screenContainer, !visible && styles.hiddenScreen]}
+            >
+              <BrowseScreen
+                rpc={rpcRef.current!}
+                proxyPort={proxyPort}
+                peerCount={peerCount}
+                status={connectionStatus}
+                initialUrl={tab.url || null}
+                navigationRequestId={browseNavigationIds[id] || 0}
+                onTabChange={(url, title) => updateBrowserTab(id, url, title)}
+                onOpenTabs={() => setShowTabSwitcher(true)}
+                tabCount={browserTabs.length}
+                isOffline={isOffline}
+              />
+            </View>
+          )
+        })}
         {false && (
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
             <Text style={{ color: colors.textSecondary, fontSize: 14 }}>P2P engine not connected — browsing unavailable in demo mode</Text>
@@ -673,6 +912,7 @@ export default function App() {
         {activeTab === 'more' && showSettings && !showBackupPhrase && !showRestoreIdentity && (
           <SettingsScreen
             onBack={() => setShowSettings(false)}
+            onPrivateModeChange={handlePrivateModeChange}
             rpc={rpcRef.current}
             onOpenBackupPhrase={() => setShowBackupPhrase(true)}
             onOpenRestoreIdentity={() => setShowRestoreIdentity(true)}
@@ -733,6 +973,21 @@ export default function App() {
           />
         )}
       </View>
+
+      <Modal
+        visible={showTabSwitcher}
+        animationType="slide"
+        onRequestClose={() => setShowTabSwitcher(false)}
+      >
+        <TabSwitcherScreen
+          tabs={browserTabs}
+          activeTabId={activeBrowserTabId}
+          onSelect={selectBrowserTab}
+          onClose={closeBrowserTab}
+          onNewTab={openNewBrowserTab}
+          onDismiss={() => setShowTabSwitcher(false)}
+        />
+      </Modal>
 
       {/* Bottom tab bar */}
       <View style={styles.tabBar}>
