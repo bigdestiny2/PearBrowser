@@ -1,7 +1,7 @@
 # PearBrowser Test Command Matrix - 2026-06-23
 
-> Historical command snapshot. Current commands and results are recorded in
-> [RELEASE_EVIDENCE_2026-07-22.md](RELEASE_EVIDENCE_2026-07-22.md).
+> Historical command snapshot. The current draft PR and qualification results are
+> recorded in [PEARBROWSER_UPDATE_2026-09-26.md](PEARBROWSER_UPDATE_2026-09-26.md).
 
 Purpose: give future agents exact commands, scopes, and exclusions for
 PearBrowser. Source status is summarized in

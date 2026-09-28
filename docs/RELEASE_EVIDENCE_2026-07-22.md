@@ -1,5 +1,8 @@
 # PearBrowser Release Evidence — 2026-07-22
 
+> Historical July evidence. For draft PR #6 and its current qualification gates,
+> see [PEARBROWSER_UPDATE_2026-09-26.md](PEARBROWSER_UPDATE_2026-09-26.md).
+
 This is the release-candidate evidence for the mobile browser parity and runtime
 hardening change set. The candidate is source-ready for merge. It is not a
 claim that Apple or Android production distribution has occurred: credentials,

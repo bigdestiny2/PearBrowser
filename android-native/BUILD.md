@@ -27,6 +27,13 @@ reusing the `backend/` worklet from the RN project verbatim.
 | Release signing | ✅ env-driven signing config verified with a disposable test key; production keystore/distribution checks remain |
 | Production distribution validation | ⏳ requires the real release key and Play Console or Firebase acceptance evidence |
 
+**2026-09-28 candidate smoke:** A fresh debug APK built with the refreshed
+18-addon AAR, installed in an Android emulator, and reached green Connected.
+HTTPS Example Domain and a plain-text local Search query opened. The tab
+switcher and `+` created a second tab after a status-bar inset fix; returning
+to the prior page and Android Private Mode still need stepwise checks. This
+is emulator evidence, not a physical-device or signed Play build.
+
 ## Prerequisites
 
 1. **Android Studio Ladybug (2024.2.1)** or newer with:
@@ -38,15 +45,15 @@ reusing the `backend/` worklet from the RN project verbatim.
    Temurin 17 is verified locally; Homebrew OpenJDK 17.0.19 hung in `jmod`
    on this machine during `:app:assembleDebug`.
 3. **Node.js 20+** (for bundling the backend).
-4. **`bare-kit.aar` or `bare-kit.jar`** — run
-   `npm run barekit:fetch:android` to mirror the installed
-   `react-native-bare-kit` Android artifact into
-   `android-native/app/libs/bare-kit.aar`. You can also manually download the
-   latest release from <https://github.com/holepunchto/bare-kit/releases> and
-   drop it in `android-native/app/libs/bare-kit.aar` (preferred) or
-   `android-native/app/libs/bare-kit.jar`.
+4. **Current BareKit AAR** — after `npm ci`, run
+   `npm run barekit:fetch:android`. The script links the installed native
+   addons, checks all 18 addon names across four Android ABIs, and packages
+   them with BareKit into `android-native/app/libs/bare-kit.aar`. A generic
+   standalone BareKit AAR may lack the addon versions required by this worklet.
 
-The artifact is **not checked in** (see `.gitignore`). You must fetch it fresh.
+The generated AAR is **not checked in** (see `.gitignore`). Rebuild it after
+updating native dependencies, then run `npm run release:preflight -- --soft`
+to check its addon names and ABI coverage before building the APK.
 
 ## Building the bundled backend
 
@@ -55,7 +62,7 @@ The Kotlin shell reuses `backend/` unchanged. Produce the canonical
 
 ```bash
 cd ~/pear-ecosystem/01-browser/PearBrowser
-npm install                                    # if not already
+npm ci                                         # pinned native dependency set
 npm run bundle-backend-native-android
 npm run barekit:fetch:android
 # Produces backend/dist/backend.android.bundle

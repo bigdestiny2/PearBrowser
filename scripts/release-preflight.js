@@ -69,6 +69,41 @@ function listDirs (root, rel, suffix) {
   }
 }
 
+const ANDROID_ABIS = ['arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64']
+
+function inspectAndroidAar (root, aarPath) {
+  const addonsRoot = path.join(root, 'node_modules/react-native-bare-kit/android/src/main/addons')
+  let addonNames
+  for (const abi of ANDROID_ABIS) {
+    const names = fs.readdirSync(path.join(addonsRoot, abi)).sort()
+    if (names.length === 0 || names.some((name) => !/^lib[\w.-]+\.so$/.test(name))) {
+      throw new Error(`invalid current addon manifest for ${abi}`)
+    }
+    if (addonNames && names.join(',') !== addonNames.join(',')) {
+      throw new Error(`current addon manifest differs for ${abi}`)
+    }
+    addonNames = names
+  }
+
+  const listed = spawnSync('unzip', ['-Z', '-1', aarPath], {
+    encoding: 'utf8', maxBuffer: 1024 * 1024
+  })
+  if (listed.error || listed.status !== 0) {
+    throw new Error(`cannot list Android AAR: ${listed.error?.message || listed.stderr || listed.status}`)
+  }
+  const actual = listed.stdout.split(/\r?\n/).filter((entry) => /^jni\/[^/]+\/[^/]+\.so$/.test(entry)).sort()
+  const expected = ANDROID_ABIS.flatMap((abi) => [
+    `jni/${abi}/libbare-kit.so`,
+    ...addonNames.map((name) => `jni/${abi}/${name}`)
+  ]).sort()
+  const missing = expected.filter((entry) => !actual.includes(entry))
+  const extra = actual.filter((entry) => !expected.includes(entry))
+  if (missing.length || extra.length) {
+    throw new Error(`Android AAR addon mismatch: missing ${missing.slice(0, 3).join(', ') || 'none'}; extra ${extra.slice(0, 3).join(', ') || 'none'}`)
+  }
+  return { addonCount: addonNames.length, abiCount: ANDROID_ABIS.length }
+}
+
 function sameDeclarations (left = {}, right = {}) {
   const sorted = (value) => Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
   return JSON.stringify(sorted(left)) === JSON.stringify(sorted(right))
@@ -359,9 +394,14 @@ function collectPreflight (root = process.cwd(), options = {}) {
 
   const androidAar = fileInfo(root, 'android-native/app/libs/bare-kit.aar')
   if (androidAar.file && androidAar.size > 1024 * 1024) {
-    add('pass', 'android-barekit', 'Android BareKit AAR is present', `${Math.round(androidAar.size / 1024 / 1024)} MiB`)
+    try {
+      const inspected = (options.inspectAndroidAar || inspectAndroidAar)(root, androidAar.path)
+      add('pass', 'android-barekit', 'Android AAR addon names and ABIs match installed set', `${inspected.addonCount} addons x ${inspected.abiCount} ABIs`)
+    } catch (err) {
+      add('fail', 'android-barekit', 'Android AAR addon names and ABIs match installed set', err.message, 'Run npm ci && npm run barekit:fetch:android, then rebuild the Android app.')
+    }
   } else {
-    add('fail', 'android-barekit', 'Android BareKit AAR is present', androidAar.exists ? `${androidAar.size} bytes` : 'missing', 'Run npm run barekit:fetch and confirm the native Android worklet is not in demo fallback mode.')
+    add('fail', 'android-barekit', 'Android AAR addon names and ABIs match installed set', androidAar.exists ? `${androidAar.size} bytes` : 'missing', 'Run npm ci && npm run barekit:fetch:android before native Android builds.')
   }
 
   const missingAndroidSigning = ANDROID_SIGNING_ENV.filter((name) => !String(env[name] || '').trim())
@@ -460,4 +500,4 @@ if (require.main === module) {
   process.exit(report.ok || opts.soft ? 0 : 1)
 }
 
-module.exports = { collectPreflight }
+module.exports = { collectPreflight, inspectAndroidAar }

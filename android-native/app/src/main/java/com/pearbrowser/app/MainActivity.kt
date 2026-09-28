@@ -227,6 +227,7 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
     var activeTab by remember { mutableStateOf(Tab.Home) }
     var browseUrl by remember { mutableStateOf<String?>(null) }
     var moreRoute by remember { mutableStateOf<MoreRoute>(MoreRoute.Hub) }
+    var searchQuery by remember { mutableStateOf("") }
     var pendingLogin by remember { mutableStateOf<LoginConsentRequest?>(null) }
     var pendingSwarm by remember { mutableStateOf<SwarmConsentRequest?>(null) }
     var pearLink by remember { mutableStateOf<String?>(null) }
@@ -514,6 +515,11 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
                 when (activeTab) {
                     Tab.Home -> HomeScreen(
                         onNavigate = onNavigate,
+                        onSearch = { query ->
+                            searchQuery = query
+                            moreRoute = MoreRoute.Search
+                            activeTab = Tab.More
+                        },
                         status = workletStatus,
                         onOpenQR = { qrScannerMode = QRScanMode.Navigate },
                     )
@@ -533,7 +539,10 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
                                 onOpenConnectedApps = { moreRoute = MoreRoute.ConnectedApps },
                                 onOpenBookmarks = { moreRoute = MoreRoute.Bookmarks },
                                 onOpenHistory = { moreRoute = MoreRoute.History },
-                                onOpenSearch = { moreRoute = MoreRoute.Search },
+                                onOpenSearch = {
+                                    searchQuery = ""
+                                    moreRoute = MoreRoute.Search
+                                },
                                 onOpenSettings = { moreRoute = MoreRoute.Settings },
                                 onOpenSites = { moreRoute = MoreRoute.Sites },
                                 onScanInviteQr = { qrScannerMode = QRScanMode.DeviceLink },
@@ -556,6 +565,7 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
                                 onBack = { moreRoute = MoreRoute.Hub },
                             )
                             MoreRoute.Search -> SearchScreen(
+                                initialQuery = searchQuery,
                                 onOpen = { url ->
                                     moreRoute = MoreRoute.Hub
                                     onNavigate(url)
@@ -680,6 +690,7 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
                 onClose = { tabId -> tabManager.close(tabId) },
                 onNewTab = {
                     tabManager.openNewTab()
+                    browseUrl = null
                     showTabSwitcher = false
                     // DESIGN.md: "+" opens a new tab and goes to Home.
                     activeTab = Tab.Home

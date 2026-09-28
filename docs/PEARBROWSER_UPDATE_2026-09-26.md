@@ -1,6 +1,6 @@
-# PearBrowser mobile update candidate — 2026-09-26
+# PearBrowser mobile update candidate — status checked 2026-09-28
 
-State: local candidate. Desktop is the first release priority; this mobile checkout is neither deployed nor device or store qualified.
+State: [draft source PR #6](https://github.com/bigdestiny2/PearBrowser/pull/6) is pushed to GitHub. Desktop is the first release priority. This mobile candidate has no signed distribution, store validation, physical-device qualification, or live activation.
 
 ## Implemented locally
 
@@ -16,10 +16,12 @@ Upstream `autobee@2.12.1` is an exact development dependency used only by dispos
 
 ## Verification and gates
 
-- Full local `npm test`: 608 passed, 0 failed. TypeScript is included in that command.
-- iOS and Android worklet bundles rebuilt. Soft release preflight: 18 structural passes, 0 warnings, 4 production-authority failures; native bundle hashes match. The iOS Expo export succeeded (665 modules). The high/critical dependency audit passed.
-- Native Android Kotlin compile and physical Android/iOS browser smoke remain unverified on this host. Live form/scroll retention, private-mode transitions, and cross-shell sync need device checks.
-- Production distribution remains blocked on Android signing, Apple development-team signing, and iOS/Android store validation. The soft preflight records the exact current checks.
-- **Per-app origin isolation remains open.** All mobile P2P pages currently share a loopback origin. The proposed proxy/token rewrite was rejected by automatic approval review because it changes a high-impact navigation boundary without explicit authorization for that change. The unexecuted contract and device/cookie requirements are in [MOBILE_ORIGIN_ISOLATION_GATE.md](MOBILE_ORIGIN_ISOLATION_GATE.md). Ports alone do not isolate cookies.
+- Full local `npm test`: 610 passed, 0 failed. TypeScript is included in that command. The GitHub mobile preflight job passed its **soft** structural gate; that does not clear the hard release gate.
+- iOS and Android worklet bundles rebuilt. The 2026-09-28 soft release preflight reports 18 structural passes, 0 warnings, and 4 production-authority failures; native bundle hashes match. The iOS Expo export succeeded (665 modules), and the high/critical dependency audit passed.
+- A fresh Android native debug APK passed Kotlin compilation. The first emulator install exposed a stale AAR: its worklet failed with `AddonError: ADDON_NOT_FOUND` for `linked:librocksdb-native.3.18.1.so`. The fetch/packaging fix now includes all 18 current native addons for four Android ABIs; a rebuilt APK installed and reached green Connected Home. Android also opened HTTPS Example Domain and routed a plain-text Home query to local Search with indexing off. The tab switcher was moved below the system status bar; its `+` button created a second tab in the emulator. A stale navigation value was cleared for new blank tabs. Stepwise return to the prior page remains unverified.
+- A fresh unsigned React Native iOS Release simulator build passed after refreshing local BareKit addons and CocoaPods. It installed on an iPhone 17 simulator, reached green Connected Home, and opened local Search and Settings. A fresh unsigned native SwiftUI Debug simulator build passed after updating its XcodeGen addon references; it installed on an iPhone 17e simulator and reached green Connected Home. These are local simulator checks, not signed device or store builds.
+- Physical Android/iOS device smoke, tab return/retention, live form/scroll retention, Private Mode transitions, cross-shell sync, and live peer replication remain unverified.
+- Production distribution remains blocked on Android signing, Apple development-team signing, iOS store validation, and Android Play/Firebase validation. The soft preflight records these as four separate failures.
+- **Per-app origin isolation remains open.** All mobile P2P pages currently share one loopback origin. The separate four-case [origin-isolation gate](MOBILE_ORIGIN_ISOLATION_GATE.md) fails and is excluded from the normal test glob. The proposed proxy/token rewrite was rejected by automatic approval review because it changes a high-impact navigation boundary without explicit authorization for that exact change. Its contract requires device and cookie proof; ports alone do not isolate cookies.
 
 This candidate has not been published or activated.

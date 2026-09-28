@@ -4,8 +4,9 @@ const fs = require('node:fs')
 const crypto = require('node:crypto')
 const os = require('node:os')
 const path = require('node:path')
+const { spawnSync } = require('node:child_process')
 
-const { collectPreflight } = require('../scripts/release-preflight')
+const { collectPreflight, inspectAndroidAar } = require('../scripts/release-preflight')
 
 const REPO_ROOT = path.join(__dirname, '..')
 const CANONICAL_ANDROID_SIGNING_ENV = [
@@ -48,7 +49,7 @@ function fixtureBundleBuilder (root, host, output) {
 }
 
 function collectFixture (root, env) {
-  return collectPreflight(root, { env, rebuildBundle: fixtureBundleBuilder })
+  return collectPreflight(root, { env, rebuildBundle: fixtureBundleBuilder, inspectAndroidAar: () => ({ addonCount: 10, abiCount: 4 }) })
 }
 
 function makeFixture (opts = {}) {
@@ -150,6 +151,32 @@ function envFor (keystore, extras = {}) {
     ...extras
   }
 }
+
+test('Android AAR gate rejects stale addon versions and accepts complete ABI coverage', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pearbrowser-aar-gate-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const abis = ['arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64']
+  const stage = path.join(root, 'stage')
+  for (const abi of abis) {
+    write(root, `node_modules/react-native-bare-kit/android/src/main/addons/${abi}/librocksdb-native.3.18.1.so`, 'current')
+    write(root, `stage/jni/${abi}/libbare-kit.so`, 'runtime')
+    write(root, `stage/jni/${abi}/librocksdb-native.3.15.0.so`, 'stale')
+  }
+  const archive = path.join(root, 'bare-kit.aar')
+  const pack = () => {
+    fs.rmSync(archive, { force: true })
+    const zipped = spawnSync('zip', ['-qr', archive, '.'], { cwd: stage })
+    assert.equal(zipped.status, 0, String(zipped.stderr))
+  }
+  pack()
+  assert.throws(() => inspectAndroidAar(root, archive), /missing jni\/arm64-v8a\/librocksdb-native\.3\.18\.1\.so/)
+  for (const abi of abis) {
+    fs.rmSync(path.join(stage, `jni/${abi}/librocksdb-native.3.15.0.so`))
+    write(root, `stage/jni/${abi}/librocksdb-native.3.18.1.so`, 'current')
+  }
+  pack()
+  assert.deepEqual(inspectAndroidAar(root, archive), { addonCount: 1, abiCount: 4 })
+})
 
 test('release preflight passes for aligned production fixture', () => {
   const { root, keystore } = makeFixture()

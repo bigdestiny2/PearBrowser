@@ -2,7 +2,7 @@
 
 Last updated: 2026-06-23
 
-This is a historical architecture baseline. For the 2026-09-26 local candidate and current qualification gates, see [PEARBROWSER_UPDATE_2026-09-26.md](PEARBROWSER_UPDATE_2026-09-26.md).
+This is a historical architecture baseline. For draft [mobile PR #6](https://github.com/bigdestiny2/PearBrowser/pull/6) and the 2026-09-28 qualification gates, see [PEARBROWSER_UPDATE_2026-09-26.md](PEARBROWSER_UPDATE_2026-09-26.md).
 
 PearBrowser Mobile is the iOS and Android host for PearBrowser apps and
 `hyper://` sites. It pairs native mobile shells with a Bare Kit worklet so a
@@ -130,7 +130,8 @@ results are in [RELEASE_EVIDENCE_2026-07-22.md](RELEASE_EVIDENCE_2026-07-22.md).
 - Ask Browser/QVAC exposes an honest unavailable capability until a supported
   on-device model runtime is injected.
 - Native mobile distribution still needs production Apple/Android signing,
-  store/distribution validation, and broader real-device validation beyond the
-  current simulator/emulator smoke passes.
+  store/distribution validation, and real-device proof. Fresh iOS and Android
+  simulator builds booted with a Connected worklet after native addon refresh;
+  see the September candidate status for the tested UI paths and open gates.
 - The Expo toolchain retains nine moderate transitive `uuid` advisories; the
   current npm force-fix would downgrade Expo and is intentionally rejected.

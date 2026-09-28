@@ -13,8 +13,8 @@ Pure Swift + SwiftUI + `BareKit` shell, reusing `backend/` verbatim.
 | Pear bridge injection | ✅ WKScriptMessageHandler path |
 | SwiftUI theme | ✅ matches RN theme exactly |
 | HomeScreen / ExploreScreen / BrowseScreen | ✅ |
-| BareKit.framework + 17 native addons linked | ✅ sourced from `react-native-bare-kit/ios/addons/` |
-| **Worklet boots end-to-end on simulator** | ✅ **green "Connected" dot confirmed on iPhone 17 sim, 2026-06-23** |
+| BareKit.framework + 18 native addons linked | ✅ sourced from `react-native-bare-kit/ios/addons/` |
+| **Worklet boots end-to-end on simulator** | ✅ green "Connected" on iPhone 17e with the 2026-09-28 unsigned Debug build |
 | Remaining screen ports (More, Bookmarks, Settings, MySites, Editor, QR, TemplatePicker, BackupPhrase, Restore) | ⏳ |
 
 ## Prerequisites
@@ -67,14 +67,14 @@ The worklet bundle includes native addons: **sodium-native**, **udx-native**,
 **rocksdb-native**, etc. These are compiled C/C++ modules that the backend
 loads at runtime.
 
-**The `react-native-bare-kit` npm package ships all 17 addons pre-built
+**The `react-native-bare-kit` npm package ships all 18 current addons pre-built
 as xcframeworks** (produced by its `node ios/link.mjs` postinstall hook
 running `bare-link`). We reuse those directly — saves us from setting up
 our own `bare-link` toolchain.
 
 ### How it works
 - `node_modules/react-native-bare-kit/ios/BareKit.xcframework` — the runtime
-- `node_modules/react-native-bare-kit/ios/addons/*.xcframework` — 17 pre-built addons
+- `node_modules/react-native-bare-kit/ios/addons/*.xcframework` — 18 current addon frameworks
 
 We copy both into `ios-native/PearBrowser/Frameworks/` and list each in
 `project.yml` as an embedded framework dependency. XcodeGen resolves,
