@@ -67,9 +67,12 @@ import com.pearbrowser.app.ui.tabs.BrowserTab
 import com.pearbrowser.app.ui.tabs.BrowserTabManager
 import com.pearbrowser.app.ui.theme.PearBrowserTheme
 import com.pearbrowser.app.ui.theme.PearColors
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -158,6 +161,32 @@ private enum class Tab(val label: String, val icon: String) {
     More("More", "...")
 }
 
+// The session is shared with React Native. Keep private tab URLs out of the
+// replicated Hyperbee record, including the legacy single-URL field.
+private fun browserSessionSnapshot(
+    current: JsonObject,
+    tabs: BrowserTabManager,
+    activeScreen: Tab,
+    privateMode: Boolean,
+): JsonObject = JsonObject(
+    current + buildJsonObject {
+        putJsonArray("browserTabs") {
+            if (!privateMode) {
+                tabs.tabs.forEach { tab ->
+                    add(buildJsonObject {
+                        put("id", tab.id)
+                        put("url", tab.url)
+                        put("title", tab.title)
+                    })
+                }
+            }
+        }
+        put("activeBrowserTabId", if (privateMode) null else tabs.activeTabId)
+        put("lastBrowseUrl", if (privateMode) null else tabs.activeTab?.url)
+        put("activeTab", if (privateMode) "home" else activeScreen.name.lowercase())
+    },
+)
+
 /** Sub-routes inside the More tab (mirrors iOS MainView's moreRoute). */
 private sealed interface MoreRoute {
     data object Hub : MoreRoute
@@ -198,6 +227,7 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
     var activeTab by remember { mutableStateOf(Tab.Home) }
     var browseUrl by remember { mutableStateOf<String?>(null) }
     var moreRoute by remember { mutableStateOf<MoreRoute>(MoreRoute.Hub) }
+    var searchQuery by remember { mutableStateOf("") }
     var pendingLogin by remember { mutableStateOf<LoginConsentRequest?>(null) }
     var pendingSwarm by remember { mutableStateOf<SwarmConsentRequest?>(null) }
     var pearLink by remember { mutableStateOf<String?>(null) }
@@ -212,6 +242,9 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
     val bindingState by rpcClient.bindingState.collectAsState()
     var workletStatus by remember { mutableStateOf<PearRpcStatus?>(null) }
     var pearSettings by remember { mutableStateOf<PearSettings?>(null) }
+    // Null means settings have not been read yet; session writes fail closed.
+    var privateMode by remember { mutableStateOf<Boolean?>(null) }
+    val sessionWriteMutex = remember { Mutex() }
     var rpcError by remember { mutableStateOf<String?>(null) }
     // Multi-tab browsing: the tab model (and its bounded live-WebView pool)
     // lives at the root so switching app tabs never destroys tab state.
@@ -242,9 +275,20 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
         repeat(5) { attempt ->
             if (restored) return@repeat
             try {
+                val settings = rpcClient.getSettings()
+                privateMode = settings.privateMode
+                pearSettings = settings
                 val session = rpcClient.getSession()
-                restored = true
-                if (tabManager.tabs.isEmpty()) {
+                if (settings.privateMode) {
+                    // Scrub URLs left by older shells before restoring any tab.
+                    sessionWriteMutex.lock()
+                    try {
+                        rpcClient.saveSession(browserSessionSnapshot(session, tabManager, Tab.Home, true))
+                        rpcClient.clearLegacyTabs()
+                    } finally {
+                        sessionWriteMutex.unlock()
+                    }
+                } else if (tabManager.tabs.isEmpty()) {
                     val parsed = (session["browserTabs"] as? JsonArray)?.mapNotNull { el ->
                         val obj = el as? JsonObject ?: return@mapNotNull null
                         val id = obj["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
@@ -281,6 +325,7 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
                         }
                     }
                 }
+                restored = true
             } catch (_: Throwable) {
                 // The worklet may still be booting (user-data not ready) —
                 // retry briefly, then give up: restore is best-effort and
@@ -288,41 +333,40 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
                 if (attempt < 4) delay(1_500)
             }
         }
-        sessionRestored = true
+        // A failed session read is not an empty session. Keep writes gated
+        // until a later successful restore/reconnect can prove the state.
+        sessionRestored = restored
     }
 
     // Persist the tab session, debounced, and only after the stored session
     // was restored — same discipline as app/App.tsx (an early save from the
     // empty model would clobber the stored tabs). The session KV is a plain
     // Hyperbee entry (backend/user-data.js saveSession) that does NOT feed
-    // the history log, so saving stays always-on regardless of
-    // settings.historyEnabled. Merge-before-write mirrors app/lib/storage.ts
-    // saveSession(partial) so keys written by other shells survive.
+    // the history log. The privateMode user-data setting still controls
+    // whether tab URLs enter this replicated session record.
     val tabSessionSnapshot = tabManager.sessionSnapshot()
-    LaunchedEffect(tabSessionSnapshot, activeTab, sessionRestored, bindingState.connected) {
-        if (!sessionRestored || !bindingState.connected) return@LaunchedEffect
+    LaunchedEffect(tabSessionSnapshot, activeTab, privateMode, sessionRestored, bindingState.connected) {
+        if (!sessionRestored || !bindingState.connected || privateMode == null) return@LaunchedEffect
         delay(600)
         try {
-            val current = rpcClient.getSession()
-            val merged = JsonObject(
-                current + buildJsonObject {
-                    putJsonArray("browserTabs") {
-                        tabManager.tabs.forEach { tab ->
-                            add(
-                                buildJsonObject {
-                                    put("id", tab.id)
-                                    put("url", tab.url)
-                                    put("title", tab.title)
-                                },
-                            )
-                        }
-                    }
-                    put("activeBrowserTabId", tabManager.activeTabId)
-                    put("activeTab", activeTab.name.lowercase())
-                    tabManager.activeTab?.url?.let { put("lastBrowseUrl", it) }
-                },
-            )
-            rpcClient.saveSession(merged)
+            sessionWriteMutex.lock()
+            try {
+                // Read the source of truth at write time: another shell may
+                // change privateMode between five-second settings polls.
+                val settings = rpcClient.getSettings()
+                if (settings.privateMode != privateMode) {
+                    tabManager.closeAll()
+                    browseUrl = null
+                    showTabSwitcher = false
+                    activeTab = Tab.Home
+                    privateMode = settings.privateMode
+                }
+                val current = rpcClient.getSession()
+                rpcClient.saveSession(browserSessionSnapshot(current, tabManager, activeTab, settings.privateMode))
+                if (settings.privateMode) rpcClient.clearLegacyTabs()
+            } finally {
+                sessionWriteMutex.unlock()
+            }
         } catch (_: Throwable) {
             // Session save is best-effort and must never break browsing.
         }
@@ -339,7 +383,27 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
             }
 
             try {
-                pearSettings = rpcClient.getSettings()
+                val settings = rpcClient.getSettings()
+                if (privateMode != null && privateMode != settings.privateMode) {
+                    tabManager.closeAll()
+                    browseUrl = null
+                    showTabSwitcher = false
+                    activeTab = Tab.Home
+                    if (settings.privateMode) {
+                        // An RN or desktop toggle can arrive while this shell
+                        // is open; scrub the shared record on observation.
+                        sessionWriteMutex.lock()
+                        try {
+                            val current = rpcClient.getSession()
+                            rpcClient.saveSession(browserSessionSnapshot(current, tabManager, Tab.Home, true))
+                            rpcClient.clearLegacyTabs()
+                        } finally {
+                            sessionWriteMutex.unlock()
+                        }
+                    }
+                }
+                privateMode = settings.privateMode
+                pearSettings = settings
             } catch (e: Throwable) {
                 if (rpcError == null) rpcError = e.message ?: "RPC settings unavailable"
             }
@@ -451,6 +515,11 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
                 when (activeTab) {
                     Tab.Home -> HomeScreen(
                         onNavigate = onNavigate,
+                        onSearch = { query ->
+                            searchQuery = query
+                            moreRoute = MoreRoute.Search
+                            activeTab = Tab.More
+                        },
                         status = workletStatus,
                         onOpenQR = { qrScannerMode = QRScanMode.Navigate },
                     )
@@ -470,7 +539,10 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
                                 onOpenConnectedApps = { moreRoute = MoreRoute.ConnectedApps },
                                 onOpenBookmarks = { moreRoute = MoreRoute.Bookmarks },
                                 onOpenHistory = { moreRoute = MoreRoute.History },
-                                onOpenSearch = { moreRoute = MoreRoute.Search },
+                                onOpenSearch = {
+                                    searchQuery = ""
+                                    moreRoute = MoreRoute.Search
+                                },
                                 onOpenSettings = { moreRoute = MoreRoute.Settings },
                                 onOpenSites = { moreRoute = MoreRoute.Sites },
                                 onScanInviteQr = { qrScannerMode = QRScanMode.DeviceLink },
@@ -493,13 +565,40 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
                                 onBack = { moreRoute = MoreRoute.Hub },
                             )
                             MoreRoute.Search -> SearchScreen(
+                                initialQuery = searchQuery,
                                 onOpen = { url ->
                                     moreRoute = MoreRoute.Hub
                                     onNavigate(url)
                                 },
                                 onBack = { moreRoute = MoreRoute.Hub },
                             )
-                            MoreRoute.Settings -> SettingsScreen(onBack = { moreRoute = MoreRoute.Hub })
+                            MoreRoute.Settings -> SettingsScreen(
+                                onBack = { moreRoute = MoreRoute.Hub },
+                                onPrivateModeChange = { enabled ->
+                                    // The Settings composition may disappear while RPC
+                                    // is in flight. Complete a committed mode change
+                                    // and clear its live tabs even after cancellation.
+                                    withContext(NonCancellable) {
+                                        sessionWriteMutex.lock()
+                                        try {
+                                            val current = rpcClient.getSession()
+                                            rpcClient.saveSession(browserSessionSnapshot(current, tabManager, Tab.Home, true))
+                                            rpcClient.clearLegacyTabs()
+                                            rpcClient.setSettings(buildJsonObject { put("privateMode", enabled) })
+                                            // In-memory tabs must be gone before
+                                            // normal saves can resume on disable.
+                                            tabManager.closeAll()
+                                            browseUrl = null
+                                            showTabSwitcher = false
+                                            activeTab = Tab.Home
+                                            privateMode = enabled
+                                            pearSettings = pearSettings?.copy(privateMode = enabled)
+                                        } finally {
+                                            sessionWriteMutex.unlock()
+                                        }
+                                    }
+                                },
+                            )
                             MoreRoute.Sites -> MySitesScreen(
                                 onEdit = { site ->
                                     moreRoute = MoreRoute.SiteEditor(
@@ -591,6 +690,7 @@ private fun PearBrowserRoot(deepLink: MutableState<DeepLink?>) {
                 onClose = { tabId -> tabManager.close(tabId) },
                 onNewTab = {
                     tabManager.openNewTab()
+                    browseUrl = null
                     showTabSwitcher = false
                     // DESIGN.md: "+" opens a new tab and goes to Home.
                     activeTab = Tab.Home

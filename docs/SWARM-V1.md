@@ -226,7 +226,11 @@ The HTTP `/api/swarm/*` endpoints are similarly versioned in their request body:
 5. **`backend/pear-bridge.js`** — page-side injected shim adds `window.pear.swarm.v1`.
 6. **`ui/shell.js`** — adds swarm-join consent path to `LoginConsent` (or a sibling `SwarmConsent` component, depending on UX) + a "Swarm topics" sub-table to Connected Apps.
 7. **Demo:** `examples/echo-peer/` — `hyper://` fixture that calls `window.pear.swarm.v1.join(null, { subtopic })`, sends "hello", logs replies, and doubles as the runtime smoke test.
-8. **`pear stage` + `pear release production .`** — ship.
+8. **Release gate** — build reproducible platform artifacts with
+   `pear-build@1.2.0`, bind their digests and provenance into a
+   signed AppRelease v2, and complete provisioning/multisig, data-recovery/rollback,
+   and platform UX evidence before any native-availability claim. Mobile store
+   distribution remains separately gated by native platform signing.
 
 ---
 

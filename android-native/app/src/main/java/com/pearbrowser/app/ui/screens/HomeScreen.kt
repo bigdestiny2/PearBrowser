@@ -46,6 +46,22 @@ import com.pearbrowser.app.rpc.PearRpcStatus
 import com.pearbrowser.app.ui.theme.PearColors
 import kotlinx.coroutines.delay
 
+internal sealed interface HomeInputTarget {
+    data class Navigate(val url: String) : HomeInputTarget
+    data class Search(val query: String) : HomeInputTarget
+}
+
+private val homeDriveKey = Regex("^(?:[0-9a-fA-F]{64}|[13-9a-km-uw-zA-KM-UW-Z]{52})$")
+private val homeHost = Regex("^(?:[A-Za-z0-9-]+\\.)+[A-Za-z]{2,}(?::[0-9]{1,5})?(?:[/?#][^\\s]*)?$")
+
+internal fun routeHomeInput(raw: String): HomeInputTarget? {
+    val input = raw.trim()
+    if (input.isEmpty()) return null
+    if (homeDriveKey.matches(input)) return HomeInputTarget.Navigate("hyper://${input.lowercase()}")
+    if (input.contains("://") || homeHost.matches(input)) return HomeInputTarget.Navigate(input)
+    return HomeInputTarget.Search(input)
+}
+
 /**
  * HomeScreen — mirror of `app/screens/HomeScreen.tsx`.
  *
@@ -55,6 +71,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun HomeScreen(
     onNavigate: (String) -> Unit,
+    onSearch: (String) -> Unit,
     status: PearRpcStatus?,
     onOpenQR: (() -> Unit)? = null,
 ) {
@@ -96,15 +113,12 @@ fun HomeScreen(
     }
 
     fun go() {
-        // Mission B3: pass the raw input through — CMD_NAVIGATE resolves
-        // bare-word names (petnames / N5 registry / curated aliases), bare
-        // drive keys (→ hyper://), and bare clearnet hosts (→ https proxy)
-        // itself. The old shell prefixed everything non-URL with hyper://,
-        // which made name resolution unreachable from the URL bar.
-        val url = input.trim()
-        if (url.isEmpty()) return
+        val target = routeHomeInput(input) ?: return
         input = ""
-        onNavigate(url)
+        when (target) {
+            is HomeInputTarget.Navigate -> onNavigate(target.url)
+            is HomeInputTarget.Search -> onSearch(target.query)
+        }
     }
 
     Column(

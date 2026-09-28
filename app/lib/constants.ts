@@ -19,6 +19,10 @@ export const CMD = {
   DELETE_SITE: 25,
   LOAD_TEMPLATE: 26,
   CLEAR_CACHE: 30,
+  SEARCH: 177,
+  SEARCH_INDEX: 178,
+  SEARCH_FEDERATED: 262,
+  PRIVACY_STATUS: 238,
   GET_IDENTITY: 31,
   GET_RELAYS: 40,
   SET_RELAYS: 41,
@@ -87,4 +91,6 @@ export const EVT = {
   SWARM_REQUEST: 107,
   /** A signed P2P catalog bee was updated by its producer and re-verified. */
   CATALOG_UPDATED: 108,
+  /** Trusted-peer search enrichment; queryId must match the latest search. */
+  SEARCH_FEDERATED: 112,
 } as const

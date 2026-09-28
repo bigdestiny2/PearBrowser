@@ -78,6 +78,7 @@ import kotlinx.serialization.json.jsonObject
  */
 @Composable
 fun SearchScreen(
+    initialQuery: String = "",
     onOpen: (String) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -85,7 +86,7 @@ fun SearchScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var query by remember { mutableStateOf("") }
+    var query by remember(initialQuery) { mutableStateOf(initialQuery) }
     var results by remember { mutableStateOf<List<PearSearchResult>?>(null) } // null = not searched yet
     var indexed by remember { mutableIntStateOf(0) }
     var searching by remember { mutableStateOf(false) }
@@ -157,6 +158,10 @@ fun SearchScreen(
                 searching = false
             }
         }
+    }
+
+    LaunchedEffect(initialQuery, rpc) {
+        if (initialQuery.isNotBlank() && rpc != null) runSearch()
     }
 
     Column(

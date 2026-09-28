@@ -20,6 +20,10 @@ type Props = {
   peerCount: number
   status: 'connected' | 'connecting' | 'offline' | 'http-only' | 'error'
   initialUrl?: string | null
+  navigationRequestId?: number
+  onTabChange?: (url: string, title: string) => void
+  onOpenTabs?: () => void
+  tabCount?: number
   isOffline?: boolean
 }
 
@@ -39,7 +43,29 @@ function isTrustedRelayAppUrl (url: string) {
   }
 }
 
-export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl, isOffline }: Props) {
+type LocalDriveRoute = { origin: string; port: number; key: string; mode: 'hyper' | 'app'; suffix: string }
+
+function localDriveRoute (value: string): LocalDriveRoute | null {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password) return null
+    const port = Number(url.port)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null
+    const match = url.pathname.match(/^\/(hyper|app)\/([0-9a-f]{64})(\/.*|$)/i)
+    if (!match) return null
+    return {
+      origin: `http://127.0.0.1:${port}`,
+      port,
+      key: match[2].toLowerCase(),
+      mode: match[1].toLowerCase() as 'hyper' | 'app',
+      suffix: (match[3] || '/') + url.search + url.hash,
+    }
+  } catch {
+    return null
+  }
+}
+
+export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, peerCount, status, initialUrl, navigationRequestId, onTabChange, onOpenTabs, tabCount = 0, isOffline }: Props) {
   const webViewRef = useRef<WebView>(null)
   const [currentUrl, setCurrentUrl] = useState(initialUrl || '')
   const [inputText, setInputText] = useState('')
@@ -47,6 +73,8 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
   const [loading, setLoading] = useState(false)
   const [webViewUrl, setWebViewUrl] = useState<string | null>(null)
   const [bridgeToken, setBridgeToken] = useState<string | null>(null)
+  const [bridgePort, setBridgePort] = useState(0)
+  const [activeDriveKey, setActiveDriveKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [findVisible, setFindVisible] = useState(false)
   const [findText, setFindText] = useState('')
@@ -56,10 +84,12 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
   const [desktopSiteRequested, setDesktopSiteRequested] = useState(false)
   const desktopModeReady = useRef(false)
 
-  // Navigate on initial URL
+  // External navigation has its own request id. Page redirects update tab
+  // metadata without sending the WebView back to its starting URL.
   React.useEffect(() => {
-    if (initialUrl) handleNavigate(initialUrl)
-  }, [initialUrl])
+    const needsProxy = initialUrl?.startsWith('hyper://') || initialUrl?.startsWith('app://')
+    if (initialUrl && (!needsProxy || proxyPort > 0)) handleNavigate(initialUrl)
+  }, [navigationRequestId, proxyPort])
 
   React.useEffect(() => {
     let cancelled = false
@@ -92,10 +122,13 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
     setError(null)
     setCurrentUrl(url)
     setBridgeToken(null)
+    setBridgePort(0)
+    setActiveDriveKey(null)
 
     // Only allow trusted relay app URLs in-app; everything else opens externally.
     if (url.startsWith('http://') || url.startsWith('https://')) {
       if (isTrustedRelayAppUrl(url)) {
+        onTabChange?.(url, '')
         setWebViewUrl(url)
       } else {
         setLoading(false)
@@ -104,8 +137,20 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
       return
     }
 
-    // hyper:// URLs — route through the worklet proxy
-    if (!url.startsWith('hyper://')) {
+    // app:// is the browser's canonical address for an installed drive's
+    // /app/ proxy route. Validate its drive key before restoring it.
+    let appKey: string | null = null
+    if (url.startsWith('app://')) {
+      try {
+        const parsed = new URL(url)
+        if (!/^[0-9a-f]{64}$/i.test(parsed.hostname)) throw new Error('Invalid app drive key')
+        appKey = parsed.hostname.toLowerCase()
+      } catch {
+        setError('Invalid app:// address')
+        setLoading(false)
+        return
+      }
+    } else if (!url.startsWith('hyper://')) {
       setLoading(false)
       Linking.openURL(url)
       return
@@ -118,19 +163,36 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
     }
 
     try {
-      const result = await rpc.navigate(url)
+      const navigateUrl = appKey ? `hyper://${appKey}${new URL(url).pathname}${new URL(url).search}${new URL(url).hash}` : url
+      const result = await rpc.navigate(navigateUrl)
       if (result.error) {
         setError(result.error)
         setLoading(false)
         return
       }
+      const route = localDriveRoute(result.localUrl || '')
+      const inputHost = new URL(url).hostname.toLowerCase()
+      // A 64-hex input must resolve to that drive. z32 inputs are normalized
+      // by CMD_NAVIGATE, so compare its returned key with the local route.
+      const expectedKey = appKey || (/^[0-9a-f]{64}$/.test(inputHost) ? inputHost : String(result.key || '').toLowerCase())
+      if (!route || route.mode !== 'hyper' || route.key !== expectedKey ||
+          String(result.key || '').toLowerCase() !== route.key ||
+          (result.proxyPort != null && Number(result.proxyPort) !== route.port)) {
+        throw new Error('P2P engine returned an invalid drive address')
+      }
+      const localUrl = appKey
+        ? `${route.origin}/app/${route.key}${route.suffix}`
+        : result.localUrl
+      onTabChange?.(url, '')
+      setBridgePort(route.port)
+      setActiveDriveKey(route.key)
       setBridgeToken(result.apiToken || null)
-      setWebViewUrl(result.localUrl)
+      setWebViewUrl(localUrl)
     } catch (err: any) {
       setError(err.message)
       setLoading(false)
     }
-  }, [rpc])
+  }, [rpc, onTabChange])
 
   const handleSubmit = useCallback(() => {
     let url = inputText.trim()
@@ -204,31 +266,33 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
   const handleWebViewNav = useCallback((navState: any) => {
     setLoading(navState.loading)
     if (navState.title) setPageTitle(navState.title)
-    // Track history when page finishes loading (skip in private mode)
-    if (!navState.loading && navState.url && currentUrl) {
-      getSettings().then(s => {
-        if (!s.privateMode) addToHistory(currentUrl, navState.title || currentUrl).catch(() => {})
+    let address = currentUrl
+    const route = localDriveRoute(navState.url || '')
+    if (route && route.port === bridgePort && route.key === activeDriveKey) {
+      address = `${route.mode}://${route.key}${route.suffix}`
+    }
+    if (address && address !== currentUrl) setCurrentUrl(address)
+    if (!navState.loading && address) {
+      onTabChange?.(address, navState.title || '')
+      getSettings().then(settings => {
+        if (!settings.privateMode) addToHistory(address, navState.title || address).catch(() => {})
       })
     }
-    if (navState.url?.includes('/hyper/')) {
-      const match = navState.url.match(/\/hyper\/([^/]+)(.*)/)
-      if (match) setCurrentUrl(`hyper://${match[1]}${match[2]}`)
-    } else if (navState.url?.includes('/app/')) {
-      const match = navState.url.match(/\/app\/([^/]+)(.*)/)
-      if (match) setCurrentUrl(`app://${match[1]}${match[2]}`)
-    }
-  }, [currentUrl])
+  }, [currentUrl, onTabChange, bridgePort, activeDriveKey])
 
   const handleShouldLoad = useCallback((event: any) => {
     const url = event.url || ''
-    // Allow proxy URLs
-    if (url.startsWith(`http://127.0.0.1:${proxyPort}`)) return true
-    if (url.startsWith(`http://localhost:${proxyPort}`)) return true
+    const route = localDriveRoute(url)
+    if (route) {
+      if (route.port === bridgePort && route.key === activeDriveKey) return true
+      handleNavigate(`${route.mode}://${route.key}${route.suffix}`)
+      return false
+    }
     if (isTrustedRelayAppUrl(url)) return true
-    if (url.startsWith('hyper://')) { handleNavigate(url); return false }
+    if (url.startsWith('hyper://') || url.startsWith('app://')) { handleNavigate(url); return false }
     if (url.startsWith('http://') || url.startsWith('https://')) { Linking.openURL(url); return false }
-    return true
-  }, [proxyPort, handleNavigate])
+    return false
+  }, [bridgePort, activeDriveKey, handleNavigate])
 
   // Handle messages from WebView — only navigation/share actions.
   // Data calls (sync, identity) go directly via localhost HTTP, bypassing RN.
@@ -252,12 +316,10 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
     ? currentUrl.slice(0, 20) + '...' + currentUrl.slice(-12)
     : currentUrl
 
-  const shouldInjectBridge = !!bridgeToken && (
-    webViewUrl?.startsWith(`http://127.0.0.1:${proxyPort}/`) ||
-    webViewUrl?.startsWith(`http://localhost:${proxyPort}/`) ||
-    isTrustedRelayAppUrl(webViewUrl || '')
-  )
-  const bridgeScript = shouldInjectBridge ? createBridgeScript(proxyPort, bridgeToken || '') : 'true;'
+  const currentRoute = localDriveRoute(webViewUrl || '')
+  const shouldInjectBridge = !!bridgeToken && currentRoute?.port === bridgePort &&
+    currentRoute.key === activeDriveKey
+  const bridgeScript = shouldInjectBridge ? createBridgeScript(bridgePort, bridgeToken || '') : 'true;'
 
   return (
     <View style={styles.container}>
@@ -372,6 +434,13 @@ export const BrowseScreen = React.memo(function BrowseScreen({ rpc, proxyPort, p
             />
           </View>
 
+          <TouchableOpacity
+            accessibilityLabel="Open tabs"
+            onPress={onOpenTabs}
+            style={styles.tabCountBtn}
+          >
+            <Text style={styles.tabCountText}>[{tabCount}]</Text>
+          </TouchableOpacity>
           <StatusDot status={status} peerCount={peerCount} />
         </View>
       </KeyboardAvoidingView>
@@ -465,6 +534,11 @@ const styles = StyleSheet.create({
     borderRadius: 6, backgroundColor: colors.surfaceElevated, marginRight: 4,
   },
   navBtnText: { color: colors.textSecondary, fontSize: 16, fontWeight: '600' },
+  tabCountBtn: {
+    minWidth: 38, height: 32, justifyContent: 'center', alignItems: 'center',
+    marginHorizontal: 4, borderRadius: 6, backgroundColor: colors.surfaceElevated,
+  },
+  tabCountText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
   urlContainer: {
     flex: 1, flexDirection: 'row', alignItems: 'center',
     backgroundColor: colors.surfaceElevated, borderRadius: 8,

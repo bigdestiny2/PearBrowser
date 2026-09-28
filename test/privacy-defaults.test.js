@@ -43,8 +43,10 @@ test('privacy defaults: history off, search index off, telemetry never, shield o
 
   assert.equal(isHistoryEnabled({}), false)
   assert.equal(isHistoryEnabled({ historyEnabled: true }), true)
+  assert.equal(isHistoryEnabled({ historyEnabled: true, privateMode: true }), false)
   assert.equal(isSearchIndexEnabled({}), false)
   assert.equal(isSearchIndexEnabled({ searchIndexEnabled: true }), true)
+  assert.equal(isSearchIndexEnabled({ searchIndexEnabled: true, privateMode: true }), false)
 
   // Telemetry can never be forced on via normalize
   assert.equal(normalizePrivacySettings({ telemetryEnabled: true }).telemetryEnabled, false)

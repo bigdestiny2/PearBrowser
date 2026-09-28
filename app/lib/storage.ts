@@ -43,6 +43,8 @@ export type Settings = {
 export type SessionState = {
   activeTab: 'home' | 'explore' | 'browse' | 'more'
   lastBrowseUrl: string | null
+  browserTabs?: Tab[]
+  activeBrowserTabId?: string | null
 }
 
 // --- Storage backend interface ---
@@ -99,6 +101,33 @@ export class HyperbeeBackend implements StorageBackend {
   readonly name = 'Hyperbee'
   constructor (private rpc: MinimalRpc) {}
 
+  async privateModeForSession(): Promise<boolean> {
+    // Session privacy cannot use read(), which deliberately masks RPC errors.
+    const { settings } = await this.rpc.userDataGetSettings()
+    if (!settings || typeof settings !== 'object') throw new Error('Privacy settings unavailable')
+    return settings.privateMode === true
+  }
+
+  async readSessionStrict(): Promise<SessionState | null> {
+    const result = await this.rpc.userDataGetSession()
+    if (!result || !('session' in result)) throw new Error('Session unavailable')
+    return result.session as SessionState | null
+  }
+
+  async clearLegacyTabs(): Promise<void> {
+    // Older releases used the separate Hyperbee tabs/current record. Current
+    // browserTabs live in session/current, but the old URLs still replicate.
+    await this.rpc.userDataImport({ tabs: [] })
+  }
+
+  async readSettingsStrict(): Promise<Settings | null> {
+    const result = await this.rpc.userDataGetSettings()
+    if (!result || !result.settings || typeof result.settings !== 'object') {
+      throw new Error('Privacy settings unavailable')
+    }
+    return Object.keys(result.settings).length > 0 ? result.settings as Settings : null
+  }
+
   async read<T>(key: string): Promise<T | null> {
     try {
       switch (key) {
@@ -119,10 +148,10 @@ export class HyperbeeBackend implements StorageBackend {
           const { session } = await this.rpc.userDataGetSession()
           return (session as unknown as T) ?? null
         }
-        case KEYS.TABS:
-          // Tabs aren't wired yet on the Hyperbee side — return null so
-          // caller falls back to default
-          return null
+        case KEYS.TABS: {
+          const { session } = await this.rpc.userDataGetSession()
+          return Array.isArray(session?.browserTabs) ? (session.browserTabs as T) : null
+        }
         default:
           return null
       }
@@ -171,9 +200,14 @@ export class HyperbeeBackend implements StorageBackend {
       case KEYS.SESSION:
         await this.rpc.userDataSaveSession((value as unknown) as Record<string, unknown>)
         return
-      case KEYS.TABS:
-        // Tabs stay on AsyncStorage for now
+      case KEYS.TABS: {
+        const { session } = await this.rpc.userDataGetSession()
+        await this.rpc.userDataSaveSession({
+          ...(session || {}),
+          browserTabs: value,
+        })
         return
+      }
       default:
         return
     }
@@ -194,6 +228,24 @@ export class HyperbeeBackend implements StorageBackend {
 
 class AsyncStorageBackend implements StorageBackend {
   readonly name = 'AsyncStorage'
+
+  async privateModeForSession(): Promise<boolean> {
+    const raw = await AsyncStorage.getItem(KEYS.SETTINGS)
+    if (!raw) return false
+    const settings = JSON.parse(raw)
+    if (!settings || typeof settings !== 'object') throw new Error('Privacy settings unavailable')
+    return settings.privateMode === true
+  }
+
+  async readSessionStrict(): Promise<SessionState | null> {
+    const raw = await AsyncStorage.getItem(KEYS.SESSION)
+    return raw ? JSON.parse(raw) as SessionState : null
+  }
+
+  async readSettingsStrict(): Promise<Settings | null> {
+    const raw = await AsyncStorage.getItem(KEYS.SETTINGS)
+    return raw ? JSON.parse(raw) as Settings : null
+  }
 
   async read<T>(key: string): Promise<T | null> {
     try {
@@ -240,6 +292,29 @@ export function setStorageBackend(b: StorageBackend): void {
 
 export function getStorageBackend(): StorageBackend {
   return backend
+}
+
+async function privateModeForSession(): Promise<boolean> {
+  if (backend instanceof HyperbeeBackend || backend instanceof AsyncStorageBackend) {
+    return backend.privateModeForSession()
+  }
+  // Unknown storage implementations cannot prove that Private Mode is off.
+  throw new Error('Privacy settings unavailable for the active storage backend')
+}
+
+async function readSessionStrict(): Promise<SessionState | null> {
+  if (backend instanceof HyperbeeBackend || backend instanceof AsyncStorageBackend) {
+    return backend.readSessionStrict()
+  }
+  throw new Error('Session unavailable for the active storage backend')
+}
+
+async function readSettingsStrict(): Promise<Settings> {
+  if (backend instanceof HyperbeeBackend || backend instanceof AsyncStorageBackend) {
+    const raw = await backend.readSettingsStrict()
+    return raw ? { ...DEFAULT_SETTINGS, ...raw } : DEFAULT_SETTINGS
+  }
+  throw new Error('Privacy settings unavailable for the active storage backend')
 }
 
 // --- Bookmarks ---
@@ -296,20 +371,60 @@ export async function getSettings(): Promise<Settings> {
 }
 
 export async function updateSettings(updates: Partial<Settings>): Promise<Settings> {
-  const settings = await getSettings()
+  const settings = await readSettingsStrict()
   const updated = { ...settings, ...updates }
-  await backend.write(KEYS.SETTINGS, updated)
+  if (updates.privateMode !== undefined && updates.privateMode !== settings.privateMode) {
+    // Serialize the transition with browser session writes. Scrub the shared
+    // session before committing the new mode, then let later writes recheck
+    // the committed privacy setting.
+    await enqueueSessionWrite(async () => {
+      await scrubBrowserSessionDirect()
+      if (backend instanceof HyperbeeBackend) {
+        // If the worklet falls back to device storage later, it must not
+        // restore old URLs or treat a private shared profile as normal.
+        const local = new AsyncStorageBackend()
+        await local.write(KEYS.SESSION, PRIVATE_SESSION)
+        await local.write(KEYS.TABS, [])
+        if (updates.privateMode === true) {
+          const localSettings = await local.readSettingsStrict()
+          await local.write(KEYS.SETTINGS, { ...DEFAULT_SETTINGS, ...localSettings, privateMode: true })
+        }
+      }
+      await backend.write(KEYS.SETTINGS, updated)
+      if (backend instanceof HyperbeeBackend && updates.privateMode === false) {
+        // A failed local write here leaves the fallback conservatively private.
+        try {
+          const local = new AsyncStorageBackend()
+          const localSettings = await local.readSettingsStrict()
+          await local.write(KEYS.SETTINGS, { ...DEFAULT_SETTINGS, ...localSettings, privateMode: false })
+        } catch (err) {
+          console.warn('[storage] local fallback settings update failed:', err)
+        }
+      }
+    })
+  } else {
+    await backend.write(KEYS.SETTINGS, updated)
+  }
   return updated
 }
 
 // --- Tabs ---
 
 export async function getTabs(): Promise<Tab[]> {
-  return (await backend.read<Tab[]>(KEYS.TABS)) ?? []
+  const session = await getSession()
+  return Array.isArray(session.browserTabs)
+    ? session.browserTabs
+    : (await backend.read<Tab[]>(KEYS.TABS)) ?? []
 }
 
 export async function saveTabs(tabs: Tab[]): Promise<void> {
-  await backend.write(KEYS.TABS, tabs)
+  await enqueueSessionWrite(async () => {
+    const privateMode = await privateModeForSession()
+    const safeTabs = privateMode ? [] : tabs
+    const current = privateMode ? PRIVATE_SESSION : await getSession()
+    await backend.write(KEYS.SESSION, { ...current, browserTabs: safeTabs })
+    if (backend.name === 'AsyncStorage') await backend.write(KEYS.TABS, safeTabs)
+  })
 }
 
 // --- Catalog list (multiple Explore directories) ---
@@ -340,18 +455,55 @@ const DEFAULT_SESSION: SessionState = {
   lastBrowseUrl: null,
 }
 
+const PRIVATE_SESSION: SessionState = {
+  activeTab: 'home',
+  lastBrowseUrl: null,
+  browserTabs: [],
+  activeBrowserTabId: null,
+}
+
+async function scrubBrowserSessionDirect(): Promise<void> {
+  await backend.write(KEYS.SESSION, PRIVATE_SESSION)
+  if (backend instanceof HyperbeeBackend) await backend.clearLegacyTabs()
+  if (backend.name === 'AsyncStorage') await backend.write(KEYS.TABS, [])
+}
+
+export function scrubBrowserSession(): Promise<void> {
+  return enqueueSessionWrite(scrubBrowserSessionDirect)
+}
+
 export async function getSession(): Promise<SessionState> {
-  const raw = await backend.read<SessionState>(KEYS.SESSION)
+  if (await privateModeForSession()) return { ...PRIVATE_SESSION, browserTabs: [] }
+  const raw = await readSessionStrict()
   return raw ? { ...DEFAULT_SESSION, ...raw } : DEFAULT_SESSION
 }
 
+let sessionWriteQueue: Promise<void> = Promise.resolve()
+
+function enqueueSessionWrite<T>(task: () => Promise<T>): Promise<T> {
+  const write = sessionWriteQueue.then(task)
+  sessionWriteQueue = write.then(() => undefined, () => undefined)
+  return write
+}
+
+export function getPrivateModeStrict(): Promise<boolean> {
+  // Serialize observations with this shell's settings transitions so a late
+  // reply cannot undo a just-completed Private Mode toggle.
+  return enqueueSessionWrite(() => privateModeForSession())
+}
+
 export async function saveSession(state: Partial<SessionState>): Promise<void> {
-  const current = await getSession()
-  const next = { ...current, ...state }
   try {
-    await backend.write(KEYS.SESSION, next)
+    await enqueueSessionWrite(async () => {
+      const privateMode = await privateModeForSession()
+      const current = privateMode ? PRIVATE_SESSION : await getSession()
+      await backend.write(KEYS.SESSION, privateMode
+        ? { ...PRIVATE_SESSION, browserTabs: [] }
+        : { ...current, ...state })
+    })
   } catch (err) {
     console.warn('[storage] saveSession failed:', err)
+    throw err
   }
 }
 
@@ -410,14 +562,51 @@ export async function bootstrapHyperbeeStorage (rpc: MinimalRpc): Promise<{
       const tabs = await local.read<Tab[]>(KEYS.TABS)
       if (bookmarks) dump.bookmarks = bookmarks
       if (history) dump.history = history
-      if (settings) dump.settings = settings
-      if (session) dump.session = session
-      if (tabs) dump.tabs = tabs
+      // A native shell may already own this user's settings and session.
+      const { session: existingSession } = await rpc.userDataGetSession()
+      const { settings: remoteSettings } = await rpc.userDataGetSettings()
+      const remoteHasSettings = !!remoteSettings && Object.keys(remoteSettings).length > 0
+      const privateMode = !!settings?.privateMode || !!remoteSettings?.privateMode
+      if (privateMode) {
+        // Clear both the current session and the separate tabs/current record
+        // used by older releases before a local private choice is committed.
+        await local.write(KEYS.SESSION, PRIVATE_SESSION)
+        await local.write(KEYS.TABS, [])
+        if (remoteSettings?.privateMode === true) {
+          await local.write(KEYS.SETTINGS, { ...DEFAULT_SETTINGS, ...settings, privateMode: true })
+        }
+        await rpc.userDataSaveSession(PRIVATE_SESSION)
+        await rpc.userDataImport({ tabs: [] })
+      }
+      if (settings && !remoteHasSettings) dump.settings = settings
+      if (settings?.privateMode && remoteHasSettings && !remoteSettings.privateMode) {
+        // Preserve unrelated native settings while keeping the conservative
+        // privacy choice when the older RN profile was private.
+        await rpc.userDataSetSettings({ privateMode: true })
+      }
+      if (!privateMode && !existingSession && (session || tabs)) {
+        dump.session = tabs && !Array.isArray(session?.browserTabs)
+          ? { ...(session || DEFAULT_SESSION), browserTabs: tabs }
+          : session
+      }
+      // browserTabs is now the only tab store; do not seed tabs/current again.
       if (Object.keys(dump).length > 0) {
         await rpc.userDataImport(dump)
         console.log('[storage] migrated AsyncStorage → Hyperbee:', Object.keys(dump).join(', '))
       }
       await local.write(MIGRATION_FLAG_KEY, { at: Date.now() })
+    } else {
+      // Existing profiles may predate the privacy scrub. Repeat the small
+      // cleanup on private startup because tabs/current has no read RPC.
+      const { settings: remoteSettings } = await rpc.userDataGetSettings()
+      if (remoteSettings?.privateMode === true) {
+        await local.write(KEYS.SESSION, PRIVATE_SESSION)
+        await local.write(KEYS.TABS, [])
+        const localSettings = await local.readSettingsStrict()
+        await local.write(KEYS.SETTINGS, { ...DEFAULT_SETTINGS, ...localSettings, privateMode: true })
+        await rpc.userDataSaveSession(PRIVATE_SESSION)
+        await rpc.userDataImport({ tabs: [] })
+      }
     }
     setStorageBackend(remote)
     return { migrated: true }

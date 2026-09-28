@@ -2,7 +2,9 @@
 
 A peer-to-peer mobile app platform for iOS and Android. Browse the decentralized web, discover P2P apps from decentralized catalogs, build personal websites, and run web apps that can use Pear identity, Autobase sync, Hyperdrive content, and direct Hyperswarm channels from a phone.
 
-**Current architecture:** start with [docs/ARCHITECTURE_AND_CAPABILITIES.md](docs/ARCHITECTURE_AND_CAPABILITIES.md). The 2026-07-22 release candidate passes 566 source and parity tests, the high/critical dependency audit, deterministic bundle generation, Android lint-vital plus optimized APK/AAB builds, native SwiftUI Debug/Release device builds, and the generated Expo iOS Release build. The machine-readable preflight has 15 structural passes, no warnings, and only four production-authority blockers: real Android signing, an Apple development team, and recorded iOS/Android store validation. A full audit retains nine moderate `uuid` advisories in Expo's build tooling; npm's only proposed remediation is a breaking downgrade to Expo 46, so the release keeps the high/critical gate green without forcing that regression. See [the current release evidence](docs/RELEASE_EVIDENCE_2026-07-22.md) for exact commands, artifact sizes, honest capability limits, and distribution gates.
+**2026-09-28 draft update:** [Mobile PR #6](https://github.com/bigdestiny2/PearBrowser/pull/6) adds browser tab/session controls, local-first search with an explicit trusted-peer option, opt-in page indexing, Private Mode session safeguards, updated P2P dependencies, and stricter release checks. Autobee is under compatibility test only; existing user data remains on Autobase/Hyperbee. This is a source candidate, not a released mobile build. Fresh Android and iOS simulator builds now boot with a Connected worklet; Android HTTPS navigation and local search passed initial smoke. On the Android emulator, switching from an Example Domain tab to an IANA tab and back restored the first page; enabling Private Mode cleared tabs and a cold restart did not restore them. Per-app web origin isolation, physical-device proof, production signing, and store validation remain open. See [the current update evidence and gates](docs/PEARBROWSER_UPDATE_2026-09-26.md).
+
+**Architecture and evidence:** start with [docs/ARCHITECTURE_AND_CAPABILITIES.md](docs/ARCHITECTURE_AND_CAPABILITIES.md) and [the September candidate status](docs/PEARBROWSER_UPDATE_2026-09-26.md). The [July 2026 release evidence](docs/RELEASE_EVIDENCE_2026-07-22.md) records older source, audit, and native builds; it is historical evidence, not qualification of PR #6. The current soft preflight reports 18 structural passes and four production-authority failures. The separate mobile origin-isolation gate is still red.
 
 **Try it locally:** Build the iOS shell and run the bundled example app from source — see [Setup](#setup) below. In short:
 
@@ -21,15 +23,15 @@ xcodebuild -project ios-native/PearBrowser.xcodeproj -scheme PearBrowser -config
 npm run release:preflight
 ```
 
-For an audit-only report that does not fail the shell, use `npm run release:preflight -- --soft`; for CI/artifact capture, use `npm run release:preflight -- --json`. The preflight verifies version/package ID alignment, native worklet bundles, iOS BareKit/addon frameworks, Android BareKit AAR, production signing inputs, and store-distribution validation markers. As of the 2026-06-23 audit the structural checks pass locally, while production Android signing, Apple team signing, and TestFlight/App Store Connect plus Play/Firebase validation remain explicit release blockers.
+For an audit-only report that does not fail the shell, use `npm run release:preflight -- --soft`; for CI/artifact capture, use `npm run release:preflight -- --json`. The preflight verifies version/package ID alignment, native worklet bundles, iOS BareKit/addon frameworks, Android BareKit AAR, production signing inputs, and store-distribution validation markers. On 2026-09-28 it reports 18 structural passes and four failures: Android signing, Apple development-team signing, iOS store validation, and Android Play/Firebase validation. A passing soft CI job is not a passing production release gate; [per-app origin isolation](docs/MOBILE_ORIGIN_ISOLATION_GATE.md) is an additional open gate.
 
-**Try the App Store flow:** the `examples/echo-peer/` fixture is a complete app — `index.html` plus a `manifest.json` (name "Echo Peer", `swarm.v1` permission) that exercises the `window.pear.swarm.v1` bridge end to end. To see it in the App Store, have a relay operator **seed `examples/echo-peer` into a relay catalog** (relay dashboard → Seeding Registry / wizard, or `POST /seed` with its drive key). Because it ships a manifest, it appears as **"Echo Peer"** in PearBrowser's App Store — not "Unknown App." The default relays the app talks to are `relay-us.p2phiverelay.xyz` and `relay-sg.p2phiverelay.xyz`.
+**Try the in-app catalog flow:** the `examples/echo-peer/` fixture contains `index.html` and a `manifest.json` (name "Echo Peer", `swarm.v1` permission) for exercising the `window.pear.swarm.v1` bridge. To list it in a PearBrowser relay catalog, have a relay operator **seed `examples/echo-peer`** (relay dashboard → Seeding Registry / wizard, or `POST /seed` with its drive key). Its manifest lets the catalog show **"Echo Peer"** rather than "Unknown App." This is a developer flow; live peer and mobile device behavior still need qualification. The configured default relay hosts are `relay-us.p2phiverelay.xyz` and `relay-sg.p2phiverelay.xyz`.
 
 ## Why PearBrowser?
 
 Traditional mobile apps depend on cloud servers. When the server goes down, the app stops working. When the company shuts down, your data disappears. When you're offline, you can't do anything.
 
-PearBrowser flips this model. Apps run on your device and connect directly to other devices. Your data lives on your phone, syncs peer-to-peer, and is always available — even offline. When an app is listed in a trusted catalog, users can open the current release from that listing without searching for a project page, downloading a bundle, or applying manual updates. No cloud server. No monthly fees. No single point of failure.
+PearBrowser is designed to run apps and keep their data on your device, then sync directly with peers when they are reachable. Content already saved on the phone can remain available offline. A trusted relay catalog can help users discover apps and fetch seeded content. Availability still depends on peers or a relay for content that is not cached.
 
 ## Core Features
 
@@ -41,13 +43,13 @@ PearBrowser has a built-in App Store, but it's not controlled by any single comp
 
 **Anyone can run a catalog.** Relays are open source. You can run your own relay with your own curated selection of apps — for your company, your community, or the public. PearBrowser users add relay URLs in Settings to browse different catalogs.
 
-**Hyper sites open instantly.** When you tap **Open** on a browseable `hyper://` site, PearBrowser loads it from the relay's HTTP gateway (`/v1/hyper/<driveKey>/…`) — not over slow P2P — with a direct P2P fallback. The relay caches the site's files and serves them like a CDN. First load is under 2 seconds.
+**Hyper sites can use a relay fast path.** When you tap **Open** on a browseable `hyper://` site, PearBrowser can load seeded files from a relay's HTTP gateway (`/v1/hyper/<driveKey>/…`) with a direct P2P fallback. First-load speed depends on relay availability, cache state, and peer connectivity.
 
 **The catalogue states the delivery boundary.** `hyper://` sites are opened on the phone. A compatible native v3 desktop package is labelled **Desktop only** and is never installed by mobile. A `pear://` or `file://` v2 executable is labelled **Migration required**, never launched, and directs its owner to migrate on desktop.
 
 **Catalog rows are normalized before rendering.** PearBrowser accepts `apps[]`, `items[]`, or `entries[]`, recognizes `driveKey`, `appKey`, `key`, and safe `hyper://` links, and prefers signed Hyperbee catalogs when advertised. Legacy `pear://` and `file://` links are retained only as migration records; they cannot become a browser destination.
 
-**No app-store gatekeepers.** There's no platform review process, no 30% fee, no approval queue. A relay operator decides what their catalog seeds; users choose which relays they trust and browse those catalogs.
+**Relay catalogs are operator curated.** A relay operator decides what its catalog seeds, and users choose which relays they trust. Distribution of the mobile PearBrowser app through Apple's or Google's stores is subject to those stores' review and release requirements.
 
 **How apps get into the catalog:**
 
@@ -74,16 +76,16 @@ manifest.json        dashboard wizard or     reads /manifest.json,
 
 ### 2. P2P Browser Runtime
 
-Browse `hyper://` content natively on your phone. Hyper links point to Hyperdrives — peer-to-peer filesystems that are distributed, versioned, and encrypted. The native shells route `hyper://` through the Bare worklet's local proxy so pages load through the same token-gated bridge on desktop and mobile.
+The native shells route `hyper://` links to Hyperdrive content through a Bare worklet and local proxy. This mobile candidate has bridge tokens, but all P2P pages still share one loopback web origin. [Per-app origin isolation](docs/MOBILE_ORIGIN_ISOLATION_GATE.md) remains a release gate for untrusted content.
 
 **Hybrid architecture:** PearBrowser uses two paths to fetch content simultaneously:
 
-- **Fast path (HTTP):** Ask the nearest HiveRelay gateway. If the relay has the content cached, it responds in 1-2 seconds.
-- **P2P path (Hyperswarm):** Connect directly to peers via the DHT. Takes 5-15 seconds for the first connection, but content is cached locally for instant future visits.
+- **Fast path (HTTP):** Ask a configured HiveRelay gateway for content it has seeded.
+- **P2P path (Hyperswarm):** Connect directly to peers via the DHT and cache retrieved content locally.
 
-Whichever path responds first wins. The P2P path continues syncing in the background so subsequent navigations within the same site are instant from local cache.
+Whichever path responds first wins. The P2P path can continue syncing in the background so later navigations may use local content.
 
-**The phone is a real peer.** PearBrowser runs the full Hyperswarm stack via a Bare Kit worklet — a separate JavaScript runtime that handles all P2P networking. Your phone joins the HyperDHT, performs UDP hole-punching, and establishes direct encrypted connections to other peers. This is the same technology that powers [Keet](https://keet.io).
+**The worklet is built for direct peer connections.** Bare Kit runs the Hyperswarm stack in a separate JavaScript runtime. The current candidate still needs physical-device and live-peer replication proof before those paths are treated as release qualified.
 
 ### 3. App Identity and Direct P2P APIs
 
@@ -262,7 +264,7 @@ No configuration needed. Users open PearBrowser → Apps tab (pointed at a relay
 | Data Sync | Autobase + Hyperbee | Multi-writer database with materialized views |
 | Content Delivery | HiveRelay HTTP gateway | Instant app loading via CDN-like HTTP |
 | App Storage | Hyperdrive | Versioned P2P filesystem |
-| Native Addons | 17 xcframeworks | sodium, udx, rocksdb, etc. statically linked |
+| Native Addons | 18 XCFrameworks plus BareKit | Current native dependency bundle |
 | IPC Protocol | Length-prefixed JSON | Communication between native shells and worklet |
 
 ## Setup
@@ -327,7 +329,7 @@ PearBrowser/
 │   └── catalog-relay.js          # Run a catalog relay
 ├── docs/                         # Documentation
 │   ├── ARCHITECTURE_AND_CAPABILITIES.md # Current system map
-│   ├── RELEASE_EVIDENCE_2026-07-22.md # Current release gate evidence
+│   ├── RELEASE_EVIDENCE_2026-07-22.md # Historical July release evidence
 │   ├── CURRENT_STATUS_AUDIT_2026-06-23.md # Historical status snapshot
 │   ├── MOBILE_RELEASE_EVIDENCE_2026-06-23.md # Historical mobile evidence
 │   ├── USER-FLOWS.md             # User journey diagrams
@@ -342,7 +344,9 @@ PearBrowser/
 - **[Use Cases](docs/USE-CASES.md)** — Real-world scenarios (POS, publishing, marketplace, education)
 - **[Developer Guide](docs/DEVELOPER-GUIDE.md)** — Build and publish your first P2P app
 - **[Architecture and Capabilities](docs/ARCHITECTURE_AND_CAPABILITIES.md)** — Current mobile runtime map, catalogue model, bridge capabilities, native parity, and limits
-- **[Current Release Evidence](docs/RELEASE_EVIDENCE_2026-07-22.md)** — Latest tests, audits, native builds, preflight results, capability boundaries, and production blockers
+- **[September Candidate Status](docs/PEARBROWSER_UPDATE_2026-09-26.md)** — Current draft PR tests, native checks, and open release gates
+- **[Mobile Origin Isolation Gate](docs/MOBILE_ORIGIN_ISOLATION_GATE.md)** — Web origin and storage requirements for untrusted P2P pages
+- **[July Release Evidence](docs/RELEASE_EVIDENCE_2026-07-22.md)** — Historical tests, audits, native builds, and production blockers
 - **[June Status Audit](docs/CURRENT_STATUS_AUDIT_2026-06-23.md)** — Historical baseline retained for comparison
 - **[Security Boundary Alignment](docs/SECURITY-BOUNDARY-ALIGNMENT-2026-06-23.md)** — Current mobile security boundary map and remaining caveats
 - **[Desktop Parity Audit](docs/DESKTOP_PARITY_AUDIT_2026-05-19.md)** — Current feature gap analysis against pearbrowser-desktop

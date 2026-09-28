@@ -9,15 +9,18 @@ import { SiteCard } from '../components/SiteCard'
 import { getBookmarks, type Bookmark } from '../lib/storage'
 import type { PearRPC } from '../lib/rpc'
 
+const HYPER_KEY_RE = /^(?:[0-9a-f]{64}|[13-9a-km-uw-z]{52})$/i
+
 type Props = {
   rpc: PearRPC
   peerCount: number
   status: 'connected' | 'connecting' | 'offline' | 'http-only' | 'error'
   onNavigate: (url: string) => void
+  onSearch: (query: string) => void
   onOpenQR?: () => void
 }
 
-export function HomeScreen({ rpc, peerCount, status, onNavigate, onOpenQR }: Props) {
+export function HomeScreen({ rpc, peerCount, status, onNavigate, onSearch, onOpenQR }: Props) {
   const [searchText, setSearchText] = useState('')
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
 
@@ -26,17 +29,21 @@ export function HomeScreen({ rpc, peerCount, status, onNavigate, onOpenQR }: Pro
   }, [])
 
   const handleSearch = useCallback(() => {
-    let url = searchText.trim()
-    if (!url) return
-    if (/^[a-f0-9]{52,64}$/i.test(url)) url = `hyper://${url}`
-    else if (!url.includes('://')) url = `hyper://${url}`
-    onNavigate(url)
+    const input = searchText.trim()
+    if (!input) return
+    if (HYPER_KEY_RE.test(input)) {
+      onNavigate('hyper://' + input)
+    } else if (input.includes('://')) {
+      onNavigate(input)
+    } else {
+      onSearch(input)
+    }
     setSearchText('')
-  }, [searchText, onNavigate])
+  }, [searchText, onNavigate, onSearch])
 
   const handlePasteAndGo = useCallback(async () => {
     const text = await Clipboard.getString()
-    if (text && /^[a-f0-9]{52,64}$/i.test(text.trim())) {
+    if (text && HYPER_KEY_RE.test(text.trim())) {
       onNavigate(`hyper://${text.trim()}`)
     }
   }, [onNavigate])
@@ -58,7 +65,7 @@ export function HomeScreen({ rpc, peerCount, status, onNavigate, onOpenQR }: Pro
           placeholderTextColor={colors.textMuted}
           autoCapitalize="none"
           autoCorrect={false}
-          returnKeyType="go"
+          returnKeyType="search"
         />
         <TouchableOpacity
           onPress={onOpenQR || handlePasteAndGo}

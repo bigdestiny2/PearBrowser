@@ -18,6 +18,43 @@ interface PendingRequest {
   retryCount: number
 }
 
+export type PearSearchResult = {
+  docId?: string
+  driveKey: string
+  path?: string
+  title?: string
+  link?: string | null
+  tier?: string
+  trustHop?: number
+}
+
+export type PearSearchReply = {
+  results: PearSearchResult[]
+  stats: { docs: number }
+  phase: 'first-paint'
+  federating: boolean
+  queryId: number
+}
+
+export type PearSearchFederatedEvent = {
+  queryId: number
+  results: PearSearchResult[]
+  phase: 'enriched'
+  partial?: boolean
+  digestHit?: boolean
+  fallbackPull?: boolean
+  verifyBudgetExhausted?: boolean
+  provenance?: {
+    plannedPeers?: number
+    pulledPeers?: number
+    digestSkipped?: number
+  } | null
+}
+
+export type PearPrivacyStatus = {
+  privacy: { searchIndexEnabled: boolean }
+}
+
 export class PearRPC {
   private ipc: any
   private nextId = 1
@@ -104,6 +141,18 @@ export class PearRPC {
 
   getStatus() {
     return this.request(CMD.GET_STATUS)
+  }
+
+  search(query: string, options: { limit?: number; federated?: boolean } = {}): Promise<PearSearchReply> {
+    return this.request(CMD.SEARCH, {
+      query,
+      limit: options.limit ?? 50,
+      federated: options.federated === true,
+    }, 60000)
+  }
+
+  getPrivacyStatus(): Promise<PearPrivacyStatus> {
+    return this.request(CMD.PRIVACY_STATUS)
   }
 
   loadCatalog(keyHex: string) {
@@ -310,6 +359,10 @@ export class PearRPC {
   // A signed P2P catalog bee was updated by its producer and re-verified.
   onCatalogUpdated(cb: (data: { keyHex: string; catalog: any }) => void) {
     return this.on(EVT.CATALOG_UPDATED, cb)
+  }
+
+  onSearchFederated(cb: (data: PearSearchFederatedEvent) => void) {
+    return this.on(EVT.SEARCH_FEDERATED, cb)
   }
 
   // --- Wire protocol ---

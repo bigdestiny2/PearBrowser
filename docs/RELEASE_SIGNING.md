@@ -104,12 +104,22 @@ export PEARBROWSER_TESTFLIGHT_VALIDATED=1          # or PEARBROWSER_APP_STORE_CO
 ## Preflight
 
 ```sh
+npm ci
+npm run bundle-all-native
 node scripts/release-preflight.js
 ```
 
-Green when: backend bundles present, BareKit native worklets present, Android
-signing env set (the four `PEARBROWSER_RELEASE_*` vars above), iOS team set, EAS
-project identity filled, and store-validation markers recorded.
+Preflight checks that `package.json`, `package-lock.json`, and npm's installed
+dependency lock agree, including exact package overrides and optional native
+packages required by the current host. It rebuilds the iOS and Android worklet bundles into
+temporary files with the release build options, then compares their SHA-256
+hashes with the native release artifacts. The comparison leaves the artifacts
+untouched. If source or dependencies change, repeat `npm ci` and `npm run bundle-all-native`
+before treating either artifact as current.
+
+Green also requires BareKit native worklets, Android signing env (the four
+`PEARBROWSER_RELEASE_*` vars above), an iOS team, EAS project identity, and
+store-validation markers.
 
 For GitHub Actions, configure the matching repository secrets plus
 `PEARBROWSER_RELEASE_KEYSTORE_BASE64`, containing the base64-encoded keystore.

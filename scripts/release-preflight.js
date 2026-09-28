@@ -2,7 +2,10 @@
 'use strict'
 
 const fs = require('node:fs')
+const crypto = require('node:crypto')
+const os = require('node:os')
 const path = require('node:path')
+const { spawnSync } = require('node:child_process')
 
 // These names are shared by the generated Expo shell, the native Kotlin shell,
 // CI, and release documentation. A drift between any of them can turn a green
@@ -63,6 +66,193 @@ function listDirs (root, rel, suffix) {
       .map((ent) => ent.name)
   } catch {
     return []
+  }
+}
+
+const ANDROID_ABIS = ['arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64']
+
+function inspectAndroidAar (root, aarPath) {
+  const addonsRoot = path.join(root, 'node_modules/react-native-bare-kit/android/src/main/addons')
+  let addonNames
+  for (const abi of ANDROID_ABIS) {
+    const names = fs.readdirSync(path.join(addonsRoot, abi)).sort()
+    if (names.length === 0 || names.some((name) => !/^lib[\w.-]+\.so$/.test(name))) {
+      throw new Error(`invalid current addon manifest for ${abi}`)
+    }
+    if (addonNames && names.join(',') !== addonNames.join(',')) {
+      throw new Error(`current addon manifest differs for ${abi}`)
+    }
+    addonNames = names
+  }
+
+  const listed = spawnSync('unzip', ['-Z', '-1', aarPath], {
+    encoding: 'utf8', maxBuffer: 1024 * 1024
+  })
+  if (listed.error || listed.status !== 0) {
+    throw new Error(`cannot list Android AAR: ${listed.error?.message || listed.stderr || listed.status}`)
+  }
+  const actual = listed.stdout.split(/\r?\n/).filter((entry) => /^jni\/[^/]+\/[^/]+\.so$/.test(entry)).sort()
+  const expected = ANDROID_ABIS.flatMap((abi) => [
+    `jni/${abi}/libbare-kit.so`,
+    ...addonNames.map((name) => `jni/${abi}/${name}`)
+  ]).sort()
+  const missing = expected.filter((entry) => !actual.includes(entry))
+  const extra = actual.filter((entry) => !expected.includes(entry))
+  if (missing.length || extra.length) {
+    throw new Error(`Android AAR addon mismatch: missing ${missing.slice(0, 3).join(', ') || 'none'}; extra ${extra.slice(0, 3).join(', ') || 'none'}`)
+  }
+  return { addonCount: addonNames.length, abiCount: ANDROID_ABIS.length }
+}
+
+function sameDeclarations (left = {}, right = {}) {
+  const sorted = (value) => Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+  return JSON.stringify(sorted(left)) === JSON.stringify(sorted(right))
+}
+
+function selectorAllows (selector, value) {
+  if (!Array.isArray(selector) || selector.length === 0) return true
+  if (selector.includes('!' + value)) return false
+  const allowed = selector.filter((item) => !item.startsWith('!'))
+  return allowed.length === 0 || allowed.includes(value)
+}
+
+function hostLibc () {
+  if (process.platform !== 'linux') return null
+  try {
+    return process.report.getReport().header.glibcVersionRuntime ? 'glibc' : 'musl'
+  } catch {
+    return null
+  }
+}
+
+function hostRequiresOptional (name, locked) {
+  const constrained = [locked.os, locked.cpu, locked.libc]
+    .some((selector) => Array.isArray(selector) && selector.length > 0)
+  if (!constrained) return false
+  if (!selectorAllows(locked.os, process.platform) ||
+      !selectorAllows(locked.cpu, process.arch)) return false
+  const libc = hostLibc()
+  if (process.platform === 'linux' && libc) {
+    if (!selectorAllows(locked.libc, libc)) return false
+    // Some npm locks predate the libc field: distinguish binary variants by
+    // their package suffix so GNU hosts need not install the musl binary.
+    if (name.endsWith('-musl') && libc !== 'musl') return false
+    if (name.endsWith('-gnu') && libc !== 'glibc') return false
+  }
+  return true
+}
+
+function verifyOverrides (lock, overrides = {}) {
+  for (const [name, requested] of Object.entries(overrides)) {
+    // npm lock v3 does not record root overrides, so compare each resolved
+    // instance with the exact replacement requested by package.json.
+    if (!/^(?:@[^/]+\/)?[^@/]+$/.test(name) ||
+        typeof requested !== 'string' ||
+        !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(requested)) {
+      throw new Error('cannot verify override ' + name + '; use an exact top-level package version')
+    }
+    const suffix = 'node_modules/' + name
+    const instances = Object.entries(lock.packages)
+      .filter(([location]) => location === suffix || location.endsWith('/' + suffix))
+    if (instances.length === 0) {
+      throw new Error('override ' + name + ' has no resolved package in package-lock.json')
+    }
+    for (const [location, locked] of instances) {
+      if (locked.version !== requested) {
+        throw new Error('override ' + name + '@' + requested + ' is not applied at ' + location +
+          ' (locked ' + (locked.version || 'missing') + ')')
+      }
+    }
+  }
+}
+
+function verifyDependencyLock (root, pkg) {
+  const lock = readJson(root, 'package-lock.json')
+  const lockedRoot = lock.packages && lock.packages['']
+  if (!lockedRoot || lock.lockfileVersion < 2) throw new Error('package-lock.json has no supported root package record')
+  if (lockedRoot.version !== pkg.version ||
+      !sameDeclarations(pkg.dependencies, lockedRoot.dependencies) ||
+      !sameDeclarations(pkg.devDependencies, lockedRoot.devDependencies) ||
+      !sameDeclarations(pkg.optionalDependencies, lockedRoot.optionalDependencies) ||
+      (lockedRoot.overrides && !sameDeclarations(pkg.overrides, lockedRoot.overrides))) {
+    throw new Error('package.json and package-lock.json root version or dependencies differ')
+  }
+
+  verifyOverrides(lock, pkg.overrides)
+
+  // bare-pack reads installed packages, not the lockfile. A stale node_modules
+  // tree could otherwise reproduce a stale bundle and appear fresh.
+  const installedLock = readJson(root, 'node_modules/.package-lock.json')
+  const installedPackages = installedLock.packages || {}
+  for (const [name, locked] of Object.entries(lock.packages)) {
+    if (!name.startsWith('node_modules/')) continue
+    const installed = installedPackages[name]
+    const requiredOptional = locked.optional && hostRequiresOptional(name, locked)
+    if (!installed) {
+      if (locked.optional && !requiredOptional) continue // Other-platform binaries may be omitted.
+      throw new Error('installed dependency ' + name + ' is missing; run npm ci')
+    }
+    if (installed.version !== locked.version || (locked.integrity && installed.integrity !== locked.integrity)) {
+      throw new Error('installed dependency ' + name + ' differs from package-lock.json; run npm ci')
+    }
+    if (requiredOptional) {
+      let installedPackage
+      try {
+        installedPackage = readJson(root, name + '/package.json')
+      } catch {
+        throw new Error('host-required optional dependency ' + name + ' is missing on disk; run npm ci')
+      }
+      if (installedPackage.version !== locked.version) {
+        throw new Error('host-required optional dependency ' + name + ' differs from package-lock.json; run npm ci')
+      }
+    }
+  }
+  for (const name of Object.keys(installedPackages)) {
+    if (!lock.packages[name]) throw new Error('installed dependency ' + name + ' is absent from package-lock.json; run npm ci')
+  }
+
+  const declared = { ...pkg.dependencies, ...pkg.devDependencies }
+  for (const name of Object.keys(declared).sort()) {
+    const locked = lock.packages['node_modules/' + name]
+    if (!locked || !locked.version) throw new Error('package-lock.json has no resolved ' + name)
+    let installed
+    try {
+      installed = readJson(root, 'node_modules/' + name + '/package.json')
+    } catch {
+      throw new Error('installed ' + name + ' is missing; run npm ci')
+    }
+    if (installed.version !== locked.version) {
+      throw new Error('installed ' + name + '@' + installed.version + ' differs from lockfile ' + locked.version + '; run npm ci')
+    }
+  }
+  return Object.keys(declared).length
+}
+
+function sha256File (file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+}
+
+function rebuildNativeBundle (root, host, output) {
+  const barePack = path.join(root, 'node_modules/bare-pack/bin.js')
+  const result = spawnSync(process.execPath, [
+    barePack, '--linked', '--host', host, 'backend/index.js', '-o', output
+  ], { cwd: root, encoding: 'utf8', timeout: 120000, maxBuffer: 4 * 1024 * 1024 })
+  if (result.error) throw result.error
+  if (result.status !== 0) {
+    throw new Error('bare-pack ' + host + ' failed: ' + ((result.stderr || result.stdout || '').trim().slice(-1200) || ('exit ' + result.status)))
+  }
+}
+
+function verifyNativeBundle (root, rel, host, rebuildBundle = rebuildNativeBundle) {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'pearbrowser-preflight-bundle-'))
+  try {
+    const output = path.join(temp, path.basename(rel))
+    rebuildBundle(root, host, output)
+    const actual = sha256File(path.join(root, rel))
+    const expected = sha256File(output)
+    return { fresh: actual === expected, actual, expected }
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true })
   }
 }
 
@@ -165,13 +355,30 @@ function collectPreflight (root = process.cwd(), options = {}) {
     add('fail', 'ios-deployment-target', 'iOS deployment target is release-grade', iosDeploymentTarget || '(missing)', 'Keep the native shell deployment target at iOS 16.0 or newer.')
   }
 
-  for (const [id, rel] of [
-    ['ios-worklet-bundle', 'backend/dist/backend.ios.bundle'],
-    ['android-worklet-bundle', 'backend/dist/backend.android.bundle']
+  try {
+    const count = verifyDependencyLock(root, pkg)
+    add('pass', 'dependency-lock', 'Package lock and installed dependency tree are aligned', String(count) + ' direct packages; resolved tree checked')
+  } catch (err) {
+    add('fail', 'dependency-lock', 'Package lock and installed dependency tree are aligned', err.message, 'Run npm ci from the current package-lock.json before bundling or release preflight.')
+  }
+
+  for (const [id, rel, host] of [
+    ['ios-worklet-bundle', 'backend/dist/backend.ios.bundle', 'ios-arm64'],
+    ['android-worklet-bundle', 'backend/dist/backend.android.bundle', 'android-arm64']
   ]) {
     const info = fileInfo(root, rel)
     if (info.file && info.size > 1024 * 1024) {
       add('pass', id, `${rel} exists`, `${Math.round(info.size / 1024)} KiB`)
+      try {
+        const result = verifyNativeBundle(root, rel, host, options.rebuildBundle)
+        if (result.fresh) {
+          add('pass', id + '-freshness', rel + ' matches current worklet inputs', result.actual.slice(0, 16))
+        } else {
+          add('fail', id + '-freshness', rel + ' matches current worklet inputs', 'artifact ' + result.actual.slice(0, 16) + '; rebuilt ' + result.expected.slice(0, 16), 'Run npm ci && npm run bundle-all-native, then repeat release preflight.')
+        }
+      } catch (err) {
+        add('fail', id + '-freshness', rel + ' matches current worklet inputs', err.message, 'Install dependencies with npm ci, regenerate native bundles, and repeat release preflight.')
+      }
     } else {
       add('fail', id, `${rel} exists`, info.exists ? `${info.size} bytes` : 'missing', 'Run npm run bundle-all-native before native release builds.')
     }
@@ -187,9 +394,14 @@ function collectPreflight (root = process.cwd(), options = {}) {
 
   const androidAar = fileInfo(root, 'android-native/app/libs/bare-kit.aar')
   if (androidAar.file && androidAar.size > 1024 * 1024) {
-    add('pass', 'android-barekit', 'Android BareKit AAR is present', `${Math.round(androidAar.size / 1024 / 1024)} MiB`)
+    try {
+      const inspected = (options.inspectAndroidAar || inspectAndroidAar)(root, androidAar.path)
+      add('pass', 'android-barekit', 'Android AAR addon names and ABIs match installed set', `${inspected.addonCount} addons x ${inspected.abiCount} ABIs`)
+    } catch (err) {
+      add('fail', 'android-barekit', 'Android AAR addon names and ABIs match installed set', err.message, 'Run npm ci && npm run barekit:fetch:android, then rebuild the Android app.')
+    }
   } else {
-    add('fail', 'android-barekit', 'Android BareKit AAR is present', androidAar.exists ? `${androidAar.size} bytes` : 'missing', 'Run npm run barekit:fetch and confirm the native Android worklet is not in demo fallback mode.')
+    add('fail', 'android-barekit', 'Android AAR addon names and ABIs match installed set', androidAar.exists ? `${androidAar.size} bytes` : 'missing', 'Run npm ci && npm run barekit:fetch:android before native Android builds.')
   }
 
   const missingAndroidSigning = ANDROID_SIGNING_ENV.filter((name) => !String(env[name] || '').trim())
@@ -288,4 +500,4 @@ if (require.main === module) {
   process.exit(report.ok || opts.soft ? 0 : 1)
 }
 
-module.exports = { collectPreflight }
+module.exports = { collectPreflight, inspectAndroidAar }

@@ -993,6 +993,12 @@ class PearRpcClient(context: Context) : AutoCloseable {
     suspend fun saveSession(state: JsonObject): JsonElement =
         request(Cmd.USERDATA_SAVE_SESSION, buildJsonObject { put("state", state) })
 
+    /** Clear the separate tabs/current record written by older releases. */
+    suspend fun clearLegacyTabs(): JsonElement =
+        request(Cmd.USERDATA_IMPORT, buildJsonObject {
+            put("dump", buildJsonObject { putJsonArray("tabs") {} })
+        })
+
     suspend fun getRelays(): PearRelayConfig =
         PearRelayConfig.fromJson(request(Cmd.GET_RELAYS).jsonObject)
 

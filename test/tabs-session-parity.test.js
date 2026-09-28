@@ -125,7 +125,7 @@ test('Android shell persists and restores the tab session via USERDATA commands'
 
   const main = read(`${KOTLIN_MAIN}/MainActivity.kt`)
   assert.match(main, /getSession\(\)/, 'MainActivity must read the session at cold start')
-  assert.match(main, /saveSession\(merged\)/, 'MainActivity must persist the session')
+  assert.match(main, /saveSession\(browserSessionSnapshot\(/, 'MainActivity must persist the privacy-aware shared session')
   assert.match(main, /browserTabs/, 'session must carry the open tab list')
   assert.match(main, /activeBrowserTabId/, 'session must carry the active tab id')
   assert.match(main, /sessionRestored/, 'saves must wait for the restore to finish')
@@ -139,8 +139,8 @@ test('Android shell persists and restores the tab session via USERDATA commands'
   // save/restore + app/lib/rpc.ts session wrappers).
   const rnApp = read('app/App.tsx')
   assert.match(rnApp, /getSession\(\)/, 'RN App.tsx session restore is the reference')
-  assert.match(rnApp, /saveSession\(\{ activeTab/, 'RN App.tsx saves the active tab')
-  assert.match(rnApp, /saveSession\(\{ lastBrowseUrl/, 'RN App.tsx saves the browse url')
+  assert.match(rnApp, /saveSession\(privateMode[\s\S]*activeTab,[\s\S]*lastBrowseUrl: browseUrl,[\s\S]*browserTabs,[\s\S]*activeBrowserTabId/, 'RN App.tsx saves the complete shared browser session outside Private Mode')
+  assert.match(rnApp, /<TabSwitcherScreen/, 'RN App.tsx must mount the tab switcher')
 
   const rnRpc = read('app/lib/rpc.ts')
   assert.match(rnRpc, /USERDATA_GET_SESSION/, 'RN rpc must expose userDataGetSession')

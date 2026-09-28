@@ -1,5 +1,9 @@
 # PearBrowser Security Boundary Alignment
 
+> Historical 2026-06-23 boundary audit. The current mobile origin-isolation
+> blocker is tracked in [MOBILE_ORIGIN_ISOLATION_GATE.md](MOBILE_ORIGIN_ISOLATION_GATE.md)
+> and the [September candidate status](PEARBROWSER_UPDATE_2026-09-26.md).
+
 Generated: 2026-06-23
 Loop candidate: `pearbrowser-security-crosscheck`
 Autonomy level: Level 1 security/threat documentation artifact

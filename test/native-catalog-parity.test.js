@@ -70,6 +70,70 @@ test('native Explore screens preserve Pear v3 delivery metadata, legacy migratio
   ])
 })
 
+test('mobile catalogue and status surfaces describe cached Hyperdrive content without native install claims', () => {
+  const appCatalog = read('APP-CATALOG-DESIGN.md')
+  const design = read('DESIGN.md')
+  const rnApp = read('app/App.tsx')
+  const rnMore = read('app/screens/MoreScreen.tsx')
+  const androidMore = read('android-native/app/src/main/java/com/pearbrowser/app/ui/screens/MoreScreen.kt')
+
+  includesAll(appCatalog, [
+    'opens static Hyperdrive content',
+    '**Save offline**',
+    '**Remove saved copy**',
+    '**Desktop only**',
+    '**Migration required**',
+    'signed Pear v3 AppRelease'
+  ])
+  includesAll(design, [
+    '**Saved Offline**',
+    'Tap to open static content',
+    '**Open** or **Save offline**',
+    'Signed Pear v3 AppRelease packages',
+    '`migration-required`'
+  ])
+
+  const retiredProductClaims = /Installed Apps|Installing an app|App install\/uninstall|App launcher|App Store|curated launcher|Tap to launch|launches current app|safe .*launch link/i
+  assert.doesNotMatch(appCatalog, retiredProductClaims)
+  assert.doesNotMatch(design, retiredProductClaims)
+
+  includesAll(rnApp, [
+    'savedOfflineSites: status.installedApps || 0',
+    'Saved Offline Sites',
+    'handleOpenCatalogContent',
+    'opens static Hyperdrive content only',
+    'native packages are desktop-only',
+    'legacy Pear v2 entries remain migration-required'
+  ])
+  assert.doesNotMatch(rnApp, /handleLaunchApp|handleLaunchByKey|Launch failed|Installed Apps/)
+
+  includesAll(rnMore, [
+    'savedOfflineSites: status.installedApps || 0',
+    'Saved Offline Sites',
+    'Saved offline sites: ${s.installedApps}'
+  ])
+  assert.doesNotMatch(rnMore, /Installed Apps/)
+
+  includesAll(androidMore, [
+    '`installedApps` is the legacy RPC field for cached Hyperdrives',
+    'StatusRow("Saved Offline Sites", (status?.installedApps ?: 0).toString())'
+  ])
+  assert.doesNotMatch(androidMore, /Installed Apps/)
+})
+
+test('current swarm plan requires the signed Pear v3 release boundary', () => {
+  const swarmPlan = read('docs/SWARM-V1.md')
+
+  includesAll(swarmPlan, [
+    'pear-build@1.2.0',
+    'signed AppRelease v2',
+    'provisioning/multisig',
+    'data-recovery/rollback',
+    'native platform signing'
+  ])
+  assert.doesNotMatch(swarmPlan, /\bpear\s+(?:run|stage|seed|release)\b/i)
+})
+
 test('Android native BrowseScreen hardens CMD_NAVIGATE proxy and bridge lifecycle', () => {
   const browse = read('android-native/app/src/main/java/com/pearbrowser/app/ui/screens/BrowseScreen.kt')
   includesAll(browse, [

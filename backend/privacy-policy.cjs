@@ -109,13 +109,13 @@ function mergeSettingsWithPrivacyDefaults (stored = {}) {
 /** True only when the user has explicitly opted into visit history. */
 function isHistoryEnabled (settings) {
   const s = mergeSettingsWithPrivacyDefaults(settings)
-  return s.historyEnabled === true
+  return s.historyEnabled === true && s.privateMode !== true
 }
 
-/** True only when the user has explicitly opted into local page indexing. */
+/** True only when page indexing is opted in and Private Mode is off. */
 function isSearchIndexEnabled (settings) {
   const s = mergeSettingsWithPrivacyDefaults(settings)
-  return s.searchIndexEnabled === true
+  return s.searchIndexEnabled === true && s.privateMode !== true
 }
 
 /**

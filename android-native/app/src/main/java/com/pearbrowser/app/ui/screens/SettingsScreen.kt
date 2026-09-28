@@ -99,7 +99,7 @@ import java.util.Locale
  * surface inline next to the section that produced them.
  */
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onPrivateModeChange: suspend (Boolean) -> Unit = {}) {
     Column(
         Modifier
             .fillMaxSize()
@@ -131,7 +131,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            PrivacySection()
+            PrivacySection(onPrivateModeChange)
             ContentShieldSection()
             PluginsSection()
             ClearnetPrivacySection()
@@ -147,18 +147,22 @@ fun SettingsScreen(onBack: () -> Unit) {
 // --- Privacy ---------------------------------------------------------------
 
 @Composable
-private fun PrivacySection() {
+private fun PrivacySection(onPrivateModeChange: suspend (Boolean) -> Unit) {
     val rpc = LocalPearRpc.current
     val scope = rememberCoroutineScope()
 
     var loaded by remember { mutableStateOf(false) }
     var historyEnabled by remember { mutableStateOf(false) }
+    var privateMode by remember { mutableStateOf(false) }
+    var privateModeBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(rpc) {
         val client = rpc ?: return@LaunchedEffect
         try {
-            historyEnabled = client.getSettings().historyEnabled
+            val settings = client.getSettings()
+            historyEnabled = settings.historyEnabled
+            privateMode = settings.privateMode
             loaded = true
         } catch (e: Throwable) {
             error = e.message ?: "Could not load settings"
@@ -178,6 +182,22 @@ private fun PrivacySection() {
         }
     }
 
+    fun setPrivateMode(enabled: Boolean) {
+        if (rpc == null || privateModeBusy) return
+        privateModeBusy = true
+        scope.launch {
+            try {
+                onPrivateModeChange(enabled)
+                privateMode = enabled
+                error = null
+            } catch (e: Throwable) {
+                error = "Private Mode was not changed: " + (e.message ?: "session cleanup failed")
+            } finally {
+                privateModeBusy = false
+            }
+        }
+    }
+
     SettingsCard("Privacy") {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
@@ -193,6 +213,25 @@ private fun PrivacySection() {
                 checked = historyEnabled,
                 onCheckedChange = ::setHistoryEnabled,
                 enabled = rpc != null && loaded,
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("Private Mode", color = PearColors.TextPrimary, fontSize = 15.sp)
+                Text(
+                    "Close open tabs when this changes. Private tab URLs are not saved or synced.",
+                    color = PearColors.TextMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            Switch(
+                checked = privateMode,
+                onCheckedChange = ::setPrivateMode,
+                enabled = rpc != null && loaded && !privateModeBusy,
             )
         }
         SettingsError(error)

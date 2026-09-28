@@ -4,13 +4,17 @@
 > and the workspace-level `design-system/` tokens. This document still captures
 > the original mobile IA and product thinking; treat the dark palette below as
 > historical unless a screen explicitly remains on the legacy dark theme.
+>
+> Current catalogue boundary: mobile opens static Hyperdrive content and may
+> save that content for offline browsing. Signed Pear v3 AppRelease packages
+> are desktop-only; legacy Pear v2 entries remain `migration-required`.
 
 ## Product Vision
 
-PearBrowser is an iOS app that makes the decentralized web feel as polished as the regular one. Users discover P2P apps, build personal websites, and browse hyper:// content — all from their phone as a real peer in the Holepunch network.
+PearBrowser is an iOS app that makes the decentralized web feel as polished as the regular one. Users discover P2P sites and tools, build personal websites, and browse hyper:// content — all from their phone as a real peer in the Holepunch network.
 
 **Design principles:**
-1. App platform first, browser second
+1. P2P content browser first; native packages remain desktop-only
 2. Never show a hex key where a name could go
 3. Bottom of screen is prime real estate (thumb-friendly)
 4. Progressive disclosure: green dot → "12 peers" → full DHT stats
@@ -34,7 +38,7 @@ Home tab:                      Browse tab:              More tab:
 │ Quick Access    │           │                  │     │ History         │
 │ [●][●][●][●]→  │           │                  │     │ Settings        │
 │                 │           │                  │     │ P2P Status      │
-│ Your Apps       │           │                  │     │ Add Catalog     │
+│ Saved Offline   │           │                  │     │ Add Catalog     │
 │ ┌──┐ ┌──┐ ┌──┐ │           │                  │     │ About           │
 │ │  │ │  │ │  │ │           │                  │     └─────────────────┘
 │ └──┘ └──┘ └──┘ │           └──────────────────┘
@@ -44,7 +48,7 @@ Home tab:                      Browse tab:              More tab:
 │                 │           └─────────────────┘
 │ Discover        │
 │ ┌──────────────┐│
-│ │ Featured App ││
+│ │Featured Entry││
 │ │ [screenshot] ││
 │ │ name + desc  ││
 │ └──────────────┘│
@@ -53,7 +57,7 @@ Home tab:                      Browse tab:              More tab:
 
 ## Home Screen
 
-The default view. Designed to feel like a curated launcher.
+The default view. Designed to feel like a curated P2P content hub.
 
 **Sections (top to bottom):**
 
@@ -61,9 +65,9 @@ The default view. Designed to feel like a curated launcher.
 
 2. **Quick Access** — horizontal scroll of recently visited sites. Circular icons with names below (like iOS Frequently Visited in Safari). Max 8 items.
 
-3. **Your Apps** — grid of installed/bookmarked P2P apps. 3 columns. Icon + name. Tap to launch. Long-press for context menu (remove, share, info). "+" card at the end to add from catalog.
+3. **Saved Offline** — grid of cached Hyperdrive sites. 3 columns. Icon + name. Tap to open static content. Long-press for a context menu (remove saved copy, share, info). "+" card at the end opens the catalog.
 
-4. **Discover** — vertical scroll of featured P2P apps/sites. Large cards with screenshot, name, description, "Get" button. Initially hardcoded, later community-driven via a catalog Hyperdrive.
+4. **Discover** — vertical scroll of featured P2P sites and tools. Large cards show a screenshot, name, description, and an **Open** or **Save offline** action. Signed native packages show **Desktop only**; legacy v2 records show **Migration required**.
 
 ## Browse Mode
 
@@ -103,28 +107,31 @@ Accessed from More → My Sites → "Create New Site"
 - Shows the hyper:// key with QR code for sharing
 - Option to seed via HiveRelay for 24/7 availability
 
-## App Store / Catalog
+## Content Catalog
 
 The catalog is itself a Hyperdrive. Multiple catalogs can be added.
 
 **Default catalog structure:**
 ```
-/catalog.json            — app index
+/catalog.json            — content index (`apps[]` is the legacy wire field)
 /apps/{id}/
   manifest.json          — metadata
   icon.png               — 256x256 app icon
   screenshots/           — preview images
 ```
 
-**App card in catalog:**
+**Content card in catalog:**
 - Icon (left)
 - Name + short description (center)
-- "Get" button (right)
+- "Open" or "Save offline" action (right)
 - Tap card → detail page with screenshots, full description, permissions
 
-**Installing an app** = downloading its Hyperdrive and caching locally. No approval needed. Apps run in a sandboxed WebView.
+**Saving offline** = caching static Hyperdrive content locally for later
+browsing. It is not a native software installation, update channel, or
+AppRelease. Removing a saved copy only evicts the local cache. Open content runs
+in a sandboxed WebView.
 
-**P2P App API** (injected into WebView via postMessage bridge):
+**P2P Content API** (injected into WebView via postMessage bridge):
 ```typescript
 window.pear = {
   // Identity
@@ -139,7 +146,7 @@ window.pear = {
     onData(cb: (peerId: string, data: Uint8Array) => void): void,
   },
 
-  // Storage (app-scoped Hyperdrive)
+  // Storage (content-origin-scoped Hyperdrive)
   drive: {
     get(path: string): Promise<Uint8Array | null>,
     put(path: string, data: Uint8Array): Promise<void>,
@@ -222,7 +229,7 @@ React Native ↔ Worklet IPC:
 Worklet internals:
   Hyperswarm → Corestore → Hyperdrive (shared across all features)
   HTTP proxy server (bare-http1) for WebView content
-  CatalogManager, AppManager, SiteManager modules
+  CatalogManager, AppManager (legacy cached-content name), SiteManager modules
 ```
 
 ## Build Phases
@@ -234,12 +241,12 @@ Worklet internals:
 - HRPC schema and RPC layer
 - Basic Home screen + Browse tab + bottom nav
 
-### Phase 2 — App Store
+### Phase 2 — Content Catalog
 - Catalog manager (parse catalog.json from Hyperdrive)
-- App install/uninstall (download + cache app Hyperdrives)
-- App launcher (serve in WebView)
+- Save/remove offline copies of static Hyperdrive content
+- Content opener (serve cached or live Hyperdrive files in WebView)
 - Pear API bridge (window.pear injection)
-- Discover UI + My Apps grid
+- Discover UI + Saved Offline grid
 
 ### Phase 3 — Site Builder
 - Site manager (writable Hyperdrive lifecycle)

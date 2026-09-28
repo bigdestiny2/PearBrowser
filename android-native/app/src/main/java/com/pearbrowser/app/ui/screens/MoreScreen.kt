@@ -570,7 +570,8 @@ private fun StatusSection(status: PearRpcStatus?, bindingState: PearRpcBindingSt
                 status?.proxyPort?.takeIf { it > 0 }?.let { "Port $it" } ?: "Not running",
             )
             StatusRow("Browse Drives", (status?.browseDrives ?: 0).toString())
-            StatusRow("Installed Apps", (status?.installedApps ?: 0).toString())
+            // `installedApps` is the legacy RPC field for cached Hyperdrives.
+            StatusRow("Saved Offline Sites", (status?.installedApps ?: 0).toString())
             StatusRow("Published Sites", (status?.publishedSites ?: 0).toString())
             if ((status?.storageLimit ?: 0) > 0) {
                 StatusRow(
